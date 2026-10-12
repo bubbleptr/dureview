@@ -8,6 +8,8 @@ describe("diff lines", () => {
     const file = lines.get("src/pay.ts");
     expect(file?.has(2)).toBe(true);
     expect(file?.has(3)).toBe(true);
+    expect(file?.has(6)).toBe(true);
+    expect(file?.has(7)).toBe(false);
     expect(file?.has(99)).toBe(false);
   });
 });

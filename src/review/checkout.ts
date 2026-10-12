@@ -4,12 +4,14 @@ import path from "node:path";
 import type { GitHub } from "../github/client.js";
 import type { ReviewRequest } from "../types.js";
 import { truncateDiff } from "./diff.js";
+import { parseDureviewDocument, type ReviewPolicy, defaultPolicy } from "./policy.js";
 
 export type Checkout = {
   dir: string;
   diff: string;
   truncated: boolean;
   rules: string | null;
+  policy: ReviewPolicy;
 };
 
 export interface RepoCheckout {
@@ -47,17 +49,17 @@ export class GitCheckout implements RepoCheckout {
     }
     const diffText = await this.github.getPullDiff(request, signal);
     const { diff, truncated } = truncateDiff(diffText);
-    return { dir, diff, truncated, rules: await readRules(dir) };
+    const loaded = await loadDureviewFile(dir);
+    return { dir, diff, truncated, rules: loaded.rules, policy: loaded.policy };
   }
 }
 
-export async function readRules(dir: string): Promise<string | null> {
+export async function loadDureviewFile(dir: string): Promise<{ rules: string | null; policy: ReviewPolicy }> {
   try {
     const text = await readFile(path.join(dir, ".dureview.md"), "utf8");
-    const trimmed = text.trim();
-    return trimmed.length > 0 ? trimmed.slice(0, 20_000) : null;
+    return parseDureviewDocument(text);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { rules: null, policy: defaultPolicy() };
     throw error;
   }
 }

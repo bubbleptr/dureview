@@ -22,6 +22,7 @@ export function commentableLines(diff: string): Map<string, Set<number>> {
       inHunk = path !== undefined;
       continue;
     }
+    if (line === "") continue;
     if (!inHunk || path === undefined) continue;
     if (line.startsWith("\\")) continue;
     if (line.startsWith("-")) continue;
