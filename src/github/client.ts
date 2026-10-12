@@ -6,7 +6,27 @@ import type { ReviewRequest } from "../types.js";
 export type IssueComment = { id: number; body: string };
 export type PullReview = { id: number; body: string };
 
-export type ReviewCommentDraft = { path: string; line: number; body: string };
+export type ReviewCommentDraft = { path: string; line: number; startLine?: number; body: string };
+
+/** GitHub pull-request review comment body. Multi-line comments set start_line when the span is more than one line. */
+export function reviewCommentPayload(comment: ReviewCommentDraft): {
+  path: string;
+  line: number;
+  side: "RIGHT";
+  body: string;
+  start_line?: number;
+  start_side?: "RIGHT";
+} {
+  return {
+    path: comment.path,
+    line: comment.line,
+    side: "RIGHT",
+    body: comment.body,
+    ...(comment.startLine !== undefined && comment.startLine < comment.line
+      ? { start_line: comment.startLine, start_side: "RIGHT" as const }
+      : {}),
+  };
+}
 
 export interface GitHub {
   getPullDiff(request: ReviewRequest, signal: AbortSignal): Promise<string>;
@@ -66,12 +86,7 @@ export class GithubRest implements GitHub {
       commit_id: review.sha,
       body: review.body,
       event: "COMMENT",
-      comments: review.comments.map((comment) => ({
-        path: comment.path,
-        line: comment.line,
-        side: "RIGHT",
-        body: comment.body,
-      })),
+      comments: review.comments.map((comment) => reviewCommentPayload(comment)),
     });
   }
 

@@ -1,10 +1,13 @@
 import { defineDoc } from "@earendil-works/pi-durable";
-import type { Finding } from "../types.js";
+import type { Finding, Verdict } from "./schema.js";
 
 /** Findings the model committed. Replay of submit_review overwrites this with the same payload. */
 export const ReviewDraft = defineDoc<{
   submitted: boolean;
-  summary: string;
+  verdict: Verdict;
+  verdictReason: string;
+  overallConfidence: number | null;
+  checked: string[];
   findings: Finding[];
 }>({
   kind: "dureview.draft",
@@ -12,7 +15,14 @@ export const ReviewDraft = defineDoc<{
   scope: "conversation",
   history: "latest",
   fork: "initial",
-  initial: () => ({ submitted: false, summary: "", findings: [] }),
+  initial: () => ({
+    submitted: false,
+    verdict: "clean",
+    verdictReason: "",
+    overallConfidence: null,
+    checked: [],
+    findings: [],
+  }),
 });
 
 /** Head SHAs that already have a review task. Session-scoped so enqueue is atomic with task creation. */

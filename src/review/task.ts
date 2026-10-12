@@ -14,9 +14,11 @@ import {
 import type { GitHub } from "../github/client.js";
 import { publishReview, type PublishResult } from "../github/publish.js";
 import { log } from "../log.js";
-import { reviewKey, type Finding, type ReviewRequest } from "../types.js";
+import { reviewKey, type ReviewRequest } from "../types.js";
 import type { RepoCheckout } from "./checkout.js";
+import type { ReviewPolicy } from "./policy.js";
 import { buildUserPrompt, ADVERSARIAL_ROLE } from "./prompt.js";
+import type { ReviewSubmission } from "./schema.js";
 import { ReviewDraft, ReviewIndex } from "./state.js";
 import { reviewTools } from "./tools.js";
 
@@ -41,6 +43,7 @@ type Prepared = {
   checkoutDir: string;
   diff: string;
   rules: string | null;
+  policy: ReviewPolicy;
   provider: string;
   modelId: string;
   truncated: boolean;
@@ -49,7 +52,7 @@ type Prepared = {
 export type ReviewState =
   | { phase: "prepare" }
   | ({ phase: "review" } & Prepared)
-  | ({ phase: "post"; summary: string; findings: Finding[] } & Prepared);
+  | ({ phase: "post"; review: ReviewSubmission } & Prepared);
 
 export type ReviewResult = PublishResult & { conversationId: number };
 
@@ -94,6 +97,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             checkoutDir: prepared.dir,
             diff: prepared.diff,
             rules: prepared.rules,
+            policy: prepared.policy,
             provider: deps.provider,
             modelId: deps.modelId,
             truncated: prepared.truncated,
@@ -114,6 +118,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
           diff: checkpoint.diff,
           truncated: checkpoint.truncated,
           rules: checkpoint.rules,
+          policy: checkpoint.policy,
         });
         const first = await conversation.submit(
           { type: "input", content: prompt, requestId: `dureview:${current.id}:prompt` },
@@ -130,7 +135,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             {
               type: "input",
               content:
-                'Call submit_review now. If nothing is wrong, use summary "No findings." and an empty findings array.',
+                'Call submit_review now. If nothing is wrong, set verdict to "clean", explain that in verdict_reason, list what you checked, and pass an empty findings array.',
               requestId: `dureview:${current.id}:nudge`,
             },
             context,
@@ -146,19 +151,23 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
           await failOrAbort(runtime, context, "The model finished without calling submit_review.");
           return;
         }
-        const findings = draft.findings.map((finding) => ({
-          path: finding.path,
-          line: finding.line,
-          body: finding.body,
-        }));
+        const review: ReviewSubmission = {
+          verdict: draft.verdict,
+          verdictReason: draft.verdictReason,
+          overallConfidence: draft.overallConfidence,
+          checked: [...draft.checked],
+          findings: draft.findings.map((finding) => ({
+            ...finding,
+            evidence: [...finding.evidence],
+          })),
+        };
         await runtime.commit(
           () => ({
             status: "running",
             checkpoint: {
               ...checkpoint,
               phase: "post",
-              summary: draft.summary,
-              findings,
+              review,
             },
           }),
           context,
@@ -173,8 +182,8 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
           taskId: String(current.id),
           provider: checkpoint.provider,
           modelId: checkpoint.modelId,
-          summary: checkpoint.summary,
-          findings: checkpoint.findings,
+          review: checkpoint.review,
+          policy: checkpoint.policy,
           diff: checkpoint.diff,
           signal: signalOf(context),
           afterRemoteWrite: deps.hooks?.afterRemoteWrite

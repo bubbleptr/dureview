@@ -1,6 +1,9 @@
 import type { GitHub } from "./client.js";
-import { commentableLines } from "../review/diff.js";
-import { inlineMarker, summaryMarker, taskMarker, type Finding, type ReviewRequest } from "../types.js";
+import { disappeared, inlineFingerprintMarker, parseLedger, postedFingerprints } from "../review/ledger.js";
+import { classifyFindings, type ReviewPolicy } from "../review/policy.js";
+import { renderInlineDrafts, renderSummary } from "../review/render.js";
+import type { ReviewSubmission } from "../review/schema.js";
+import { inlineMarker, summaryMarker, taskMarker, type ReviewRequest } from "../types.js";
 
 export type PublishResult = {
   summaryCommentId: number;
@@ -17,6 +20,10 @@ export type PublishResult = {
  * comments and reviews first and skips any write whose hidden marker is already
  * present, so the same task never double-posts. A later push uses a new task id,
  * finds the summary by the pull-request marker, and updates that comment.
+ *
+ * Inline comments are posted before the summary. A crash between the two writes
+ * leaves the previous summary ledger intact, so resume computes the same fixed
+ * set and skips fingerprints already listed on the review body.
  */
 export async function publishReview(input: {
   github: GitHub;
@@ -24,8 +31,8 @@ export async function publishReview(input: {
   taskId: string;
   provider: string;
   modelId: string;
-  summary: string;
-  findings: Finding[];
+  review: ReviewSubmission;
+  policy: ReviewPolicy;
   diff: string;
   signal: AbortSignal;
   afterRemoteWrite?: () => Promise<void>;
@@ -33,52 +40,31 @@ export async function publishReview(input: {
   const summaryTag = summaryMarker(input.request);
   const taskTag = taskMarker(input.taskId);
   const inlineTag = inlineMarker(input.taskId);
-  const body = renderSummary({
-    request: input.request,
-    provider: input.provider,
-    modelId: input.modelId,
-    summary: input.summary,
-    findings: input.findings,
-    summaryTag,
-    taskTag,
-  });
 
   const comments = await input.github.listIssueComments(input.request, input.signal);
-  const already = comments.find((comment) => comment.body.includes(taskTag));
-  let summaryCommentId: number;
-  let summaryAction: PublishResult["summaryAction"];
-  if (already) {
-    summaryCommentId = already.id;
-    summaryAction = "unchanged";
-  } else {
-    const existing = comments.find((comment) => comment.body.includes(summaryTag));
-    if (existing) {
-      const updated = await input.github.updateIssueComment(input.request, existing.id, body, input.signal);
-      summaryCommentId = updated.id;
-      summaryAction = "updated";
-    } else {
-      const created = await input.github.createIssueComment(input.request, body, input.signal);
-      summaryCommentId = created.id;
-      summaryAction = "created";
-    }
-  }
-
-  const inline = inlineFindings(input.diff, input.findings);
   const reviews = await input.github.listReviews(input.request, input.signal);
+  const existingSummary = comments.find((comment) => comment.body.includes(summaryTag));
+  const previous = parseLedger(existingSummary?.body);
+  const alreadyInlined = postedFingerprints(reviews.map((review) => review.body));
+  const classified = classifyFindings({
+    findings: input.review.findings,
+    diff: input.diff,
+    policy: input.policy,
+    alreadyInlined,
+  });
+  const fixed = disappeared(previous, classified.open);
+
   const posted = reviews.find((review) => review.body.includes(inlineTag));
   let reviewId: number | null = posted?.id ?? null;
   let reviewAction: PublishResult["reviewAction"] = posted ? "unchanged" : "skipped";
-  if (!posted && inline.length > 0) {
+  if (!posted && classified.inline.length > 0) {
+    const fingerprints = classified.inline.map((item) => item.finding.fingerprint);
     const created = await input.github.createReview(
       input.request,
       {
         sha: input.request.sha,
-        body: `${inlineTag}\n`,
-        comments: inline.map((finding) => ({
-          path: finding.path,
-          line: finding.line,
-          body: finding.body,
-        })),
+        body: `${inlineTag}\n${inlineFingerprintMarker(fingerprints)}\n`,
+        comments: renderInlineDrafts(classified.inline),
       },
       input.signal,
     );
@@ -86,46 +72,33 @@ export async function publishReview(input: {
     reviewAction = "created";
   }
 
+  const body = renderSummary({
+    request: input.request,
+    provider: input.provider,
+    modelId: input.modelId,
+    review: input.review,
+    classified,
+    fixed,
+    summaryTag,
+    taskTag,
+    maxInline: input.policy.maxInline,
+  });
+  const already = comments.find((comment) => comment.body.includes(taskTag));
+  let summaryCommentId: number;
+  let summaryAction: PublishResult["summaryAction"];
+  if (already) {
+    summaryCommentId = already.id;
+    summaryAction = "unchanged";
+  } else if (existingSummary) {
+    const updated = await input.github.updateIssueComment(input.request, existingSummary.id, body, input.signal);
+    summaryCommentId = updated.id;
+    summaryAction = "updated";
+  } else {
+    const created = await input.github.createIssueComment(input.request, body, input.signal);
+    summaryCommentId = created.id;
+    summaryAction = "created";
+  }
+
   if (input.afterRemoteWrite) await input.afterRemoteWrite();
   return { summaryCommentId, summaryAction, reviewId, reviewAction };
-}
-
-export function renderSummary(input: {
-  request: Pick<ReviewRequest, "owner" | "repo" | "number" | "sha">;
-  provider: string;
-  modelId: string;
-  summary: string;
-  findings: Finding[];
-  summaryTag: string;
-  taskTag: string;
-}): string {
-  const overview = input.summary.trim() || (input.findings.length === 0 ? "No findings." : "Findings below.");
-  const lines = [
-    `Reviewed \`${input.request.sha}\` with \`${input.provider}/${input.modelId}\`.`,
-    "",
-    overview,
-  ];
-  if (input.findings.length > 0) {
-    lines.push("", "### Findings");
-    for (const finding of input.findings) {
-      lines.push(`- \`${finding.path}:${finding.line}\` — ${oneLine(finding.body)}`);
-    }
-  }
-  lines.push("", input.summaryTag, input.taskTag);
-  return lines.join("\n");
-}
-
-function inlineFindings(diff: string, findings: Finding[]): Finding[] {
-  const lines = commentableLines(diff);
-  const accepted: Finding[] = [];
-  for (const finding of findings) {
-    const path = finding.path.replaceAll("\\", "/").replace(/^\.\//, "");
-    const known = lines.get(path);
-    if (known?.has(finding.line)) accepted.push({ ...finding, path });
-  }
-  return accepted;
-}
-
-function oneLine(body: string): string {
-  return body.replace(/\s+/g, " ").trim();
 }

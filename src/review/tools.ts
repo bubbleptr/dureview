@@ -1,10 +1,8 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
-import type { Finding } from "../types.js";
 import { grepRepo, readRepoFile } from "./files.js";
+import { ReviewSubmissionSchema, parseReviewSubmission } from "./schema.js";
 import { ReviewDraft } from "./state.js";
-
-const MAX_FINDINGS = 30;
 
 /**
  * Read-only tools are replay-safe: a crash mid-call reruns them.
@@ -50,49 +48,25 @@ export const grepRepoTool = defineTool({
 export const submitReviewTool = defineTool({
   name: "submit_review",
   description:
-    "Record the finished review. Call this exactly once. summary is the pull request overview. findings are inline comments; each needs a repository-relative path, a 1-based line in the head file, and why that line is wrong. Use an empty findings array when there is nothing real to report.",
-  parameters: Type.Object({
-    summary: Type.String({ description: "Short overview of what is wrong, or 'No findings.'" }),
-    findings: Type.Array(
-      Type.Object({
-        path: Type.String({ description: "Path relative to the repository root" }),
-        line: Type.Number({ description: "1-based line in the head revision" }),
-        body: Type.String({ description: "Why this line is wrong" }),
-      }),
-      { maxItems: MAX_FINDINGS },
-    ),
-  }),
+    "Record the finished review. Call this exactly once. verdict is block, fix_recommended, or clean. findings is empty when nothing real is wrong. Each finding needs a title, priority 0-3, kind (bug, security, or investigate), category, path, start_line, end_line, body, trigger, and confidence from 0 to 1. suggestion is replacement code for that line range, or null.",
+  parameters: ReviewSubmissionSchema,
   replay: "safe",
   async execute(args, api, context) {
-    const findings = normalizeFindings(args.findings);
+    const review = parseReviewSubmission(args);
     await api.commit(async (tx) => {
       const draft = await tx.doc(ReviewDraft, api.conversationId);
       draft.submitted = true;
-      draft.summary = args.summary.slice(0, 20_000);
-      draft.findings = findings;
+      draft.verdict = review.verdict;
+      draft.verdictReason = review.verdictReason;
+      draft.overallConfidence = review.overallConfidence;
+      draft.checked = review.checked;
+      draft.findings = review.findings;
     }, context);
     return {
-      content: [{ type: "text", text: `Recorded ${findings.length} finding(s).` }],
+      content: [{ type: "text", text: `Recorded ${review.findings.length} finding(s).` }],
       control: { terminate: true },
     };
   },
 });
 
 export const reviewTools = [readRepoTool, grepRepoTool, submitReviewTool];
-
-function normalizeFindings(raw: Array<{ path: string; line: number; body: string }>): Finding[] {
-  const findings: Finding[] = [];
-  for (const finding of raw.slice(0, MAX_FINDINGS)) {
-    const file = finding.path.replaceAll("\\", "/").replace(/^\.\//, "").trim();
-    if (!file || file.startsWith("/") || file.split("/").includes("..")) {
-      throw new Error(`Finding path must stay inside the repository: ${finding.path}`);
-    }
-    if (!Number.isInteger(finding.line) || finding.line < 1) {
-      throw new Error(`Finding line must be a positive integer: ${finding.path}`);
-    }
-    const body = finding.body.trim();
-    if (!body) throw new Error(`Finding at ${file}:${finding.line} is missing an explanation.`);
-    findings.push({ path: file, line: finding.line, body: body.slice(0, 8_000) });
-  }
-  return findings;
-}

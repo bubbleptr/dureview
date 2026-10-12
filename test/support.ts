@@ -7,11 +7,12 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import type { Config } from "../src/config.js";
 import type { GitHub, IssueComment, PullReview, ReviewCommentDraft } from "../src/github/client.js";
-import type { Checkout, RepoCheckout } from "../src/review/checkout.js";
-import { readRules } from "../src/review/checkout.js";
+import { loadDureviewFile, type Checkout, type RepoCheckout } from "../src/review/checkout.js";
+import { defaultPolicy, type ReviewPolicy } from "../src/review/policy.js";
+import { findingFingerprint, type Finding, type ReviewSubmission, type Verdict } from "../src/review/schema.js";
 import type { ReviewHooks } from "../src/review/task.js";
 import { DureviewService } from "../src/service.js";
-import type { Finding, ReviewRequest } from "../src/types.js";
+import type { ReviewRequest } from "../src/types.js";
 
 export const SECRET = "test-webhook-secret";
 export const SHA_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -35,11 +36,63 @@ index 1111111..2222222 100644
  const gateway = {
 `;
 
-export const FINDING: Finding = {
-  path: "src/pay.ts",
-  line: 2,
-  body: "Positive amounts return success without capturing the charge, so the customer is never billed.",
-};
+export function sampleFinding(overrides: Partial<Omit<Finding, "fingerprint">> = {}): Finding {
+  const finding = {
+    title: "Return success without billing",
+    priority: 1 as const,
+    kind: "bug" as const,
+    category: "correctness" as const,
+    path: "src/pay.ts",
+    startLine: 2,
+    endLine: 2,
+    body: "Positive amounts return success without capturing the charge, so the customer is never billed.",
+    trigger: "charge() is called with a positive amount.",
+    evidence: [] as string[],
+    suggestion: null,
+    cwe: null,
+    ruleRef: null,
+    confidence: 0.9,
+    ...overrides,
+  };
+  return { ...finding, fingerprint: findingFingerprint(finding) };
+}
+
+export const FINDING: Finding = sampleFinding();
+
+export function reviewSubmission(
+  verdictReason: string,
+  findings: Finding[] = [FINDING],
+  verdict?: Verdict,
+): ReviewSubmission {
+  return {
+    verdict: verdict ?? (findings.length === 0 ? "clean" : "fix_recommended"),
+    verdictReason,
+    overallConfidence: 0.8,
+    checked: ["payment capture on the happy path"],
+    findings,
+  };
+}
+
+export function findingArgs(finding: Finding) {
+  return {
+    title: finding.title,
+    priority: finding.priority,
+    kind: finding.kind,
+    category: finding.category,
+    path: finding.path,
+    start_line: finding.startLine,
+    end_line: finding.endLine,
+    body: finding.body,
+    trigger: finding.trigger,
+    evidence: finding.evidence,
+    suggestion: finding.suggestion,
+    cwe: finding.cwe,
+    rule_ref: finding.ruleRef,
+    confidence: finding.confidence,
+  };
+}
+
+export const POLICY: ReviewPolicy = defaultPolicy();
 
 export function reviewRequest(sha = SHA_A): ReviewRequest {
   return {
@@ -78,7 +131,16 @@ export function scriptedReview(summary: string, findings: Finding[] = [FINDING])
   return [
     fauxAssistantMessage(fauxToolCall("read", { path: "src/pay.ts" }), { stopReason: "toolUse" }),
     fauxAssistantMessage(fauxToolCall("grep", { pattern: "capture" }), { stopReason: "toolUse" }),
-    fauxAssistantMessage(fauxToolCall("submit_review", { summary, findings }), { stopReason: "toolUse" }),
+    fauxAssistantMessage(
+      fauxToolCall("submit_review", {
+        verdict: findings.length === 0 ? "clean" : "fix_recommended",
+        verdict_reason: summary,
+        overall_confidence: 0.8,
+        checked: ["payment capture on the happy path"],
+        findings: findings.map((finding) => findingArgs(finding)),
+      }),
+      { stopReason: "toolUse" },
+    ),
   ];
 }
 
@@ -124,11 +186,13 @@ export class MemoryGitHub implements GitHub {
 
 export class FixtureCheckout implements RepoCheckout {
   async prepare(): Promise<Checkout> {
+    const loaded = await loadDureviewFile(FIXTURE_DIR);
     return {
       dir: FIXTURE_DIR,
       diff: FIXTURE_DIFF,
       truncated: false,
-      rules: await readRules(FIXTURE_DIR),
+      rules: loaded.rules,
+      policy: loaded.policy,
     };
   }
 }

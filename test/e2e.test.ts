@@ -8,6 +8,7 @@ import { startHttp } from "../src/server.js";
 import { taskMarker } from "../src/types.js";
 import {
   FINDING,
+  findingArgs,
   MemoryGitHub,
   openTestService,
   pullPayload,
@@ -40,8 +41,11 @@ describe("end to end", () => {
       fauxAssistantMessage(fauxToolCall("grep", { pattern: "capture" }), { stopReason: "toolUse" }),
       fauxAssistantMessage(
         fauxToolCall("submit_review", {
-          summary: "The new push still skips the charge.",
-          findings: [FINDING],
+          verdict: "fix_recommended",
+          verdict_reason: "The new push still skips the charge.",
+          overall_confidence: 0.8,
+          checked: ["payment capture on the happy path"],
+          findings: [findingArgs(FINDING)],
         }),
         { stopReason: "toolUse" },
       ),
@@ -109,7 +113,7 @@ describe("end to end", () => {
     expect(github.comments).toHaveLength(1);
     expect(github.comments[0]?.body).toContain("The new push still skips the charge.");
     expect(github.comments[0]?.body).toContain(taskMarker(String(secondBody.taskId)));
-    expect(github.reviews).toHaveLength(2);
+    expect(github.reviews).toHaveLength(1);
   });
 });
 

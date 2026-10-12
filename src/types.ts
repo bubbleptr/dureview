@@ -14,11 +14,7 @@ export type ReviewRequest = {
   draft: boolean;
 };
 
-export type Finding = {
-  path: string;
-  line: number;
-  body: string;
-};
+export type { Finding, FindingCategory, FindingKind, Priority, ReviewSubmission, Verdict } from "./review/schema.js";
 
 /** Stable dedupe key: the same pull request head is not reviewed twice. */
 export function reviewKey(request: Pick<ReviewRequest, "owner" | "repo" | "number" | "sha">): string {
