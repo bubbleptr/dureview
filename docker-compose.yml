@@ -1,0 +1,25 @@
+services:
+  dureview:
+    build: .
+    ports:
+      - "8787:8787"
+    volumes:
+      - dureview-data:/data
+    environment:
+      DUREVIEW_DATA_DIR: /data
+      DUREVIEW_HOST: 0.0.0.0
+      DUREVIEW_PORT: 8787
+      DUREVIEW_WEBHOOK_SECRET: ${DUREVIEW_WEBHOOK_SECRET}
+      DUREVIEW_PROVIDER: ${DUREVIEW_PROVIDER:-openai-codex}
+      DUREVIEW_MODEL: ${DUREVIEW_MODEL:-gpt-5.5}
+      DUREVIEW_THINKING: ${DUREVIEW_THINKING:-medium}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_APP_PRIVATE_KEY_PATH: ${GITHUB_APP_PRIVATE_KEY_PATH:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
+    restart: unless-stopped
+
+volumes:
+  dureview-data:

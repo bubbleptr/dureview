@@ -1,0 +1,220 @@
+import { createSign } from "node:crypto";
+import type { Config } from "../config.js";
+import { log } from "../log.js";
+import type { ReviewRequest } from "../types.js";
+
+export type IssueComment = { id: number; body: string };
+export type PullReview = { id: number; body: string };
+
+export type ReviewCommentDraft = { path: string; line: number; body: string };
+
+export interface GitHub {
+  getPullDiff(request: ReviewRequest, signal: AbortSignal): Promise<string>;
+  listIssueComments(request: ReviewRequest, signal: AbortSignal): Promise<IssueComment[]>;
+  createIssueComment(request: ReviewRequest, body: string, signal: AbortSignal): Promise<IssueComment>;
+  updateIssueComment(request: ReviewRequest, commentId: number, body: string, signal: AbortSignal): Promise<IssueComment>;
+  listReviews(request: ReviewRequest, signal: AbortSignal): Promise<PullReview[]>;
+  createReview(
+    request: ReviewRequest,
+    review: { sha: string; body: string; comments: ReviewCommentDraft[] },
+    signal: AbortSignal,
+  ): Promise<PullReview>;
+}
+
+type CachedToken = { token: string; expiresAt: number };
+
+export class GithubRest implements GitHub {
+  #tokens = new Map<number, CachedToken>();
+
+  constructor(private readonly config: Config) {}
+
+  getPullDiff(request: ReviewRequest, signal: AbortSignal): Promise<string> {
+    return this.#text(
+      request,
+      `/repos/${request.owner}/${request.repo}/pulls/${request.number}`,
+      signal,
+      "application/vnd.github.diff",
+    );
+  }
+
+  listIssueComments(request: ReviewRequest, signal: AbortSignal): Promise<IssueComment[]> {
+    return this.#pages(request, `/repos/${request.owner}/${request.repo}/issues/${request.number}/comments`, signal);
+  }
+
+  createIssueComment(request: ReviewRequest, body: string, signal: AbortSignal): Promise<IssueComment> {
+    return this.#json(request, "POST", `/repos/${request.owner}/${request.repo}/issues/${request.number}/comments`, signal, {
+      body,
+    });
+  }
+
+  updateIssueComment(request: ReviewRequest, commentId: number, body: string, signal: AbortSignal): Promise<IssueComment> {
+    return this.#json(request, "PATCH", `/repos/${request.owner}/${request.repo}/issues/comments/${commentId}`, signal, {
+      body,
+    });
+  }
+
+  listReviews(request: ReviewRequest, signal: AbortSignal): Promise<PullReview[]> {
+    return this.#pages(request, `/repos/${request.owner}/${request.repo}/pulls/${request.number}/reviews`, signal);
+  }
+
+  createReview(
+    request: ReviewRequest,
+    review: { sha: string; body: string; comments: ReviewCommentDraft[] },
+    signal: AbortSignal,
+  ): Promise<PullReview> {
+    return this.#json(request, "POST", `/repos/${request.owner}/${request.repo}/pulls/${request.number}/reviews`, signal, {
+      commit_id: review.sha,
+      body: review.body,
+      event: "COMMENT",
+      comments: review.comments.map((comment) => ({
+        path: comment.path,
+        line: comment.line,
+        side: "RIGHT",
+        body: comment.body,
+      })),
+    });
+  }
+
+  async #pages<T extends { id: number; body?: string | null }>(
+    request: ReviewRequest,
+    path: string,
+    signal: AbortSignal,
+  ): Promise<Array<T & { body: string }>> {
+    const collected: Array<T & { body: string }> = [];
+    let next: string | undefined = path;
+    for (let page = 0; page < 10 && next; page++) {
+      const response = await this.#send(request, "GET", next, signal);
+      const rows = (await response.json()) as T[];
+      if (!Array.isArray(rows)) throw new Error(`GitHub ${path} did not return a list`);
+      for (const row of rows) {
+        if (!row || typeof row.id !== "number") continue;
+        collected.push({ ...row, body: typeof row.body === "string" ? row.body : "" });
+      }
+      next = linkNext(response.headers.get("link"));
+    }
+    return collected;
+  }
+
+  async #text(request: ReviewRequest, path: string, signal: AbortSignal, accept: string): Promise<string> {
+    const response = await this.#send(request, "GET", path, signal, undefined, accept);
+    return response.text();
+  }
+
+  async #json<T>(request: ReviewRequest, method: string, path: string, signal: AbortSignal, body: unknown): Promise<T> {
+    const response = await this.#send(request, method, path, signal, body);
+    return (await response.json()) as T;
+  }
+
+  async #send(
+    request: ReviewRequest,
+    method: string,
+    path: string,
+    signal: AbortSignal,
+    body?: unknown,
+    accept = "application/vnd.github+json",
+  ): Promise<Response> {
+    const token = await this.#token(request, signal);
+    const url = path.startsWith("https://") ? path : `${this.config.githubApiUrl}${path}`;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const response = await fetch(url, {
+        method,
+        signal,
+        headers: {
+          accept,
+          authorization: `Bearer ${token}`,
+          "user-agent": "dureview",
+          "x-github-api-version": "2022-11-28",
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      if (response.ok) return response;
+      const detail = (await response.text()).slice(0, 500);
+      lastError = new Error(`GitHub ${method} ${path} failed (${response.status}): ${detail}`);
+      if (response.status !== 429 && response.status < 500) break;
+      const retryAfter = Number(response.headers.get("retry-after"));
+      await delay(signal, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 500 * attempt);
+    }
+    throw lastError;
+  }
+
+  accessToken(request: ReviewRequest, signal: AbortSignal): Promise<string> {
+    return this.#token(request, signal);
+  }
+
+  async #token(request: ReviewRequest, signal: AbortSignal): Promise<string> {
+    if (this.config.githubToken && !this.config.githubAppId) return this.config.githubToken;
+    if (!this.config.githubAppId || !this.config.githubAppPrivateKey) {
+      if (this.config.githubToken) return this.config.githubToken;
+      throw new Error("GitHub authentication is not configured.");
+    }
+    if (request.installationId === null) {
+      throw new Error("GitHub App webhook payload did not include installation.id.");
+    }
+    const cached = this.#tokens.get(request.installationId);
+    if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
+    const jwt = appJwt(this.config.githubAppId, this.config.githubAppPrivateKey);
+    const response = await fetch(
+      `${this.config.githubApiUrl}/app/installations/${request.installationId}/access_tokens`,
+      {
+        method: "POST",
+        signal,
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${jwt}`,
+          "user-agent": "dureview",
+        },
+      },
+    );
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 500);
+      throw new Error(`GitHub App installation token failed (${response.status}): ${detail}`);
+    }
+    const payload = (await response.json()) as { token?: string; expires_at?: string };
+    if (!payload.token) throw new Error("GitHub App installation token response had no token.");
+    const expiresAt = payload.expires_at ? Date.parse(payload.expires_at) : Date.now() + 50 * 60 * 1000;
+    this.#tokens.set(request.installationId, { token: payload.token, expiresAt });
+    log("info", "Minted GitHub App installation token", { installationId: request.installationId });
+    return payload.token;
+  }
+}
+
+export function appJwt(appId: string, privateKey: string, now = Date.now()): string {
+  const issued = Math.floor(now / 1000) - 60;
+  const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const payload = base64url(JSON.stringify({ iat: issued, exp: issued + 9 * 60, iss: appId }));
+  const data = `${header}.${payload}`;
+  const signer = createSign("RSA-SHA256");
+  signer.update(data);
+  signer.end();
+  return `${data}.${signer.sign(privateKey).toString("base64url")}`;
+}
+
+function base64url(value: string): string {
+  return Buffer.from(value).toString("base64url");
+}
+
+function linkNext(header: string | null): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(",")) {
+    const match = /<([^>]+)>;\s*rel="next"/.exec(part);
+    if (match?.[1]) return match[1];
+  }
+  return undefined;
+}
+
+function delay(signal: AbortSignal, ms: number): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason ?? new Error("aborted"));
+      },
+      { once: true },
+    );
+  });
+}

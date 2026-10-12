@@ -1,0 +1,128 @@
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { join } from "node:path";
+import { assertServeConfig, type Config } from "./config.js";
+import { createReviewModels, resolveProvider } from "./auth/session.js";
+import { GithubRest } from "./github/client.js";
+import { log } from "./log.js";
+import { GitCheckout } from "./review/checkout.js";
+import { DureviewService, type ServiceOptions } from "./service.js";
+
+export async function serveCommand(config: Config): Promise<void> {
+  assertServeConfig(config);
+  const models = createReviewModels(config);
+  const provider = await resolveProvider(config, models);
+  const model = models.getModel(provider, config.modelId);
+  if (!model) {
+    throw new Error(
+      `Model ${provider}/${config.modelId} is not in the pi-ai catalog. Set DUREVIEW_MODEL to a model pi-ai exposes.`,
+    );
+  }
+  const auth = await models.checkAuth(provider);
+  if (!auth) {
+    log("warn", "No credentials for the model provider yet. Run `dureview login` or set OPENAI_API_KEY.", {
+      provider,
+    });
+  }
+  const github = new GithubRest(config);
+  const checkout = new GitCheckout(github, join(config.dataDir, "checkouts"), (request, signal) =>
+    github.accessToken(request, signal),
+  );
+  const service = await DureviewService.open({
+    config,
+    models,
+    github,
+    checkout,
+    provider,
+    modelId: config.modelId,
+  });
+  const http = await startHttp(service, config);
+  log("info", "dureview listening", {
+    url: http.url,
+    provider,
+    model: config.modelId,
+    github: config.githubAppId ? "app" : "pat",
+  });
+
+  await new Promise<void>((resolve) => {
+    const stop = () => resolve();
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+  await http.close();
+  await service.close();
+  log("info", "dureview stopped");
+}
+
+export async function startHttp(
+  service: DureviewService,
+  config: Pick<Config, "host" | "port">,
+): Promise<{ url: string; close(): Promise<void> }> {
+  const server = createServer((req, res) => {
+    void handle(service, req, res);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(config.port, config.host, () => resolve());
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : config.port;
+  const host = config.host === "0.0.0.0" || config.host === "::" ? "127.0.0.1" : config.host;
+  return {
+    url: `http://${host}:${port}`,
+    close: () =>
+      new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
+}
+
+async function handle(service: DureviewService, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const url = req.url?.split("?")[0] ?? "/";
+    if (req.method === "GET" && (url === "/health" || url === "/health/")) {
+      send(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === "POST" && (url === "/webhook" || url === "/webhook/")) {
+      const raw = await readBody(req, 5_000_000);
+      const result = await service.handleWebhook(raw, header(req, "x-hub-signature-256"), header(req, "x-github-event"));
+      send(res, result.status, result.body);
+      return;
+    }
+    send(res, 404, { error: "not found" });
+  } catch (error) {
+    log("error", "request failed", { error: error instanceof Error ? error.message : String(error) });
+    if (!res.headersSent) send(res, 500, { error: "internal error" });
+  }
+}
+
+function header(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error("request body is too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+function send(res: ServerResponse, status: number, body: Record<string, unknown>): void {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(payload) });
+  res.end(payload);
+}
+
+export type { ServiceOptions };

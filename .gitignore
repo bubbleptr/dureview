@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+agent-tools/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.env
+.DS_Store
+coverage/

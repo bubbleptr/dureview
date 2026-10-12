@@ -1,0 +1,32 @@
+{
+  "name": "dureview",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hostable adversarial pull request review bot on Pi Durable.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "dureview": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "e2e": "vitest run test/e2e.test.ts",
+    "start": "node dist/cli.js serve",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.0",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}
