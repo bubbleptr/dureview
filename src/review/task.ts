@@ -69,12 +69,12 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
         try {
           prepared = await deps.checkout.prepare(current.input, signalOf(context));
         } catch (error) {
-          await fail(runtime, context, error instanceof Error ? error.message : String(error));
+          await failOrAbort(runtime, context, error instanceof Error ? error.message : String(error));
           return;
         }
         const model = runtime.models.getModel(deps.provider, deps.modelId);
         if (!model) {
-          await fail(runtime, context, `Unknown model ${deps.provider}/${deps.modelId}.`);
+          await failOrAbort(runtime, context, `Unknown model ${deps.provider}/${deps.modelId}.`);
           return;
         }
         await runtime.commit(async (tx) => {
@@ -106,7 +106,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
         const conversationId = checkpoint.conversationId as ConversationId;
         const conversation = await runtime.conversation(conversationId, context);
         if (!conversation) {
-          await fail(runtime, context, "Review conversation is missing.");
+          await failOrAbort(runtime, context, "Review conversation is missing.");
           return;
         }
         const prompt = buildUserPrompt({
@@ -121,7 +121,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
         );
         const firstSettled = await first.wait(context);
         if (firstSettled.status !== "done") {
-          await fail(runtime, context, `Review run did not finish: ${firstSettled.reason}`);
+          await failOrAbort(runtime, context, `Review run did not finish: ${firstSettled.reason}`);
           return;
         }
         let draft = await runtime.snapshot(ReviewDraft, conversationId, context);
@@ -137,13 +137,13 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
           );
           const nudged = await nudge.wait(context);
           if (nudged.status !== "done") {
-            await fail(runtime, context, `Review nudge did not finish: ${nudged.reason}`);
+            await failOrAbort(runtime, context, `Review nudge did not finish: ${nudged.reason}`);
             return;
           }
           draft = await runtime.snapshot(ReviewDraft, conversationId, context);
         }
         if (!draft?.submitted) {
-          await fail(runtime, context, "The model finished without calling submit_review.");
+          await failOrAbort(runtime, context, "The model finished without calling submit_review.");
           return;
         }
         const findings = draft.findings.map((finding) => ({
@@ -253,7 +253,12 @@ export function enqueueReview(
 
 type TaskRuntime = Parameters<ReviewTask["definition"]["phases"]["prepare"]>[1];
 
-async function fail(runtime: TaskRuntime, context: Context, message: string): Promise<void> {
+/**
+ * Record a terminal failure. Shutdown aborts the invocation while the scheduler is already
+ * closing, so the error is rethrown and the checkpoint stays put for the next process.
+ */
+async function failOrAbort(runtime: TaskRuntime, context: Context, message: string): Promise<void> {
+  if (context.abortSignal?.aborted) throw new Error(message);
   log("error", "review failed", { error: message });
   await runtime.commit(
     () => ({ status: "terminal", outcome: { status: "failed", error: { message } } }),

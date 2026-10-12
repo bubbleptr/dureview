@@ -1,5 +1,6 @@
 import type { Context } from "@earendil-works/chord";
 import { afterEach, describe, expect, it } from "vitest";
+import type { RepoCheckout } from "../src/review/checkout.js";
 import { taskMarker } from "../src/types.js";
 import { hangUntilAbort, MemoryGitHub, openTestService, reviewRequest, scriptedReview, tempDataDir } from "./support.js";
 
@@ -88,5 +89,40 @@ describe("resume after a crash", () => {
     expect(settled.state.outcome.status === "completed" ? settled.state.outcome.result.summaryAction : "").toBe(
       "unchanged",
     );
+  });
+
+  it("resumes checkout when the process stops before the diff is ready", async () => {
+    const dataDir = await tempDataDir();
+    const github = new MemoryGitHub();
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const hanging: RepoCheckout = {
+      prepare: (_request, signal) =>
+        new Promise((_resolve, reject) => {
+          markStarted();
+          signal.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), { once: true });
+        }),
+    };
+    const first = await openTestService({ dataDir, github, checkout: hanging, responses: [] });
+    closers.push(() => first.service.close());
+    const queued = await first.service.enqueue(reviewRequest());
+    await started;
+    expect(github.comments).toHaveLength(0);
+    await first.service.close();
+    closers.pop();
+
+    const second = await openTestService({
+      dataDir,
+      github,
+      responses: scriptedReview("charge() reports success without billing."),
+    });
+    closers.push(() => second.service.close());
+    const settled = await second.service.wait(queued.taskId);
+    expect(settled.state.outcome.status).toBe("completed");
+    expect(github.comments).toHaveLength(1);
+    expect(github.reviews).toHaveLength(1);
+    expect(github.comments[0]?.body).toContain(taskMarker(String(queued.taskId)));
   });
 });
