@@ -15,10 +15,11 @@ import type { GitHub } from "../github/client.js";
 import { publishReview, type PublishResult } from "../github/publish.js";
 import { log } from "../log.js";
 import { commandReviewKey, pullOnceKey, reviewKey, type ReviewRequest } from "../types.js";
+import { beginReviewCheck, finishReviewCheck, reviewCheckError, reviewCheckOutcome } from "./checks.js";
 import type { RepoCheckout } from "./checkout.js";
-import type { ReviewPolicy } from "./policy.js";
-import { buildUserPrompt, ADVERSARIAL_ROLE } from "./prompt.js";
+import type { ReviewLanguage, ReviewPolicy } from "./policy.js";
 import type { ReviewFinished } from "./history.js";
+import { buildUserPrompt, ADVERSARIAL_ROLE } from "./prompt.js";
 import type { ReviewSubmission } from "./schema.js";
 import { ReviewDraft, ReviewIndex } from "./state.js";
 import { reviewTools } from "./tools.js";
@@ -53,9 +54,9 @@ type Prepared = {
 };
 
 export type ReviewState =
-  | { phase: "prepare" }
-  | ({ phase: "review" } & Prepared)
-  | ({ phase: "post"; review: ReviewSubmission } & Prepared);
+  | { phase: "prepare"; checkRunId?: number | null }
+  | ({ phase: "review"; checkRunId: number | null } & Prepared)
+  | ({ phase: "post"; checkRunId: number | null; review: ReviewSubmission } & Prepared);
 
 export type ReviewResult = PublishResult & { conversationId: number };
 
@@ -75,180 +76,244 @@ export type EnqueueMode =
 
 export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; task: ReviewTask } {
   let extension!: Extension;
-  const recordFailure = (
-    current: { id: TaskId<ReviewResult>; input: ReviewRequest },
-    runtime: TaskRuntime,
-    context: Context,
-    message: string,
-  ) =>
-    failOrAbort(runtime, context, message, () =>
-      notifyFinished(deps, {
-        taskId: String(current.id),
-        owner: current.input.owner,
-        repo: current.input.repo,
-        number: current.input.number,
-        outcome: "failed",
-        verdict: null,
-        findingCount: null,
-      }),
-    );
   const task = defineTask<ReviewRequest, ReviewState, ReviewResult>({
     name: "dureview.review",
     version: 1,
     initial: () => ({ phase: "prepare" }),
     phases: {
       prepare: async (current, runtime, context) => {
-        let prepared;
-        try {
-          prepared = await deps.checkout.prepare(current.input, signalOf(context));
-        } catch (error) {
-          await recordFailure(current, runtime, context, error instanceof Error ? error.message : String(error));
-          return;
-        }
-        const model = runtime.models.getModel(deps.provider, deps.modelId);
-        if (!model) {
-          await recordFailure(current, runtime, context, `Unknown model ${deps.provider}/${deps.modelId}.`);
-          return;
-        }
-        await runtime.commit(async (tx) => {
-          const created = await tx.createConversation({
-            ownership: { kind: "task", taskId: current.id },
-          });
-          await configure(tx, created.id, {
-            model: { provider: deps.provider, modelId: deps.modelId },
-            thinkingLevel: deps.thinking,
-            extensions: [extension],
-            tools: [...reviewTools],
-            cwd: prepared.dir,
-          });
-          const checkpoint: ReviewState = {
-            phase: "review",
-            conversationId: created.id,
-            checkoutDir: prepared.dir,
-            diff: prepared.diff,
-            rules: prepared.rules,
-            policy: prepared.policy,
-            provider: deps.provider,
-            modelId: deps.modelId,
-            truncated: prepared.truncated,
-          };
-          return { status: "running", checkpoint };
-        }, context);
-      },
-      review: async (current, runtime, context) => {
-        const checkpoint = current.state.checkpoint;
-        const conversationId = checkpoint.conversationId as ConversationId;
-        const conversation = await runtime.conversation(conversationId, context);
-        if (!conversation) {
-          await recordFailure(current, runtime, context, "Review conversation is missing.");
-          return;
-        }
-        const prompt = buildUserPrompt({
-          request: current.input,
-          diff: checkpoint.diff,
-          truncated: checkpoint.truncated,
-          rules: checkpoint.rules,
-          policy: checkpoint.policy,
-        });
-        const first = await conversation.submit(
-          { type: "input", content: prompt, requestId: `dureview:${current.id}:prompt` },
-          context,
-        );
-        const firstSettled = await first.wait(context);
-        if (firstSettled.status !== "done") {
-          await recordFailure(current, runtime, context, `Review run did not finish: ${firstSettled.reason}`);
-          return;
-        }
-        let draft = await runtime.snapshot(ReviewDraft, conversationId, context);
-        if (!draft?.submitted) {
-          const nudge = await conversation.submit(
-            {
-              type: "input",
-              content:
-                'Call submit_review now. If nothing is wrong, set verdict to "clean", explain that in verdict_reason, list what you checked, and pass an empty findings array.',
-              requestId: `dureview:${current.id}:nudge`,
-            },
+        const signal = signalOf(context);
+        const request = current.input;
+        let language: ReviewLanguage = "en";
+        const stored = readCheckRunId(current.state.checkpoint);
+        let checkRunId = stored ?? null;
+        const fail = (message: string) =>
+          failOrAbort(
+            runtime,
             context,
+            message,
+            {
+              github: deps.github,
+              request,
+              checkRunId,
+              language,
+              signal,
+            },
+            () => notifyFinished(deps, failedEvent(current)),
           );
-          const nudged = await nudge.wait(context);
-          if (nudged.status !== "done") {
-            await recordFailure(current, runtime, context, `Review nudge did not finish: ${nudged.reason}`);
+        try {
+          if (stored === undefined) {
+            checkRunId = await beginReviewCheck(deps.github, request, String(current.id), signal);
+            await runtime.commit(
+              () => ({ status: "running", checkpoint: { phase: "prepare", checkRunId } }),
+              context,
+            );
             return;
           }
-          draft = await runtime.snapshot(ReviewDraft, conversationId, context);
+          const prepared = await deps.checkout.prepare(request, signal);
+          language = prepared.policy.language;
+          const model = runtime.models.getModel(deps.provider, deps.modelId);
+          if (!model) {
+            await fail(`Unknown model ${deps.provider}/${deps.modelId}.`);
+            return;
+          }
+          await runtime.commit(async (tx) => {
+            const created = await tx.createConversation({
+              ownership: { kind: "task", taskId: current.id },
+            });
+            await configure(tx, created.id, {
+              model: { provider: deps.provider, modelId: deps.modelId },
+              thinkingLevel: deps.thinking,
+              extensions: [extension],
+              tools: [...reviewTools],
+              cwd: prepared.dir,
+            });
+            const checkpoint: ReviewState = {
+              phase: "review",
+              checkRunId,
+              conversationId: created.id,
+              checkoutDir: prepared.dir,
+              diff: prepared.diff,
+              rules: prepared.rules,
+              policy: prepared.policy,
+              provider: deps.provider,
+              modelId: deps.modelId,
+              truncated: prepared.truncated,
+            };
+            return { status: "running", checkpoint };
+          }, context);
+        } catch (error) {
+          await fail(error instanceof Error ? error.message : String(error));
         }
-        if (!draft?.submitted) {
-          await recordFailure(current, runtime, context, "The model finished without calling submit_review.");
-          return;
-        }
-        const review: ReviewSubmission = {
-          verdict: draft.verdict,
-          verdictReason: draft.verdictReason,
-          overallConfidence: draft.overallConfidence,
-          checked: [...draft.checked],
-          findings: draft.findings.map((finding) => ({
-            ...finding,
-            evidence: [...finding.evidence],
-          })),
-        };
-        await runtime.commit(
-          () => ({
-            status: "running",
-            checkpoint: {
-              ...checkpoint,
-              phase: "post",
-              review,
-            },
-          }),
-          context,
+      },
+      review: async (current, runtime, context) => {
+        const signal = signalOf(context);
+        const checkpoint = current.state.checkpoint;
+        const checkRunId = await ensureReviewCheck(
+          deps.github,
+          current.input,
+          String(current.id),
+          readCheckRunId(checkpoint),
+          signal,
         );
+        const fail = (message: string) =>
+          failOrAbort(
+            runtime,
+            context,
+            message,
+            {
+              github: deps.github,
+              request: current.input,
+              checkRunId,
+              language: checkpoint.policy.language,
+              signal,
+            },
+            () => notifyFinished(deps, failedEvent(current)),
+          );
+        try {
+          const conversationId = checkpoint.conversationId as ConversationId;
+          const conversation = await runtime.conversation(conversationId, context);
+          if (!conversation) {
+            await fail("Review conversation is missing.");
+            return;
+          }
+          const prompt = buildUserPrompt({
+            request: current.input,
+            diff: checkpoint.diff,
+            truncated: checkpoint.truncated,
+            rules: checkpoint.rules,
+            policy: checkpoint.policy,
+          });
+          const first = await conversation.submit(
+            { type: "input", content: prompt, requestId: `dureview:${current.id}:prompt` },
+            context,
+          );
+          const firstSettled = await first.wait(context);
+          if (firstSettled.status !== "done") {
+            await fail(`Review run did not finish: ${firstSettled.reason}`);
+            return;
+          }
+          let draft = await runtime.snapshot(ReviewDraft, conversationId, context);
+          if (!draft?.submitted) {
+            const nudge = await conversation.submit(
+              {
+                type: "input",
+                content:
+                  'Call submit_review now. If nothing is wrong, set verdict to "clean", explain that in verdict_reason, list what you checked, and pass an empty findings array.',
+                requestId: `dureview:${current.id}:nudge`,
+              },
+              context,
+            );
+            const nudged = await nudge.wait(context);
+            if (nudged.status !== "done") {
+              await fail(`Review nudge did not finish: ${nudged.reason}`);
+              return;
+            }
+            draft = await runtime.snapshot(ReviewDraft, conversationId, context);
+          }
+          if (!draft?.submitted) {
+            await fail("The model finished without calling submit_review.");
+            return;
+          }
+          const review: ReviewSubmission = {
+            verdict: draft.verdict,
+            verdictReason: draft.verdictReason,
+            overallConfidence: draft.overallConfidence,
+            checked: [...draft.checked],
+            findings: draft.findings.map((finding) => ({
+              ...finding,
+              evidence: [...finding.evidence],
+            })),
+          };
+          const next: ReviewState = { ...checkpoint, phase: "post", checkRunId, review };
+          await runtime.commit(() => ({ status: "running", checkpoint: next }), context);
+        } catch (error) {
+          await fail(error instanceof Error ? error.message : String(error));
+        }
       },
       post: async (current, runtime, context) => {
-        if (deps.hooks?.beforePost) await deps.hooks.beforePost(context);
+        const signal = signalOf(context);
         const checkpoint = current.state.checkpoint;
-        const published = await publishReview({
-          github: deps.github,
-          request: current.input,
-          taskId: String(current.id),
-          provider: checkpoint.provider,
-          modelId: checkpoint.modelId,
-          review: checkpoint.review,
-          policy: checkpoint.policy,
-          diff: checkpoint.diff,
-          signal: signalOf(context),
-          afterRemoteWrite: deps.hooks?.afterRemoteWrite
-            ? async () => {
-                await deps.hooks?.afterRemoteWrite?.(context);
-              }
-            : undefined,
-        });
-        log("info", "posted review", {
-          repo: `${current.input.owner}/${current.input.repo}`,
-          pr: current.input.number,
-          sha: current.input.sha,
-          taskId: String(current.id),
-          summaryAction: published.summaryAction,
-          reviewAction: published.reviewAction,
-        });
-        await notifyFinished(deps, {
-          taskId: String(current.id),
-          owner: current.input.owner,
-          repo: current.input.repo,
-          number: current.input.number,
-          outcome: "completed",
-          verdict: checkpoint.review.verdict,
-          findingCount: checkpoint.review.findings.length,
-        });
-        await runtime.commit(
-          () => ({
-            status: "terminal",
-            outcome: {
-              status: "completed",
-              result: { ...published, conversationId: checkpoint.conversationId },
-            },
-          }),
-          context,
+        const checkRunId = await ensureReviewCheck(
+          deps.github,
+          current.input,
+          String(current.id),
+          readCheckRunId(checkpoint),
+          signal,
         );
+        const fail = (message: string) =>
+          failOrAbort(
+            runtime,
+            context,
+            message,
+            {
+              github: deps.github,
+              request: current.input,
+              checkRunId,
+              language: checkpoint.policy.language,
+              signal,
+            },
+            () => notifyFinished(deps, failedEvent(current)),
+          );
+        try {
+          if (deps.hooks?.beforePost) await deps.hooks.beforePost(context);
+          const published = await publishReview({
+            github: deps.github,
+            request: current.input,
+            taskId: String(current.id),
+            provider: checkpoint.provider,
+            modelId: checkpoint.modelId,
+            review: checkpoint.review,
+            policy: checkpoint.policy,
+            diff: checkpoint.diff,
+            signal,
+            afterRemoteWrite: deps.hooks?.afterRemoteWrite
+              ? async () => {
+                  await deps.hooks?.afterRemoteWrite?.(context);
+                }
+              : undefined,
+          });
+          await finishReviewCheck(
+            deps.github,
+            current.input,
+            checkRunId,
+            reviewCheckOutcome({
+              findings: checkpoint.review.findings,
+              diff: checkpoint.diff,
+              policy: checkpoint.policy,
+            }),
+            signal,
+          );
+          log("info", "posted review", {
+            repo: `${current.input.owner}/${current.input.repo}`,
+            pr: current.input.number,
+            sha: current.input.sha,
+            taskId: String(current.id),
+            summaryAction: published.summaryAction,
+            reviewAction: published.reviewAction,
+          });
+          await notifyFinished(deps, {
+            taskId: String(current.id),
+            owner: current.input.owner,
+            repo: current.input.repo,
+            number: current.input.number,
+            outcome: "completed",
+            verdict: checkpoint.review.verdict,
+            findingCount: checkpoint.review.findings.length,
+          });
+          await runtime.commit(
+            () => ({
+              status: "terminal",
+              outcome: {
+                status: "completed",
+                result: { ...published, conversationId: checkpoint.conversationId },
+              },
+            }),
+            context,
+          );
+        } catch (error) {
+          await fail(error instanceof Error ? error.message : String(error));
+        }
       },
     },
     abort: async (_current, runtime, context) => {
@@ -329,15 +394,46 @@ async function taskCounts(tx: IndexTransaction, taskId: number): Promise<boolean
 type TaskRuntime = Parameters<ReviewTask["definition"]["phases"]["prepare"]>[1];
 
 /**
+ * Open the check once per task. A stored null means an earlier attempt skipped it
+ * (the App returned 403, or the Checks API failed) and should not be retried.
+ */
+async function ensureReviewCheck(
+  github: GitHub,
+  request: ReviewRequest,
+  taskId: string,
+  stored: number | null | undefined,
+  signal: AbortSignal,
+): Promise<number | null> {
+  if (stored !== undefined) return stored;
+  return beginReviewCheck(github, request, taskId, signal);
+}
+
+function readCheckRunId(checkpoint: ReviewState): number | null | undefined {
+  if (!("checkRunId" in checkpoint)) return undefined;
+  return checkpoint.checkRunId ?? null;
+}
+
+/**
  * Record a terminal failure. Shutdown aborts the invocation while the scheduler is already
  * closing, so the error is rethrown and the checkpoint stays put for the next process.
+ * The check run is completed first so it does not stay in progress, unless this process
+ * is shutting down and the review will resume.
  */
 async function failOrAbort(
   runtime: TaskRuntime,
   context: Context,
   message: string,
+  check: {
+    github: GitHub;
+    request: ReviewRequest;
+    checkRunId: number | null;
+    language: ReviewLanguage;
+    signal: AbortSignal;
+  },
   onFailed?: () => Promise<void>,
 ): Promise<void> {
+  if (context.abortSignal?.aborted) throw new Error(message);
+  await finishReviewCheck(check.github, check.request, check.checkRunId, reviewCheckError(message, check.language), check.signal);
   if (context.abortSignal?.aborted) throw new Error(message);
   log("error", "review failed", { error: message });
   if (onFailed) await onFailed();
@@ -354,6 +450,18 @@ async function notifyFinished(deps: ReviewDeps, event: ReviewFinished): Promise<
   } catch (error) {
     log("error", "could not record review", { error: error instanceof Error ? error.message : String(error) });
   }
+}
+
+function failedEvent(current: { id: TaskId<ReviewResult>; input: ReviewRequest }): ReviewFinished {
+  return {
+    taskId: String(current.id),
+    owner: current.input.owner,
+    repo: current.input.repo,
+    number: current.input.number,
+    outcome: "failed",
+    verdict: null,
+    findingCount: null,
+  };
 }
 
 function signalOf(context: Context): AbortSignal {

@@ -8,6 +8,8 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseStep
 import type { Config } from "../src/config.js";
 import {
   RequestChangesRejectedError,
+  type CheckConclusion,
+  type CheckRun,
   type GitHub,
   type IssueComment,
   type PullReview,
@@ -169,6 +171,12 @@ export class MemoryGitHub implements GitHub {
   permissions = new Map<string, string>();
   reactions: Array<{ commentId: number; content: string }> = [];
   remotePull: RemotePull | null = null;
+  /** Check runs opened for a review, newest write last in `checkLog`. */
+  checkRuns: MemoryCheckRun[] = [];
+  /** Every create and update, including the in-progress create. */
+  checkLog: MemoryCheckRun[] = [];
+  /** When set, check run calls throw `GitHub ... failed (status)`. */
+  checkErrorStatus: number | null = null;
   /** When set, createReview throws this before writing. */
   createError: Error | null = null;
   /** GitHub forbids REQUEST_CHANGES when the token user opened the pull request. */
@@ -297,7 +305,69 @@ export class MemoryGitHub implements GitHub {
     this.calls.push("reactToComment");
     this.reactions.push({ commentId, content: "eyes" });
   }
+
+  async listCheckRuns(_request: GitHubRepo, sha: string, name: string): Promise<CheckRun[]> {
+    this.calls.push("listCheckRuns");
+    this.#rejectChecks("GET", `/repos/${_request.owner}/${_request.repo}/commits/${sha}/check-runs`);
+    return this.checkRuns
+      .filter((run) => run.sha === sha && run.name === name)
+      .map((run) => ({ id: run.id, status: run.status, conclusion: run.conclusion, externalId: run.externalId }));
+  }
+
+  async createCheckRun(
+    request: GitHubRepo,
+    input: { name: string; sha: string; externalId: string },
+  ): Promise<CheckRun> {
+    this.calls.push("createCheckRun");
+    this.#rejectChecks("POST", `/repos/${request.owner}/${request.repo}/check-runs`);
+    const run: MemoryCheckRun = {
+      id: this.#next++,
+      name: input.name,
+      sha: input.sha,
+      status: "in_progress",
+      conclusion: null,
+      externalId: input.externalId,
+      title: null,
+      summary: null,
+    };
+    this.checkRuns.push(run);
+    this.checkLog.push({ ...run });
+    return { id: run.id, status: run.status, conclusion: null, externalId: run.externalId };
+  }
+
+  async updateCheckRun(
+    request: GitHubRepo,
+    checkRunId: number,
+    input: { conclusion: CheckConclusion; title: string; summary: string },
+  ): Promise<CheckRun> {
+    this.calls.push("updateCheckRun");
+    this.#rejectChecks("PATCH", `/repos/${request.owner}/${request.repo}/check-runs/${checkRunId}`);
+    const run = this.checkRuns.find((item) => item.id === checkRunId);
+    if (!run) throw new Error(`check run ${checkRunId} not found`);
+    run.status = "completed";
+    run.conclusion = input.conclusion;
+    run.title = input.title;
+    run.summary = input.summary;
+    this.checkLog.push({ ...run });
+    return { id: run.id, status: run.status, conclusion: run.conclusion, externalId: run.externalId };
+  }
+
+  #rejectChecks(method: string, path: string): void {
+    if (this.checkErrorStatus === null) return;
+    throw new Error(`GitHub ${method} ${path} failed (${this.checkErrorStatus}): Resource not accessible by integration`);
+  }
 }
+
+export type MemoryCheckRun = {
+  id: number;
+  name: string;
+  sha: string;
+  status: "in_progress" | "completed";
+  conclusion: CheckConclusion | null;
+  externalId: string | null;
+  title: string | null;
+  summary: string | null;
+};
 
 export class FixtureCheckout implements RepoCheckout {
   async prepare(): Promise<Checkout> {
