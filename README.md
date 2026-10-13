@@ -74,10 +74,12 @@ The API key is read from the environment. It is not written to the data director
 
 1. Create a GitHub App owned by the account that should review pull requests.
 2. Permissions: **Contents** (read), **Pull requests** (read and write), **Issues** (read and write). Metadata is included.
-3. Subscribe to the **Pull request** event.
+3. Subscribe to the **Pull request** and **Issue comment** events.
 4. Webhook URL: `https://<your-host>/webhook`. Webhook secret: the same value as `DUREVIEW_WEBHOOK_SECRET`.
 5. Install the App on the repositories it should review.
 6. Set `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` (the PEM, with newlines as `\n`, or a path via `GITHUB_APP_PRIVATE_KEY_PATH`).
+
+Issue comment events deliver `/dureview`. The 👀 reaction uses the Issues write permission. The collaborator permission check uses the App's access to the repository.
 
 The webhook payload includes `installation.id`. dureview mints a short-lived installation token for the API and for `git fetch`. The token is not stored.
 
@@ -89,9 +91,15 @@ Set `GITHUB_TOKEN` and omit the App variables. The token needs read access to th
 
 ### What gets reviewed
 
-`pull_request` actions `opened`, `synchronize`, and `reopened` enqueue a review of the head SHA. Other events, including `ping`, are acknowledged and ignored. Set `DUREVIEW_SKIP_DRAFTS=1` to skip draft pull requests.
+dureview reads `.dureview.md` from the pull request's **base branch**, not from the pull request head. A pull request cannot change its own trigger rules, thresholds, or review prompt. Those updates apply after it merges. When the base branch has no `.dureview.md`, `trigger` is `auto` and `drafts` is `false`.
 
-The same `owner/repo#number@sha` is not reviewed twice. A later push (a new SHA) is a new review. What it posts depends on `summary` in `.dureview.md` (default `false`).
+`trigger: auto` (the default) reviews `pull_request` actions `opened`, `reopened`, `synchronize`, and `ready_for_review`. `trigger: once` reviews a pull request one time: on `opened`, or on `ready_for_review` when the pull request was still a draft at open and that open was skipped. Later pushes and a reopen do not start another review. `trigger: manual` ignores those events.
+
+`drafts: false` (the default) skips draft pull requests. Marking a draft ready for review reviews the current head, unless `trigger` is `manual`. `drafts: true` reviews drafts the same way as open pull requests. `DUREVIEW_SKIP_DRAFTS=1` still skips drafts even when the file sets `drafts: true`.
+
+A comment on the pull request whose first line is `/dureview` (leading and trailing whitespace ignored) always reviews the current head, including drafts and `manual` repositories. dureview ignores that command from its own GitHub App bot (`{slug}[bot]`, from `GET /app`) or from the personal access token user (`GET /user`). The author must have write, maintain, or admin permission; dureview checks the collaborator permission API and ignores anyone else, with no reaction. An accepted command gets a 👀 reaction. The same comment does not start two reviews of the same head SHA. A new `/dureview` comment does, even when that SHA was already reviewed. A command also counts as the one `trigger: once` review when that slot is still open, so a later open or ready-for-review does not start a second automatic review. The command itself still runs after the automatic review. Other events, including `ping` and comments that are not the command, are acknowledged and ignored.
+
+The same `owner/repo#number@sha` is not reviewed twice by an automatic event. A later push (a new SHA) is a new review when `trigger` is `auto`. What it posts depends on `summary` in `.dureview.md` (default `false`).
 
 With `summary: false`, dureview posts one inline comment per finding and nothing else. A review with no findings, and no earlier inline comment to resolve, writes nothing. It still reads existing inline comments so a finding that disappeared can be closed. A P0 or P1 inline finding submits the review as **Request changes**. Any other posted finding uses **Comment**. dureview does not approve. GitHub rejects Request changes when the token's user opened the pull request; dureview logs that and submits Comment instead. `investigate` findings and findings with an empty trigger are not posted. A finding that was posted before and is absent on the next push has its review thread resolved. If the thread cannot be resolved, dureview replies `fixed in <sha>` (or `已在 <sha> 修复` when `language` is `zh`).
 
@@ -101,7 +109,7 @@ With `summary: true`, a later push updates the existing summary comment. Inline 
 
 Each review is one Pi Durable task:
 
-1. **prepare** checks out the head and loads the diff plus an optional `.dureview.md`.
+1. **prepare** checks out the head and loads the diff plus `.dureview.md` from the base branch.
 2. **review** runs a conversation with `read`, `grep`, and `submit_review`. No write, edit, or shell tool is offered.
 3. **post** publishes to GitHub.
 
@@ -134,11 +142,13 @@ When `summary: true`, non-inline findings go in the summary: `investigate`, miss
 
 ## `.dureview.md`
 
-Optional file at the repository root. Prose after the optional front matter is appended to the review prompt. The front matter overrides the posting thresholds. Keys you do not set keep the profile's defaults. An explicit key wins over the profile.
+Optional file at the repository root. dureview reads it from the pull request's base branch, not from the pull request head, so a pull request cannot change how it is reviewed. Prose after the optional front matter is appended to the review prompt. The front matter overrides the posting thresholds and the trigger rules. Keys you do not set keep the profile's defaults. An explicit key wins over the profile.
 
 ```markdown
 ---
 profile: default
+trigger: auto
+drafts: false
 language: en
 summary: false
 min_confidence: 0.5
@@ -159,6 +169,8 @@ ignore:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
+| `trigger` | `auto` | `auto` reviews when a pull request is opened, reopened, synchronized, or marked ready for review. `once` reviews the first time only: on `opened`, or on `ready_for_review` when the pull request started as a draft. Later pushes are ignored. `manual` reviews only when someone comments `/dureview`. |
+| `drafts` | `false` | When `false`, draft pull requests are skipped until they are marked ready for review. `trigger: manual` still waits for `/dureview`. When `true`, drafts are reviewed like any other pull request. |
 | `profile` | `default` | `quiet` inlines P0–P1 only. `default` also inlines P2 when confidence is at least `p2_inline_min_confidence`. `loud` uses the same priorities and lowers that P2 bar to `min_confidence`. |
 | `language` | `en` | `en` or `zh`. The model writes finding titles and bodies in this language. Labels, verdict words, and fixed notes use it too. |
 | `summary` | `false` | When `true`, also post and update one summary comment, and keep non-inline findings there. When `false`, post one inline comment per finding and nothing else. |
@@ -185,7 +197,7 @@ Built-in skip globs cover lockfiles (`package-lock.json`, `yarn.lock`, `pnpm-loc
 | `DUREVIEW_MODEL` | `gpt-5.5` | Model id from the pi-ai catalog for the selected provider |
 | `DUREVIEW_THINKING` | `medium` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `DUREVIEW_LOGIN_METHOD` | prompt | `device_code` or `browser` |
-| `DUREVIEW_SKIP_DRAFTS` | off | `1` skips draft pull requests |
+| `DUREVIEW_SKIP_DRAFTS` | off | `1` skips draft pull requests even when `.dureview.md` sets `drafts: true` |
 | `OPENAI_API_KEY` | | Used when the provider is `openai` and no stored key overrides it |
 | `GITHUB_APP_ID` | | GitHub App id |
 | `GITHUB_APP_PRIVATE_KEY` | | PEM contents, or a path to a PEM |
@@ -204,7 +216,7 @@ npm test
 npm run e2e
 ```
 
-Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, and review-thread resolution.
+Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, and review-thread resolution.
 
 Live Codex OAuth and a real GitHub App are not exercised here. Pi Durable is experimental and its API can change between releases. This repo pins `@earendil-works/pi-durable`, `@earendil-works/pi-ai`, and `@earendil-works/chord` at 1.1.0.
 

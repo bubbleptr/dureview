@@ -25,12 +25,30 @@ export const ReviewDraft = defineDoc<{
   }),
 });
 
-/** Head SHAs that already have a review task. Session-scoped so enqueue is atomic with task creation. */
+/**
+ * Head SHAs that already have a review task, plus the one automatic review claimed for a
+ * `trigger: once` pull request. Session-scoped so enqueue is atomic with task creation.
+ * Version 2 adds `onceByPull`. Existing indexes migrate in place.
+ */
 export const ReviewIndex = defineDoc<{
   byKey: Record<string, number>;
+  onceByPull: Record<string, number>;
 }>({
   kind: "dureview.index",
-  version: 1,
+  version: 2,
   scope: "session",
-  initial: () => ({ byKey: {} }),
+  migrate: (value) => ({
+    byKey: numberMap(value.byKey),
+    onceByPull: numberMap(value.onceByPull),
+  }),
+  initial: () => ({ byKey: {}, onceByPull: {} }),
 });
+
+function numberMap(value: unknown): Record<string, number> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result: Record<string, number> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "number") result[key] = item;
+  }
+  return result;
+}

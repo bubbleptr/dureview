@@ -12,6 +12,7 @@ import {
   type IssueComment,
   type PullReview,
   type PullReviewComment,
+  type RemotePull,
   type ReviewCommentDraft,
   type ReviewEvent,
 } from "../src/github/client.js";
@@ -20,7 +21,7 @@ import { defaultPolicy, type ReviewPolicy } from "../src/review/policy.js";
 import { findingFingerprint, type Finding, type ReviewSubmission, type Verdict } from "../src/review/schema.js";
 import type { ReviewHooks } from "../src/review/task.js";
 import { DureviewService } from "../src/service.js";
-import type { ReviewRequest } from "../src/types.js";
+import type { GitHubRepo, ReviewRequest } from "../src/types.js";
 
 export const SECRET = "test-webhook-secret";
 export const SHA_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -109,6 +110,7 @@ export function reviewRequest(sha = SHA_A): ReviewRequest {
     number: 7,
     sha,
     baseSha: BASE_SHA,
+    baseRef: "main",
     title: "Charge positive amounts",
     cloneUrl: "https://github.com/acme/demo.git",
     installationId: 99,
@@ -130,7 +132,7 @@ export function pullPayload(sha = SHA_A, action = "opened"): Record<string, unkn
       title: "Charge positive amounts",
       draft: false,
       head: { sha },
-      base: { sha: BASE_SHA },
+      base: { sha: BASE_SHA, ref: "main" },
     },
   };
 }
@@ -158,6 +160,15 @@ export class MemoryGitHub implements GitHub {
   reviewComments: PullReviewComment[] = [];
   /** Method names invoked, in order. */
   calls: string[] = [];
+  /** `${ref}\\0${path}` → file text. Missing keys are 404. */
+  files = new Map<string, string>();
+  /** Refs passed to getRepoFile, in order. */
+  fileRefs: string[] = [];
+  viewer = "dureview[bot]";
+  /** Username → permission. Missing users are `none`. */
+  permissions = new Map<string, string>();
+  reactions: Array<{ commentId: number; content: string }> = [];
+  remotePull: RemotePull | null = null;
   /** When set, createReview throws this before writing. */
   createError: Error | null = null;
   /** GitHub forbids REQUEST_CHANGES when the token user opened the pull request. */
@@ -259,6 +270,33 @@ export class MemoryGitHub implements GitHub {
     this.reviewComments.push(reply);
     return { ...reply };
   }
+
+  async getRepoFile(_request: GitHubRepo, path: string, ref: string): Promise<string | null> {
+    this.calls.push("getRepoFile");
+    this.fileRefs.push(ref);
+    return this.files.get(`${ref}\0${path}`) ?? null;
+  }
+
+  async viewerLogin(): Promise<string> {
+    this.calls.push("viewerLogin");
+    return this.viewer;
+  }
+
+  async collaboratorPermission(_request: GitHubRepo, username: string): Promise<string> {
+    this.calls.push("collaboratorPermission");
+    return this.permissions.get(username) ?? "none";
+  }
+
+  async getPull(): Promise<RemotePull> {
+    this.calls.push("getPull");
+    if (!this.remotePull) throw new Error("pull is not configured");
+    return { ...this.remotePull };
+  }
+
+  async reactToComment(_request: GitHubRepo, commentId: number): Promise<void> {
+    this.calls.push("reactToComment");
+    this.reactions.push({ commentId, content: "eyes" });
+  }
 }
 
 export class FixtureCheckout implements RepoCheckout {
@@ -301,13 +339,16 @@ export async function openTestService(options: {
   responses?: FauxResponseStep[];
   hooks?: ReviewHooks;
   checkout?: RepoCheckout;
+  skipDrafts?: boolean;
 }) {
   const faux = fauxProvider();
   faux.setResponses(options.responses ?? []);
   const models = createModels();
   models.setProvider(faux.provider);
+  const config = testConfig(options.dataDir);
+  if (options.skipDrafts) config.skipDrafts = true;
   const service = await DureviewService.open({
-    config: testConfig(options.dataDir),
+    config,
     models,
     github: options.github,
     checkout: options.checkout ?? new FixtureCheckout(),

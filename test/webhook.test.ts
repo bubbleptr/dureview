@@ -27,12 +27,14 @@ describe("webhook signatures", () => {
 });
 
 describe("webhook parsing", () => {
-  it("queues opened, synchronize, and reopened pull requests", () => {
-    for (const action of ["opened", "synchronize", "reopened"]) {
+  it("queues opened, synchronize, reopened, and ready_for_review pull requests", () => {
+    for (const action of ["opened", "synchronize", "reopened", "ready_for_review"]) {
       const parsed = parseWebhook("pull_request", pullPayload(SHA_A, action));
       expect(parsed.kind).toBe("review");
       if (parsed.kind === "review") {
+        expect(parsed.action).toBe(action);
         expect(parsed.request.sha).toBe(SHA_A);
+        expect(parsed.request.baseRef).toBe("main");
         expect(parsed.request.owner).toBe("acme");
         expect(parsed.request.number).toBe(7);
         expect(parsed.request.installationId).toBe(99);
@@ -45,5 +47,42 @@ describe("webhook parsing", () => {
     expect(parseWebhook("issues", pullPayload()).kind).toBe("ignore");
     expect(parseWebhook("pull_request", pullPayload(SHA_A, "closed")).kind).toBe("ignore");
     expect(parseWebhook("pull_request", { action: "opened" }).kind).toBe("ignore");
+    expect(parseWebhook("issue_comment", { action: "edited" }).kind).toBe("ignore");
+  });
+
+  it("parses a /dureview comment on a pull request", () => {
+    const parsed = parseWebhook("issue_comment", commentPayload("  /dureview  \nplease look again"));
+    expect(parsed.kind).toBe("command");
+    if (parsed.kind === "command") {
+      expect(parsed.command).toMatchObject({ owner: "acme", repo: "demo", number: 7, commentId: 10, user: "alice" });
+    }
+    expect(parseWebhook("issue_comment", commentPayload("/dureview please")).kind).toBe("ignore");
+    expect(parseWebhook("issue_comment", commentPayload("/dureview", "alice", { pullRequest: false })).kind).toBe("ignore");
+    expect(parseWebhook("issue_comment", commentPayload("/dureview", "alice", { action: "edited" })).kind).toBe("ignore");
   });
 });
+
+function commentPayload(
+  body: string,
+  user = "alice",
+  extra: { action?: string; pullRequest?: boolean; commentId?: number } = {},
+): Record<string, unknown> {
+  return {
+    action: extra.action ?? "created",
+    installation: { id: 99 },
+    repository: {
+      name: "demo",
+      clone_url: "https://github.com/acme/demo.git",
+      owner: { login: "acme" },
+    },
+    issue: {
+      number: 7,
+      ...(extra.pullRequest === false ? {} : { pull_request: { url: "https://api.github.com/repos/acme/demo/pulls/7" } }),
+    },
+    comment: {
+      id: extra.commentId ?? 10,
+      body,
+      user: { login: user },
+    },
+  };
+}
