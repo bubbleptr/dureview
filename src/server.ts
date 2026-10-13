@@ -50,8 +50,11 @@ export async function serveCommand(config: Config): Promise<void> {
     });
   }
   const github = new GithubRest(config);
-  const checkout = new GitCheckout(github, join(config.dataDir, "checkouts"), (request, signal) =>
-    github.accessToken(request, signal),
+  const checkout = new GitCheckout(
+    github,
+    join(config.dataDir, "checkouts"),
+    (request, signal) => github.accessToken(request, signal),
+    { trigger: config.defaultTrigger },
   );
   const service = await DureviewService.open({
     config,

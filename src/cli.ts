@@ -37,6 +37,7 @@ Environment:
   DUREVIEW_WEBHOOK_SECRET     GitHub webhook secret
   DUREVIEW_PROVIDER           openai-codex (default) or openai
   DUREVIEW_MODEL              Model id (default: gpt-5.5)
+  DUREVIEW_DEFAULT_TRIGGER    auto, once, or manual (default: manual)
   OPENAI_API_KEY              Alternative to Codex OAuth when provider is openai
   GITHUB_APP_ID               GitHub App id
   GITHUB_APP_PRIVATE_KEY      GitHub App private key PEM, or a path to one

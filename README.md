@@ -91,9 +91,9 @@ Set `GITHUB_TOKEN` and omit the App variables. The token needs read access to th
 
 ### What gets reviewed
 
-dureview reads `.dureview.md` from the pull request's **base branch**, not from the pull request head. A pull request cannot change its own trigger rules, thresholds, or review prompt. Those updates apply after it merges. When the base branch has no `.dureview.md`, `trigger` is `auto` and `drafts` is `false`.
+dureview reads `.dureview.md` from the pull request's **base branch**, not from the pull request head. A pull request cannot change its own trigger rules, thresholds, or review prompt. Those updates apply after it merges. When the base branch has no `.dureview.md`, or the file does not set `trigger`, the effective trigger is `DUREVIEW_DEFAULT_TRIGGER` (`manual` by default) and `drafts` is `false`. Installing the GitHub App is not enough to start reviews: the repository opts in with `trigger: auto` or `trigger: once`, or the operator changes the server default.
 
-`trigger: auto` (the default) reviews `pull_request` actions `opened`, `reopened`, `synchronize`, and `ready_for_review`. `trigger: once` reviews a pull request one time: on `opened`, or on `ready_for_review` when the pull request was still a draft at open and that open was skipped. Later pushes and a reopen do not start another review. `trigger: manual` ignores those events.
+`trigger: manual` reviews only when someone with write, maintain, or admin permission comments `/dureview`. `trigger: auto` reviews `pull_request` actions `opened`, `reopened`, `synchronize`, and `ready_for_review`. `trigger: once` reviews a pull request one time: on `opened`, or on `ready_for_review` when the pull request was still a draft at open and that open was skipped. Later pushes and a reopen do not start another review.
 
 `drafts: false` (the default) skips draft pull requests. Marking a draft ready for review reviews the current head, unless `trigger` is `manual`. `drafts: true` reviews drafts the same way as open pull requests. `DUREVIEW_SKIP_DRAFTS=1` still skips drafts even when the file sets `drafts: true`.
 
@@ -142,11 +142,12 @@ When `summary: true`, non-inline findings go in the summary: `investigate`, miss
 
 ## `.dureview.md`
 
-Optional file at the repository root. dureview reads it from the pull request's base branch, not from the pull request head, so a pull request cannot change how it is reviewed. Prose after the optional front matter is appended to the review prompt. The front matter overrides the posting thresholds and the trigger rules. Keys you do not set keep the profile's defaults. An explicit key wins over the profile.
+Optional file at the repository root. dureview reads it from the pull request's base branch, not from the pull request head, so a pull request cannot change how it is reviewed. Prose after the optional front matter is appended to the review prompt. The front matter overrides the posting thresholds and the trigger rules. Keys you do not set keep the profile's defaults, except `trigger`, which uses `DUREVIEW_DEFAULT_TRIGGER` (`manual`) when the key is absent. An explicit key wins over the profile and over that server default. Set `trigger: auto` or `trigger: once` to opt in to automatic reviews.
 
 ```markdown
 ---
 profile: default
+# Omit trigger to use DUREVIEW_DEFAULT_TRIGGER (manual). auto and once opt in.
 trigger: auto
 drafts: false
 language: en
@@ -169,7 +170,7 @@ ignore:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `trigger` | `auto` | `auto` reviews when a pull request is opened, reopened, synchronized, or marked ready for review. `once` reviews the first time only: on `opened`, or on `ready_for_review` when the pull request started as a draft. Later pushes are ignored. `manual` reviews only when someone comments `/dureview`. |
+| `trigger` | `manual` | `auto` reviews when a pull request is opened, reopened, synchronized, or marked ready for review. `once` reviews the first time only: on `opened`, or on `ready_for_review` when the pull request started as a draft. Later pushes are ignored. `manual` reviews only when someone with write access comments `/dureview`. Omit the key, or omit the file, to use `DUREVIEW_DEFAULT_TRIGGER` (`manual` unless the server sets `auto` or `once`). |
 | `drafts` | `false` | When `false`, draft pull requests are skipped until they are marked ready for review. `trigger: manual` still waits for `/dureview`. When `true`, drafts are reviewed like any other pull request. |
 | `profile` | `default` | `quiet` inlines P0–P1 only. `default` also inlines P2 when confidence is at least `p2_inline_min_confidence`. `loud` uses the same priorities and lowers that P2 bar to `min_confidence`. |
 | `language` | `en` | `en` or `zh`. The model writes finding titles and bodies in this language. Labels, verdict words, and fixed notes use it too. |
@@ -181,7 +182,7 @@ ignore:
 | `ignore` | none | Globs added to the built-in skip list. A pattern with no `/` matches in any directory. |
 | `ignore_defaults` | `true` | When `false`, only `ignore` is used. |
 
-A file with no front matter is prompt text only and uses the default profile, English, and no summary comment. Unknown keys and duplicate keys fail the review. The front matter is not sent to the model. Keep the prose short.
+A file with no front matter is prompt text only. It uses the default profile, English, no summary comment, and the server's default trigger (`manual` unless `DUREVIEW_DEFAULT_TRIGGER` is set). Unknown keys and duplicate keys fail the review. The front matter is not sent to the model. Keep the prose short.
 
 Built-in skip globs cover lockfiles (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `Cargo.lock`, `Gemfile.lock`, `poetry.lock`, `composer.lock`, `go.sum`, and the other common lockfile names), generated output (`dist/**`, `build/**`, `coverage/**`, `*.min.js`, `*.min.css`, `*.generated.*`, `*_generated.*`, `*.pb.go`, `*.pb.ts`), and binary assets (images, fonts, archives, and compiled objects). Nested paths match, so `packages/app/package-lock.json` is skipped too.
 
@@ -215,6 +216,7 @@ The page does not include the webhook secret, GitHub tokens, the App private key
 | `DUREVIEW_THINKING` | `medium` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `DUREVIEW_LOGIN_METHOD` | prompt | `device_code` or `browser` |
 | `DUREVIEW_SKIP_DRAFTS` | off | `1` skips draft pull requests even when `.dureview.md` sets `drafts: true` |
+| `DUREVIEW_DEFAULT_TRIGGER` | `manual` | Trigger used when the base branch has no `.dureview.md` or the file does not set `trigger`. `auto`, `once`, or `manual`. An explicit `trigger` in the file wins. |
 | `OPENAI_API_KEY` | | Used when the provider is `openai` and no stored key overrides it |
 | `GITHUB_APP_ID` | | GitHub App id |
 | `GITHUB_APP_PRIVATE_KEY` | | PEM contents, or a path to a PEM |
@@ -234,7 +236,7 @@ npm test
 npm run e2e
 ```
 
-Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, status-page authentication, and the recent-review log.
+Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, the manual default when `.dureview.md` is missing or omits `trigger`, `DUREVIEW_DEFAULT_TRIGGER`, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, status-page authentication, and the recent-review log.
 
 Live Codex OAuth and a real GitHub App are not exercised here. Pi Durable is experimental and its API can change between releases. This repo pins `@earendil-works/pi-durable`, `@earendil-works/pi-ai`, and `@earendil-works/chord` at 1.1.0.
 

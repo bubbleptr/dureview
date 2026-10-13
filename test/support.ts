@@ -327,6 +327,7 @@ export function testConfig(dataDir: string): Config {
     githubApiUrl: "https://api.github.com",
     skipDrafts: false,
     uiToken: undefined,
+    defaultTrigger: "manual",
   };
 }
 
@@ -341,6 +342,7 @@ export async function openTestService(options: {
   hooks?: ReviewHooks;
   checkout?: RepoCheckout;
   skipDrafts?: boolean;
+  defaultTrigger?: Config["defaultTrigger"];
 }) {
   const faux = fauxProvider();
   faux.setResponses(options.responses ?? []);
@@ -348,6 +350,7 @@ export async function openTestService(options: {
   models.setProvider(faux.provider);
   const config = testConfig(options.dataDir);
   if (options.skipDrafts) config.skipDrafts = true;
+  if (options.defaultTrigger) config.defaultTrigger = options.defaultTrigger;
   const service = await DureviewService.open({
     config,
     models,

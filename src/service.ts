@@ -138,13 +138,16 @@ export class DureviewService {
 
   /**
    * `.dureview.md` comes from the base branch. A pull request cannot change `trigger` or `drafts`.
+   * An omitted `trigger` uses `DUREVIEW_DEFAULT_TRIGGER` (`manual` unless the server sets it).
    * The review task reads that same ref again for thresholds and prompt rules.
    */
   async #pullRequest(request: ReviewRequest, action: PullReviewAction): Promise<WebhookResponse> {
     const signal = AbortSignal.timeout(20_000);
     let policy;
     try {
-      policy = (await readBaseDureview(this.github, request, signal)).policy;
+      policy = (
+        await readBaseDureview(this.github, request, signal, { trigger: this.config.defaultTrigger })
+      ).policy;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log("error", "invalid base .dureview.md", {

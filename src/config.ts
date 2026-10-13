@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { BUILTIN_DEFAULT_TRIGGER, type ReviewTrigger } from "./review/policy.js";
 
 /**
  * Default chat model in pi-ai's `openai-codex` catalog.
@@ -31,6 +32,11 @@ export type Config = {
   skipDrafts: boolean;
   /** When unset, `GET /` and `GET /ui` stay disabled. */
   uiToken: string | undefined;
+  /**
+   * Trigger used when the base branch has no `.dureview.md`, or the file does not set `trigger`.
+   * `auto` and `once` opt the whole server in. `manual` waits for `/dureview`.
+   */
+  defaultTrigger: ReviewTrigger;
 };
 
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
@@ -51,6 +57,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     githubApiUrl: (env.GITHUB_API_URL ?? "https://api.github.com").replace(/\/$/, ""),
     skipDrafts: env.DUREVIEW_SKIP_DRAFTS === "1" || env.DUREVIEW_SKIP_DRAFTS === "true",
     uiToken: emptyToUndefined(env.DUREVIEW_UI_TOKEN)?.trim(),
+    defaultTrigger: parseDefaultTrigger(env.DUREVIEW_DEFAULT_TRIGGER),
   };
 }
 
@@ -65,6 +72,13 @@ export function assertServeConfig(config: Config): void {
   if (config.githubAppId && !config.githubAppPrivateKey) {
     throw new Error("GITHUB_APP_ID is set but no GitHub App private key was found.");
   }
+}
+
+function parseDefaultTrigger(value: string | undefined): ReviewTrigger {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "") return BUILTIN_DEFAULT_TRIGGER;
+  if (trimmed === "auto" || trimmed === "once" || trimmed === "manual") return trimmed;
+  throw new Error(`DUREVIEW_DEFAULT_TRIGGER must be auto, once, or manual, got ${value}.`);
 }
 
 function parseProvider(value: string | undefined): ProviderName | undefined {

@@ -27,6 +27,7 @@ describe("end to end", () => {
 
   it("reviews a fixture diff through the webhook and updates the summary on the next push", async () => {
     const github = new MemoryGitHub();
+    github.files.set("main\0.dureview.md", "---\ntrigger: auto\n---\n");
     const seen: string[] = [];
     const responses: FauxResponseStep[] = [
       (context) => {
