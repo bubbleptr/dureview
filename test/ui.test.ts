@@ -44,6 +44,7 @@ describe("status page", () => {
   it("renders recent reviews for a valid token and still verifies webhooks", async () => {
     const dataDir = await tempDataDir();
     const github = new MemoryGitHub();
+    github.files.set("main\0.dureview.md", "---\ntrigger: auto\n---\n");
     const { service } = await openTestService({
       dataDir,
       github,

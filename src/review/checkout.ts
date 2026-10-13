@@ -4,7 +4,7 @@ import path from "node:path";
 import type { GitHub } from "../github/client.js";
 import type { ReviewRequest } from "../types.js";
 import { truncateDiff } from "./diff.js";
-import { parseDureviewDocument, type ReviewPolicy, defaultPolicy } from "./policy.js";
+import { parseDureviewDocument, type PolicyDefaults, type ReviewPolicy, defaultPolicy } from "./policy.js";
 
 export type Checkout = {
   dir: string;
@@ -29,6 +29,7 @@ export class GitCheckout implements RepoCheckout {
     private readonly github: GitHub,
     private readonly root: string,
     private readonly tokenFor: (request: ReviewRequest, signal: AbortSignal) => Promise<string | undefined>,
+    private readonly policyDefaults: PolicyDefaults = {},
   ) {}
 
   async prepare(request: ReviewRequest, signal: AbortSignal): Promise<Checkout> {
@@ -50,31 +51,37 @@ export class GitCheckout implements RepoCheckout {
     }
     const diffText = await this.github.getPullDiff(request, signal);
     const { diff, truncated } = truncateDiff(diffText);
-    const loaded = await readBaseDureview(this.github, request, signal);
+    const loaded = await readBaseDureview(this.github, request, signal, this.policyDefaults);
     return { dir, diff, truncated, rules: loaded.rules, policy: loaded.policy };
   }
 }
 
 /**
  * Load `.dureview.md` from the pull request base branch.
- * A missing file uses the built-in policy. The pull request head is not consulted.
+ * A missing file uses the built-in policy. `trigger` falls back to `defaults.trigger`,
+ * then `manual`, including when the file exists and omits the key.
+ * The pull request head is not consulted.
  */
 export async function readBaseDureview(
   github: GitHub,
   request: Pick<ReviewRequest, "owner" | "repo" | "installationId" | "baseRef">,
   signal: AbortSignal,
+  defaults: PolicyDefaults = {},
 ): Promise<{ rules: string | null; policy: ReviewPolicy }> {
   const text = await github.getRepoFile(request, ".dureview.md", request.baseRef, signal);
-  if (text === null) return { rules: null, policy: defaultPolicy() };
-  return parseDureviewDocument(text);
+  if (text === null) return { rules: null, policy: defaultPolicy(defaults) };
+  return parseDureviewDocument(text, defaults);
 }
 
-export async function loadDureviewFile(dir: string): Promise<{ rules: string | null; policy: ReviewPolicy }> {
+export async function loadDureviewFile(
+  dir: string,
+  defaults: PolicyDefaults = {},
+): Promise<{ rules: string | null; policy: ReviewPolicy }> {
   try {
     const text = await readFile(path.join(dir, ".dureview.md"), "utf8");
-    return parseDureviewDocument(text);
+    return parseDureviewDocument(text, defaults);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { rules: null, policy: defaultPolicy() };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { rules: null, policy: defaultPolicy(defaults) };
     throw error;
   }
 }

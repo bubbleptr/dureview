@@ -197,7 +197,7 @@ Flag missing error handling.
       ignore: ["vendor/**", "generated/**"],
       language: "en",
       summary: false,
-      trigger: "auto",
+      trigger: "manual",
       drafts: false,
     });
   });
@@ -212,8 +212,12 @@ Flag missing error handling.
     const parsed = parseDureviewDocument("---\ntrigger: once\ndrafts: true\n---\n");
     expect(parsed.policy.trigger).toBe("once");
     expect(parsed.policy.drafts).toBe(true);
-    expect(defaultPolicy().trigger).toBe("auto");
+    expect(defaultPolicy().trigger).toBe("manual");
     expect(defaultPolicy().drafts).toBe(false);
+    expect(parseDureviewDocument("---\nlanguage: zh\n---\n", { trigger: "once" }).policy.trigger).toBe("once");
+    expect(parseDureviewDocument("rules only\n", { trigger: "auto" }).policy.trigger).toBe("auto");
+    expect(parseDureviewDocument("---\ntrigger: manual\n---\n", { trigger: "auto" }).policy.trigger).toBe("manual");
+    expect(defaultPolicy({ trigger: "auto" }).trigger).toBe("auto");
     expect(() => parseDureviewDocument("---\ntrigger: sometimes\n---\n")).toThrow(/trigger/);
     expect(() => parseDureviewDocument("---\ndrafts: yes\n---\n")).toThrow(/drafts/);
   });

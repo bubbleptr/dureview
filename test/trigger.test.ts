@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
+import { configFromEnv } from "../src/config.js";
 import type { RemotePull } from "../src/github/client.js";
 import { startHttp } from "../src/server.js";
 import type { RepoCheckout } from "../src/review/checkout.js";
@@ -26,7 +27,7 @@ describe("pull request trigger", () => {
   });
 
   it("reviews every auto action and skips drafts until ready_for_review", async () => {
-    const { service, github } = await open();
+    const { service, github } = await open({ "main\0.dureview.md": front("auto") });
     for (const [action, sha] of [
       ["opened", SHA_A],
       ["synchronize", SHA_B],
@@ -94,6 +95,52 @@ describe("pull request trigger", () => {
       const response = await deliver(service, "pull_request", pull(SHA_A, action));
       expect(response).toMatchObject({ status: 200, body: { ignored: true, reason: "manual" } });
     }
+  });
+
+  it("stays manual when the base branch has no .dureview.md or the file omits trigger", async () => {
+    const missing = await open();
+    for (const action of ["opened", "synchronize", "reopened", "ready_for_review"] as const) {
+      const response = await deliver(missing.service, "pull_request", pull(SHA_A, action));
+      expect(response).toMatchObject({ status: 200, body: { ignored: true, reason: "manual" } });
+    }
+    expect(missing.github.fileRefs).toEqual(["main", "main", "main", "main"]);
+
+    const omitted = await open({ "main\0.dureview.md": "---\nlanguage: zh\ndrafts: true\n---\n" });
+    const omittedOpen = await deliver(omitted.service, "pull_request", pull(SHA_A, "opened"));
+    expect(omittedOpen).toMatchObject({ status: 200, body: { ignored: true, reason: "manual" } });
+    const omittedDraft = await deliver(omitted.service, "pull_request", pull(SHA_A, "opened", { draft: true }));
+    expect(omittedDraft).toMatchObject({ status: 200, body: { ignored: true, reason: "manual" } });
+
+    const prose = await open({ "main\0.dureview.md": "Flag missing error handling.\n" });
+    const proseOpen = await deliver(prose.service, "pull_request", pull(SHA_A, "opened"));
+    expect(proseOpen).toMatchObject({ status: 200, body: { ignored: true, reason: "manual" } });
+
+    missing.github.remotePull = remote(SHA_A);
+    missing.github.permissions.set("alice", "write");
+    const command = await deliver(missing.service, "issue_comment", comment("/dureview", 70));
+    expect(command.status).toBe(202);
+    expect(command.body.deduped).toBe(false);
+  });
+
+  it("uses DUREVIEW_DEFAULT_TRIGGER when the file omits trigger, and an explicit key still wins", async () => {
+    const auto = await open({}, { defaultTrigger: "auto" });
+    expect((await deliver(auto.service, "pull_request", pull(SHA_A, "opened"))).status).toBe(202);
+
+    const omitted = await open({ "main\0.dureview.md": "---\ndrafts: true\n---\n" }, { defaultTrigger: "auto" });
+    expect((await deliver(omitted.service, "pull_request", pull(SHA_A, "opened", { draft: true }))).status).toBe(202);
+
+    const explicit = await open({ "main\0.dureview.md": front("manual") }, { defaultTrigger: "auto" });
+    expect((await deliver(explicit.service, "pull_request", pull(SHA_A, "opened"))).body).toMatchObject({
+      ignored: true,
+      reason: "manual",
+    });
+
+    const once = await open({ "main\0.dureview.md": "Flag missing error handling.\n" }, { defaultTrigger: "once" });
+    expect((await deliver(once.service, "pull_request", pull(SHA_A, "opened"))).status).toBe(202);
+    expect((await deliver(once.service, "pull_request", pull(SHA_B, "synchronize"))).body).toMatchObject({
+      ignored: true,
+      reason: "once",
+    });
   });
 
   it("reads trigger rules from the base branch, not the pull request head", async () => {
@@ -166,7 +213,7 @@ describe("pull request trigger", () => {
   });
 
   it("dedupes a command per head SHA and comment id, and still reviews that SHA again for a new command", async () => {
-    const { service, github } = await open();
+    const { service, github } = await open({ "main\0.dureview.md": front("auto") });
     github.remotePull = remote(SHA_A);
     github.permissions.set("alice", "write");
 
@@ -239,7 +286,10 @@ describe("pull request trigger", () => {
     expect(github.reactions).toEqual([{ commentId: 50, content: "eyes" }]);
   });
 
-  async function open(files: Record<string, string> = {}, options: { skipDrafts?: boolean } = {}) {
+  async function open(
+    files: Record<string, string> = {},
+    options: { skipDrafts?: boolean; defaultTrigger?: "auto" | "once" | "manual" } = {},
+  ) {
     const github = new MemoryGitHub();
     for (const [key, value] of Object.entries(files)) github.files.set(key, value);
     const { service } = await openTestService({
@@ -247,10 +297,23 @@ describe("pull request trigger", () => {
       github,
       checkout: hangingCheckout(),
       skipDrafts: options.skipDrafts,
+      defaultTrigger: options.defaultTrigger,
     });
     closers.push(() => service.close());
     return { service, github };
   }
+});
+
+describe("DUREVIEW_DEFAULT_TRIGGER", () => {
+  it("defaults to manual and rejects unknown values", () => {
+    expect(configFromEnv({}).defaultTrigger).toBe("manual");
+    expect(configFromEnv({ DUREVIEW_DEFAULT_TRIGGER: "" }).defaultTrigger).toBe("manual");
+    expect(configFromEnv({ DUREVIEW_DEFAULT_TRIGGER: "  " }).defaultTrigger).toBe("manual");
+    expect(configFromEnv({ DUREVIEW_DEFAULT_TRIGGER: "auto" }).defaultTrigger).toBe("auto");
+    expect(configFromEnv({ DUREVIEW_DEFAULT_TRIGGER: "once" }).defaultTrigger).toBe("once");
+    expect(configFromEnv({ DUREVIEW_DEFAULT_TRIGGER: "manual" }).defaultTrigger).toBe("manual");
+    expect(() => configFromEnv({ DUREVIEW_DEFAULT_TRIGGER: "sometimes" })).toThrow(/DUREVIEW_DEFAULT_TRIGGER/);
+  });
 });
 
 describe("shouldReviewPull", () => {

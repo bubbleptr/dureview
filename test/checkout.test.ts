@@ -46,8 +46,25 @@ describe("base branch .dureview.md", () => {
     const checkout = new GitCheckout(github, root, async () => undefined);
     const prepared = await checkout.prepare({ ...reviewRequest(sha.sha), baseSha: BASE_SHA }, AbortSignal.timeout(15_000));
 
-    expect(prepared.policy.trigger).toBe("auto");
+    expect(prepared.policy.trigger).toBe("manual");
     expect(prepared.rules).toBeNull();
+  });
+
+  it("uses the server default trigger when the base branch omits it", async () => {
+    const sha = await commitCheckout();
+    const root = await tempDataDir();
+    await mkdir(join(root, "acme", "demo"), { recursive: true });
+    const destination = join(root, "acme", "demo", sha.sha);
+    await rename(sha.dir, destination);
+
+    const github = new MemoryGitHub();
+    github.files.set("main\0.dureview.md", "---\nlanguage: zh\n---\nRules without a trigger.\n");
+    const checkout = new GitCheckout(github, root, async () => undefined, { trigger: "once" });
+    const prepared = await checkout.prepare(reviewRequest(sha.sha), AbortSignal.timeout(15_000));
+
+    expect(prepared.policy.trigger).toBe("once");
+    expect(prepared.policy.language).toBe("zh");
+    expect(prepared.rules).toContain("Rules without a trigger.");
   });
 });
 

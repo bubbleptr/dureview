@@ -13,9 +13,11 @@ export type ReviewLanguage = "en" | "zh";
  * Thresholds applied after the model returns. Defaults match the review format:
  * drop confidence below 0.5, inline at most 10 comments, P2 inlines only at 0.7.
  * Summary comments are off. Finding titles and template strings are English.
- * Drafts are skipped, and reviews run on open, reopen, push, and ready-for-review.
+ * Drafts are skipped. Pull request events start a review only when `trigger` is
+ * `auto` or `once`. The built-in trigger is `manual` (`/dureview` only).
  * A repository `.dureview.md` front matter block can override any field.
  * That file is read from the pull request's base branch.
+ * An omitted `trigger` uses the server default (`DUREVIEW_DEFAULT_TRIGGER`, `manual`).
  */
 export type ReviewPolicy = {
   profile: ReviewProfile;
@@ -23,6 +25,7 @@ export type ReviewPolicy = {
    * `auto` reviews opened, reopened, synchronize, and ready_for_review.
    * `once` reviews the first of those that is allowed (opened, or ready_for_review
    * when the pull request started as a draft). `manual` reviews only on `/dureview`.
+   * When the file omits this key, the value is the server default (`manual`).
    */
   trigger: ReviewTrigger;
   /** When false, draft pull requests are skipped until ready_for_review. */
@@ -112,10 +115,19 @@ const PROFILE_PRESETS: Record<ReviewProfile, Pick<ReviewPolicy, "minInlinePriori
   loud: { minInlinePriority: 2, p2InlineMinConfidence: 0.5 },
 };
 
-export function defaultPolicy(): ReviewPolicy {
+/** Fallback when `.dureview.md` is missing or does not set `trigger`. */
+export const BUILTIN_DEFAULT_TRIGGER: ReviewTrigger = "manual";
+
+/** Server or caller override for fields the file leaves unset. */
+export type PolicyDefaults = {
+  /** Trigger used when `.dureview.md` is missing or does not set `trigger`. */
+  trigger?: ReviewTrigger;
+};
+
+export function defaultPolicy(defaults: PolicyDefaults = {}): ReviewPolicy {
   return {
     profile: "default",
-    trigger: "auto",
+    trigger: defaults.trigger ?? BUILTIN_DEFAULT_TRIGGER,
     drafts: false,
     minConfidence: 0.5,
     minInlinePriority: PROFILE_PRESETS.default.minInlinePriority,
@@ -159,13 +171,17 @@ export type ClassifiedReview = {
  * Split a `.dureview.md` file into prompt prose and a policy.
  * Config lives in YAML front matter. The rest of the file is the prompt rules.
  * A file with no front matter keeps the built-in policy.
+ * An omitted `trigger` uses `defaults.trigger`, then `manual`.
  */
-export function parseDureviewDocument(text: string): { rules: string | null; policy: ReviewPolicy } {
+export function parseDureviewDocument(
+  text: string,
+  defaults: PolicyDefaults = {},
+): { rules: string | null; policy: ReviewPolicy } {
   const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
   if (!match) {
-    return { rules: prose(text), policy: defaultPolicy() };
+    return { rules: prose(text), policy: defaultPolicy(defaults) };
   }
-  const policy = parseFrontMatter(match[1] ?? "");
+  const policy = parseFrontMatter(match[1] ?? "", defaults);
   return { rules: prose(text.slice(match[0].length)), policy };
 }
 
@@ -303,7 +319,7 @@ type ExplicitPolicy = {
   summary?: boolean;
 };
 
-function parseFrontMatter(body: string): ReviewPolicy {
+function parseFrontMatter(body: string, defaults: PolicyDefaults): ReviewPolicy {
   const explicit: ExplicitPolicy = {};
   const seen = new Set<string>();
   let ignore: string[] = [];
@@ -334,7 +350,7 @@ function parseFrontMatter(body: string): ReviewPolicy {
     assignScalar(explicit, key, value.trim());
     index += 1;
   }
-  return materializePolicy(explicit, ignore);
+  return materializePolicy(explicit, ignore, defaults);
 }
 
 const KNOWN_KEYS = new Set([
@@ -437,7 +453,7 @@ function assignScalar(explicit: ExplicitPolicy, key: string, value: string): voi
   }
 }
 
-function materializePolicy(explicit: ExplicitPolicy, ignore: string[]): ReviewPolicy {
+function materializePolicy(explicit: ExplicitPolicy, ignore: string[], defaults: PolicyDefaults): ReviewPolicy {
   if (ignore.length > 50) throw new Error(".dureview.md ignore accepts at most 50 globs.");
   for (const glob of ignore) {
     if (glob.length === 0 || glob.length > 200) throw new Error(`.dureview.md ignore glob is empty or too long: ${glob}`);
@@ -446,7 +462,7 @@ function materializePolicy(explicit: ExplicitPolicy, ignore: string[]): ReviewPo
   const preset = PROFILE_PRESETS[profile];
   return {
     profile,
-    trigger: explicit.trigger ?? "auto",
+    trigger: explicit.trigger ?? defaults.trigger ?? BUILTIN_DEFAULT_TRIGGER,
     drafts: explicit.drafts ?? false,
     minConfidence: explicit.minConfidence ?? 0.5,
     minInlinePriority: explicit.minInlinePriority ?? preset.minInlinePriority,
