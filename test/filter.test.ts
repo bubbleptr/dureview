@@ -195,6 +195,8 @@ Flag missing error handling.
       maxInline: 4,
       ignoreDefaults: true,
       ignore: ["vendor/**", "generated/**"],
+      language: "en",
+      summary: false,
     });
   });
 
@@ -208,6 +210,17 @@ Flag missing error handling.
     expect(() => parseDureviewDocument("---\nnitpicks: true\n---\n")).toThrow(/Unknown/);
     expect(() => parseDureviewDocument("---\nmax_inline: 1\nmax_inline: 2\n---\n")).toThrow(/Duplicate/);
     expect(() => parseDureviewDocument("---\nprofile: assertive\n---\n")).toThrow(/profile/);
+  });
+
+  it("reads language and summary, and rejects bad values", () => {
+    const parsed = parseDureviewDocument("---\nlanguage: zh\nsummary: true\n---\nKeep the payment path strict.\n");
+    expect(parsed.policy.language).toBe("zh");
+    expect(parsed.policy.summary).toBe(true);
+    expect(parsed.rules).toContain("payment path");
+    expect(defaultPolicy().language).toBe("en");
+    expect(defaultPolicy().summary).toBe(false);
+    expect(() => parseDureviewDocument("---\nlanguage: fr\n---\n")).toThrow(/language/);
+    expect(() => parseDureviewDocument("---\nsummary: yes\n---\n")).toThrow(/summary/);
   });
 
   it("lets an explicit priority override the quiet profile", () => {

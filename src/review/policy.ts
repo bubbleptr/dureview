@@ -3,9 +3,13 @@ import type { Finding, Priority } from "./schema.js";
 
 export type ReviewProfile = "quiet" | "default" | "loud";
 
+/** Language for model prose and for dureview's own labels, verdicts, and fixed notes. */
+export type ReviewLanguage = "en" | "zh";
+
 /**
  * Thresholds applied after the model returns. Defaults match the review format:
  * drop confidence below 0.5, inline at most 10 comments, P2 inlines only at 0.7.
+ * Summary comments are off. Finding titles and template strings are English.
  * A repository `.dureview.md` front matter block can override any field.
  */
 export type ReviewPolicy = {
@@ -26,6 +30,13 @@ export type ReviewPolicy = {
   ignoreDefaults: boolean;
   /** Extra path globs. With `ignore_defaults: false`, this list replaces the built-in one. */
   ignore: string[];
+  /** Model titles/bodies and dureview template strings. Default English. */
+  language: ReviewLanguage;
+  /**
+   * When true, post and update one summary comment (the previous behavior).
+   * When false (default), post one inline comment per finding and nothing else.
+   */
+  summary: boolean;
 };
 
 export const DEFAULT_IGNORE = [
@@ -97,6 +108,8 @@ export function defaultPolicy(): ReviewPolicy {
     maxInline: 10,
     ignoreDefaults: true,
     ignore: [],
+    language: "en",
+    summary: false,
   };
 }
 
@@ -269,6 +282,8 @@ type ExplicitPolicy = {
   p2InlineMinConfidence?: number;
   maxInline?: number;
   ignoreDefaults?: boolean;
+  language?: ReviewLanguage;
+  summary?: boolean;
 };
 
 function parseFrontMatter(body: string): ReviewPolicy {
@@ -307,6 +322,8 @@ function parseFrontMatter(body: string): ReviewPolicy {
 
 const KNOWN_KEYS = new Set([
   "profile",
+  "language",
+  "summary",
   "min_confidence",
   "min_inline_priority",
   "p2_inline_min_confidence",
@@ -359,6 +376,17 @@ function assignScalar(explicit: ExplicitPolicy, key: string, value: string): voi
     explicit.ignoreDefaults = parseBoolean(value, key);
     return;
   }
+  if (key === "summary") {
+    explicit.summary = parseBoolean(value, key);
+    return;
+  }
+  if (key === "language") {
+    if (value !== "en" && value !== "zh") {
+      throw new Error(`.dureview.md language must be en or zh, got ${value}.`);
+    }
+    explicit.language = value;
+    return;
+  }
   if (key === "min_confidence" || key === "p2_inline_min_confidence") {
     const number = parseNumber(value, key);
     if (number < 0 || number > 1) throw new Error(`.dureview.md ${key} must be between 0 and 1.`);
@@ -394,6 +422,8 @@ function materializePolicy(explicit: ExplicitPolicy, ignore: string[]): ReviewPo
     maxInline: explicit.maxInline ?? 10,
     ignoreDefaults: explicit.ignoreDefaults ?? true,
     ignore,
+    language: explicit.language ?? "en",
+    summary: explicit.summary ?? false,
   };
 }
 

@@ -13,6 +13,7 @@ describe("review prompt", () => {
     expect(ADVERSARIAL_ROLE).toContain("style, naming, formatting");
     expect(ADVERSARIAL_ROLE).toMatch(/evidence/);
     expect(ADVERSARIAL_ROLE).toContain("verdict clean");
+    expect(ADVERSARIAL_ROLE).toContain("language named in the user message");
   });
 
   it("tells the model the repository filter without including front matter", () => {
@@ -26,6 +27,20 @@ describe("review prompt", () => {
     expect(prompt).toContain("Flag missing error handling.");
     expect(prompt).toContain("profile quiet");
     expect(prompt).toContain("at most 4 inline comments");
+    expect(prompt).toContain("Write every finding title and body in English.");
+    expect(prompt).toContain("does not post a summary comment");
     expect(prompt).not.toContain("min_inline_priority");
+  });
+
+  it("asks for Chinese titles and bodies when language is zh", () => {
+    const prompt = buildUserPrompt({
+      request: reviewRequest(),
+      diff: "",
+      truncated: false,
+      rules: null,
+      policy: { ...defaultPolicy(), language: "zh", summary: true },
+    });
+    expect(prompt).toContain("Write every finding title and body in Chinese.");
+    expect(prompt).toContain("also posts a summary comment");
   });
 });

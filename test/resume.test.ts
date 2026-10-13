@@ -1,8 +1,20 @@
 import type { Context } from "@earendil-works/chord";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RepoCheckout } from "../src/review/checkout.js";
+import { findingMarker } from "../src/review/ledger.js";
+import { defaultPolicy } from "../src/review/policy.js";
 import { taskMarker } from "../src/types.js";
-import { hangUntilAbort, MemoryGitHub, openTestService, reviewRequest, scriptedReview, tempDataDir } from "./support.js";
+import {
+  FINDING,
+  FIXTURE_DIFF,
+  FIXTURE_DIR,
+  hangUntilAbort,
+  MemoryGitHub,
+  openTestService,
+  reviewRequest,
+  scriptedReview,
+  tempDataDir,
+} from "./support.js";
 
 describe("resume after a crash", () => {
   const closers: Array<() => Promise<void>> = [];
@@ -124,5 +136,61 @@ describe("resume after a crash", () => {
     expect(github.comments).toHaveLength(1);
     expect(github.reviews).toHaveLength(1);
     expect(github.comments[0]?.body).toContain(taskMarker(String(queued.taskId)));
+  });
+
+  it("does not post a second inline comment when summary is off and the process dies after GitHub accepted the write", async () => {
+    const dataDir = await tempDataDir();
+    const github = new MemoryGitHub();
+    let markEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const checkout: RepoCheckout = {
+      async prepare() {
+        return {
+          dir: FIXTURE_DIR,
+          diff: FIXTURE_DIFF,
+          truncated: false,
+          rules: null,
+          policy: defaultPolicy(),
+        };
+      },
+    };
+    const first = await openTestService({
+      dataDir,
+      github,
+      checkout,
+      responses: scriptedReview("charge() reports success without billing."),
+      hooks: {
+        afterRemoteWrite: async (context: Context) => {
+          markEntered();
+          await hangUntilAbort(context);
+        },
+      },
+    });
+    closers.push(() => first.service.close());
+    const queued = await first.service.enqueue(reviewRequest());
+    await entered;
+    expect(github.comments).toHaveLength(0);
+    expect(github.reviews).toHaveLength(1);
+    expect(github.reviewComments).toHaveLength(1);
+    expect(github.reviewComments[0]?.body).toContain(findingMarker(FINDING.fingerprint, String(queued.taskId)));
+    expect(github.reviews[0]?.event).toBe("REQUEST_CHANGES");
+    await first.service.close();
+    closers.pop();
+
+    const second = await openTestService({ dataDir, github, checkout, responses: [] });
+    closers.push(() => second.service.close());
+    const settled = await second.service.wait(queued.taskId);
+    expect(settled.state.outcome.status).toBe("completed");
+    expect(github.comments).toHaveLength(0);
+    expect(github.reviews).toHaveLength(1);
+    expect(github.reviewComments).toHaveLength(1);
+    expect(settled.state.outcome.status === "completed" ? settled.state.outcome.result.reviewAction : "").toBe(
+      "unchanged",
+    );
+    expect(settled.state.outcome.status === "completed" ? settled.state.outcome.result.summaryAction : "").toBe(
+      "skipped",
+    );
   });
 });

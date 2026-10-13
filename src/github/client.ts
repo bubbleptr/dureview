@@ -5,8 +5,39 @@ import type { ReviewRequest } from "../types.js";
 
 export type IssueComment = { id: number; body: string };
 export type PullReview = { id: number; body: string };
+export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
 
 export type ReviewCommentDraft = { path: string; line: number; startLine?: number; body: string };
+
+/** A pull request review comment, joined with its GraphQL review thread when that lookup succeeds. */
+export type PullReviewComment = {
+  id: number;
+  body: string;
+  path: string;
+  line: number | null;
+  threadId: string | null;
+  inReplyToId: number | null;
+  reviewId: number | null;
+  resolved: boolean;
+};
+
+/**
+ * GitHub rejects REQUEST_CHANGES when the authenticated user opened the pull request.
+ * Callers retry the same review as COMMENT.
+ */
+export class RequestChangesRejectedError extends Error {
+  constructor(detail = "Can not request changes on your own pull request") {
+    super(detail);
+    this.name = "RequestChangesRejectedError";
+  }
+}
+
+export function isRequestChangesRejected(error: unknown): boolean {
+  if (error instanceof RequestChangesRejectedError) return true;
+  if (!(error instanceof Error)) return false;
+  const text = error.message.toLowerCase();
+  return text.includes("own pull request") && text.includes("request change");
+}
 
 /** GitHub pull-request review comment body. Multi-line comments set start_line when the span is more than one line. */
 export function reviewCommentPayload(comment: ReviewCommentDraft): {
@@ -36,9 +67,18 @@ export interface GitHub {
   listReviews(request: ReviewRequest, signal: AbortSignal): Promise<PullReview[]>;
   createReview(
     request: ReviewRequest,
-    review: { sha: string; body: string; comments: ReviewCommentDraft[] },
+    review: { sha: string; body: string; event?: ReviewEvent; comments: ReviewCommentDraft[] },
     signal: AbortSignal,
   ): Promise<PullReview>;
+  /** Inline review comments on the pull request, including dureview markers and thread ids. */
+  listReviewComments(request: ReviewRequest, signal: AbortSignal): Promise<PullReviewComment[]>;
+  resolveReviewThread(request: ReviewRequest, threadId: string, signal: AbortSignal): Promise<void>;
+  replyToReviewComment(
+    request: ReviewRequest,
+    commentId: number,
+    body: string,
+    signal: AbortSignal,
+  ): Promise<PullReviewComment>;
 }
 
 type CachedToken = { token: string; expiresAt: number };
@@ -77,17 +117,140 @@ export class GithubRest implements GitHub {
     return this.#pages(request, `/repos/${request.owner}/${request.repo}/pulls/${request.number}/reviews`, signal);
   }
 
-  createReview(
+  async createReview(
     request: ReviewRequest,
-    review: { sha: string; body: string; comments: ReviewCommentDraft[] },
+    review: { sha: string; body: string; event?: ReviewEvent; comments: ReviewCommentDraft[] },
     signal: AbortSignal,
   ): Promise<PullReview> {
-    return this.#json(request, "POST", `/repos/${request.owner}/${request.repo}/pulls/${request.number}/reviews`, signal, {
-      commit_id: review.sha,
-      body: review.body,
-      event: "COMMENT",
-      comments: review.comments.map((comment) => reviewCommentPayload(comment)),
+    const event = review.event ?? "COMMENT";
+    try {
+      return await this.#json(request, "POST", `/repos/${request.owner}/${request.repo}/pulls/${request.number}/reviews`, signal, {
+        commit_id: review.sha,
+        body: review.body,
+        event,
+        comments: review.comments.map((comment) => reviewCommentPayload(comment)),
+      });
+    } catch (error) {
+      if (event === "REQUEST_CHANGES" && isRequestChangesRejected(error)) {
+        throw new RequestChangesRejectedError(error instanceof Error ? error.message : String(error));
+      }
+      throw error;
+    }
+  }
+
+  async listReviewComments(request: ReviewRequest, signal: AbortSignal): Promise<PullReviewComment[]> {
+    const rows = await this.#pages<RestReviewComment>(
+      request,
+      `/repos/${request.owner}/${request.repo}/pulls/${request.number}/comments`,
+      signal,
+    );
+    let threads = new Map<number, { threadId: string; resolved: boolean }>();
+    try {
+      threads = await this.#threadIndex(request, signal);
+    } catch (error) {
+      log("warn", "Could not load review threads; fixed findings will be replied to instead of resolved", {
+        repo: `${request.owner}/${request.repo}`,
+        pr: request.number,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return rows.map((row) => {
+      const thread = threads.get(row.id);
+      return {
+        id: row.id,
+        body: row.body,
+        path: typeof row.path === "string" ? row.path : "",
+        line: typeof row.line === "number" ? row.line : null,
+        inReplyToId: typeof row.in_reply_to_id === "number" ? row.in_reply_to_id : null,
+        reviewId: typeof row.pull_request_review_id === "number" ? row.pull_request_review_id : null,
+        threadId: thread?.threadId ?? null,
+        resolved: thread?.resolved ?? false,
+      };
     });
+  }
+
+  async resolveReviewThread(request: ReviewRequest, threadId: string, signal: AbortSignal): Promise<void> {
+    const data = await this.#graphql<{
+      resolveReviewThread: { thread: { isResolved: boolean } | null } | null;
+    }>(request, RESOLVE_REVIEW_THREAD, { id: threadId }, signal);
+    if (!data.resolveReviewThread?.thread?.isResolved) {
+      throw new Error(`GitHub did not resolve review thread ${threadId}.`);
+    }
+  }
+
+  async replyToReviewComment(
+    request: ReviewRequest,
+    commentId: number,
+    body: string,
+    signal: AbortSignal,
+  ): Promise<PullReviewComment> {
+    const created = await this.#json<RestReviewComment>(
+      request,
+      "POST",
+      `/repos/${request.owner}/${request.repo}/pulls/${request.number}/comments/${commentId}/replies`,
+      signal,
+      { body },
+    );
+    return {
+      id: created.id,
+      body: typeof created.body === "string" ? created.body : body,
+      path: typeof created.path === "string" ? created.path : "",
+      line: typeof created.line === "number" ? created.line : null,
+      inReplyToId: commentId,
+      reviewId: typeof created.pull_request_review_id === "number" ? created.pull_request_review_id : null,
+      threadId: null,
+      resolved: false,
+    };
+  }
+
+  async #threadIndex(
+    request: ReviewRequest,
+    signal: AbortSignal,
+  ): Promise<Map<number, { threadId: string; resolved: boolean }>> {
+    const map = new Map<number, { threadId: string; resolved: boolean }>();
+    let cursor: string | null = null;
+    for (let page = 0; page < 10; page++) {
+      const after = cursor;
+      const data: ReviewThreadsData = await this.#graphql<ReviewThreadsData>(request, REVIEW_THREADS_QUERY, {
+        owner: request.owner,
+        name: request.repo,
+        number: request.number,
+        cursor: after,
+      }, signal);
+      const connection = data.repository?.pullRequest?.reviewThreads;
+      if (!connection) break;
+      for (const node of connection.nodes ?? []) {
+        if (!node?.id) continue;
+        for (const comment of node.comments?.nodes ?? []) {
+          if (typeof comment?.databaseId !== "number") continue;
+          map.set(comment.databaseId, { threadId: node.id, resolved: node.isResolved === true });
+        }
+      }
+      if (!connection.pageInfo?.hasNextPage) break;
+      cursor = connection.pageInfo.endCursor ?? null;
+      if (!cursor) break;
+    }
+    return map;
+  }
+
+  async #graphql<T>(
+    request: ReviewRequest,
+    query: string,
+    variables: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<T> {
+    const payload = await this.#json<{ data?: T; errors?: Array<{ message?: string }> }>(
+      request,
+      "POST",
+      "/graphql",
+      signal,
+      { query, variables },
+    );
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(payload.errors.map((error) => error.message ?? "GraphQL error").join("; "));
+    }
+    if (payload.data === undefined) throw new Error("GitHub GraphQL response had no data.");
+    return payload.data;
   }
 
   async #pages<T extends { id: number; body?: string | null }>(
@@ -218,6 +381,49 @@ function linkNext(header: string | null): string | undefined {
   }
   return undefined;
 }
+
+type RestReviewComment = {
+  id: number;
+  body?: string | null;
+  path?: string | null;
+  line?: number | null;
+  in_reply_to_id?: number | null;
+  pull_request_review_id?: number | null;
+};
+
+type ReviewThreadsData = {
+  repository: {
+    pullRequest: {
+      reviewThreads: {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        nodes: Array<{
+          id: string;
+          isResolved: boolean;
+          comments: { nodes: Array<{ databaseId: number | null } | null> | null } | null;
+        } | null> | null;
+      } | null;
+    } | null;
+  } | null;
+};
+
+const REVIEW_THREADS_QUERY = `query($owner:String!,$name:String!,$number:Int!,$cursor:String) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      reviewThreads(first:100, after:$cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          comments(first:100) { nodes { databaseId } }
+        }
+      }
+    }
+  }
+}`;
+
+const RESOLVE_REVIEW_THREAD = `mutation($id:ID!) {
+  resolveReviewThread(input:{threadId:$id}) { thread { isResolved } }
+}`;
 
 function delay(signal: AbortSignal, ms: number): Promise<void> {
   if (signal.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));

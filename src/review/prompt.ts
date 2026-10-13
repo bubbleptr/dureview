@@ -1,4 +1,4 @@
-import type { ReviewPolicy } from "./policy.js";
+import type { ReviewLanguage, ReviewPolicy } from "./policy.js";
 import type { ReviewRequest } from "../types.js";
 
 export const ADVERSARIAL_ROLE = `You are dureview, an adversarial pull request reviewer. A different model wrote this change. Find what is wrong with it.
@@ -30,6 +30,7 @@ Judgment rules:
 9. A finding has to be discrete and actionable, and it has to matter.
 
 How to write each finding:
+- Write the title and body in the language named in the user message.
 - title is at most 80 characters and tells the author what is wrong.
 - body is one paragraph: why it is wrong. At most 3 lines of code inside the body.
 - start_line and end_line cover at most 10 lines, overlap the diff, and stay as short as you can.
@@ -73,8 +74,25 @@ export function buildUserPrompt(input: {
   parts.push(
     "",
     `Server filter for this repository (profile ${policy.profile}): drop confidence below ${policy.minConfidence}; post at most ${policy.maxInline} inline comments; inline P0 through P${policy.minInlinePriority}; inline P2 only when confidence is at least ${policy.p2InlineMinConfidence}. investigate is never inline.`,
+    postingLine(policy),
+    "",
+    outputLanguage(policy.language),
     "",
     "Inspect the checkout when the diff is not enough, then call submit_review.",
   );
   return parts.join("\n");
+}
+
+function postingLine(policy: ReviewPolicy): string {
+  if (policy.summary) {
+    return "This repository also posts a summary comment. Findings that are not inline still belong in that summary, including investigate.";
+  }
+  return "This repository does not post a summary comment. Only inline comments are posted. investigate findings and findings without a trigger are dropped.";
+}
+
+function outputLanguage(language: ReviewLanguage): string {
+  if (language === "zh") {
+    return "Write every finding title and body in Chinese. Write triggers, verdict_reason, and the checked list in Chinese too.";
+  }
+  return "Write every finding title and body in English. Write triggers, verdict_reason, and the checked list in English too.";
 }
