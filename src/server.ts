@@ -7,7 +7,8 @@ import { log } from "./log.js";
 import { GitCheckout } from "./review/checkout.js";
 import { DureviewService, type ServiceOptions } from "./service.js";
 import { authorizeUi } from "./ui/auth.js";
-import { renderDashboard } from "./ui/page.js";
+import { renderReviewDetail, renderReviewList } from "./ui/page.js";
+import { reviewFilterFromSearch } from "./ui/query.js";
 import { loadDashboard } from "./ui/status.js";
 
 export type HttpOptions = {
@@ -30,7 +31,7 @@ const UI_HEADERS = {
   "referrer-policy": "no-referrer",
   "x-frame-options": "DENY",
   "content-security-policy":
-    "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 };
 
 export async function serveCommand(config: Config): Promise<void> {
@@ -136,9 +137,10 @@ async function handle(
       send(res, result.status, result.body);
       return;
     }
-    // The status page is off unless DUREVIEW_UI_TOKEN is set. Health and webhook are unchanged.
-    if (req.method === "GET" && config.uiToken && (url === "/" || url === "/ui" || url === "/ui/")) {
-      await serveUi(service, config, req, res, config.uiToken);
+    // The review pages are off unless DUREVIEW_UI_TOKEN is set. Health and webhook are unchanged.
+    const route = req.method === "GET" ? uiRoute(url) : null;
+    if (config.uiToken && route) {
+      await serveUi(service, config, req, res, config.uiToken, route);
       return;
     }
     send(res, 404, { error: "not found" });
@@ -148,17 +150,48 @@ async function handle(
   }
 }
 
+type UiRoute = { kind: "list" } | { kind: "detail"; taskId: string };
+
+function uiRoute(path: string): UiRoute | null {
+  if (path === "/" || path === "/ui" || path === "/ui/") return { kind: "list" };
+  const detail = /^\/ui\/reviews\/([A-Za-z0-9_-]{1,64})\/?$/.exec(path);
+  const taskId = detail?.[1];
+  if (taskId) return { kind: "detail", taskId };
+  return null;
+}
+
 async function serveUi(
   service: DureviewService,
   config: HttpOptions,
   req: IncomingMessage,
   res: ServerResponse,
   token: string,
+  route: UiRoute,
 ): Promise<void> {
   if (!authorizeUi(header(req, "authorization"), token)) {
     sendUnauthorized(res);
     return;
   }
+  if (route.kind === "detail") {
+    const detail = await service.reviewForUi(route.taskId, AbortSignal.timeout(20_000));
+    if (!detail) {
+      send(res, 404, { error: "not found" });
+      return;
+    }
+    sendHtml(
+      res,
+      renderReviewDetail({
+        review: detail.review,
+        files: detail.files,
+        diffUnavailable: detail.diffUnavailable,
+        githubApiUrl: config.githubApiUrl ?? "https://api.github.com",
+      }),
+    );
+    return;
+  }
+  const parsed = new URL(req.url ?? "/", "http://127.0.0.1");
+  const query = reviewFilterFromSearch(parsed.searchParams);
+  const listed = await service.reviewsForUi(query.filter);
   const status = await loadDashboard({
     dataDir: config.dataDir,
     provider: config.provider ?? "unknown",
@@ -166,9 +199,17 @@ async function serveUi(
     githubApp: config.githubApp === true,
     githubToken: config.githubToken === true,
     startedAt: config.startedAt ?? Date.now(),
-    reviews: await service.recentReviews(),
   });
-  sendHtml(res, renderDashboard(status, config.githubApiUrl ?? "https://api.github.com"));
+  sendHtml(
+    res,
+    renderReviewList({
+      status,
+      reviews: listed.reviews,
+      repos: listed.repos,
+      total: listed.total,
+      form: query.form,
+    }),
+  );
 }
 
 function header(req: IncomingMessage, name: string): string | undefined {

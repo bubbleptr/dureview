@@ -90,6 +90,11 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
         outcome: "failed",
         verdict: null,
         findingCount: null,
+        title: current.input.title,
+        sha: current.input.sha,
+        baseSha: current.input.baseSha,
+        baseRef: current.input.baseRef,
+        installationId: current.input.installationId,
       }),
     );
   const task = defineTask<ReviewRequest, ReviewState, ReviewResult>({
@@ -238,6 +243,18 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
           outcome: "completed",
           verdict: checkpoint.review.verdict,
           findingCount: checkpoint.review.findings.length,
+          title: current.input.title,
+          sha: current.input.sha,
+          baseSha: current.input.baseSha,
+          baseRef: current.input.baseRef,
+          installationId: current.input.installationId,
+          verdictReason: checkpoint.review.verdictReason,
+          overallConfidence: checkpoint.review.overallConfidence,
+          checked: checkpoint.review.checked,
+          policy: checkpoint.policy,
+          findings: checkpoint.review.findings,
+          provider: checkpoint.provider,
+          modelId: checkpoint.modelId,
         });
         await runtime.commit(
           () => ({

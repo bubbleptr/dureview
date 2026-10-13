@@ -1,6 +1,8 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { log } from "../log.js";
+import type { ReviewPolicy } from "./policy.js";
+import type { Finding } from "./schema.js";
 
 /** How many reviews `reviews.json` keeps. Newest entries stay. */
 export const MAX_REVIEWS = 50;
@@ -21,6 +23,22 @@ export type ReviewFinished = {
   outcome: "completed" | "failed";
   verdict: "block" | "fix_recommended" | "clean" | null;
   findingCount: number | null;
+  /**
+   * Optional context for the review archive. `reviews.json` does not store these.
+   * Finding text stays out of the short log.
+   */
+  title?: string;
+  sha?: string;
+  baseSha?: string;
+  baseRef?: string;
+  installationId?: number | null;
+  verdictReason?: string | null;
+  overallConfidence?: number | null;
+  checked?: string[];
+  policy?: ReviewPolicy | null;
+  findings?: Finding[];
+  provider?: string;
+  modelId?: string;
 };
 
 export type ReviewLogEntry = {

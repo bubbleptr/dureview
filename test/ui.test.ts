@@ -1,7 +1,8 @@
 import { createHmac } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { ReviewArchive } from "../src/review/archive.js";
 import type { RepoCheckout } from "../src/review/checkout.js";
 import { startHttp } from "../src/server.js";
 import { VERSION } from "../src/version.js";
@@ -34,7 +35,9 @@ describe("status page", () => {
 
     const root = await fetch(`${http.url}/`);
     const ui = await fetch(`${http.url}/ui`);
+    const detail = await fetch(`${http.url}/ui/reviews/1`);
     expect(root.status).toBe(404);
+    expect(detail.status).toBe(404);
     expect(await root.json()).toEqual({ error: "not found" });
     expect(root.headers.get("www-authenticate")).toBeNull();
     expect(ui.status).toBe(404);
@@ -117,13 +120,14 @@ describe("status page", () => {
     expect(page.headers.get("cache-control")).toBe("no-store");
     const html = await page.text();
     expect(html).toContain(VERSION);
-    expect(html).toContain("acme/demo");
-    expect(html).toContain("https://github.com/acme/demo/pull/7");
-    expect(html).toContain("opened");
-    expect(html).toContain("fix recommended · 1 finding");
+    expect(html).toContain("acme/demo #7");
+    expect(html).toContain(`/ui/reviews/${body.taskId}`);
+    expect(html).toContain("Charge positive amounts");
+    expect(html).toContain(">auto<");
+    expect(html).toContain("P0/P1");
     expect(html).toContain("access token expires 2030-01-02 03:04 UTC");
-    expect(html).toContain("<dt>GitHub App</dt><dd>no</dd>");
-    expect(html).toContain("<dt>GitHub token</dt><dd>yes</dd>");
+    expect(html).toContain("GitHub App <b>no</b>");
+    expect(html).toContain("GitHub token <b>yes</b>");
     expect(html).not.toContain("ACCESS_TOKEN_CANARY_9f3a");
     expect(html).not.toContain("REFRESH_TOKEN_CANARY_bb12");
     expect(html).not.toContain(SECRET);
@@ -131,8 +135,48 @@ describe("status page", () => {
     expect(html).not.toContain(UI_TOKEN);
     expect(html).not.toContain(SHA_A);
     expect(html).not.toContain(dataDir);
-    expect(html).not.toContain("Charge positive amounts");
     expect(html).not.toContain("billing");
+    expect(html).not.toContain("never billed");
+    expect(github.calls.filter((call) => call === "listPullFiles")).toHaveLength(0);
+
+    github.pullFiles = [
+      {
+        filename: "src/pay.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        previousFilename: null,
+        patch: [
+          "@@ -1,5 +1,6 @@",
+          " export function charge(amount: number): { ok: boolean } {",
+          "-  return gateway.capture(amount);",
+          "+  if (amount > 0) return { ok: true };",
+          "+  return gateway.capture(amount);",
+          " }",
+          " ",
+          " const gateway = {",
+        ].join("\n"),
+      },
+    ];
+    const detail = await fetch(`${http.url}/ui/reviews/${body.taskId}`, {
+      headers: { authorization: `Bearer ${UI_TOKEN}` },
+    });
+    expect(detail.status).toBe(200);
+    const detailHtml = await detail.text();
+    expect(detailHtml).toContain("https://github.com/acme/demo/pull/7");
+    expect(detailHtml).toContain("Reviews");
+    expect(detailHtml).toContain("src/pay.ts");
+    expect(detailHtml).toContain("if (amount &gt; 0) return { ok: true };");
+    expect(detailHtml).toContain("never billed");
+    expect(detailHtml.indexOf("never billed")).toBeGreaterThan(detailHtml.indexOf("if (amount &gt; 0) return { ok: true };"));
+    expect(detailHtml).toContain("<dt>trigger</dt><dd>manual</dd>");
+    expect(detailHtml).toContain("P1");
+    expect(github.pullFileRequests).toEqual([{ installationId: 99, number: 7 }]);
+    expect(detailHtml).not.toContain(SHA_A);
+    expect(detailHtml).not.toContain(UI_TOKEN);
+    const stored = await readFile(join(dataDir, "reviews.sqlite"));
+    expect(stored.toString("utf8")).toContain("never billed");
+    expect(stored.toString("utf8")).not.toContain("if (amount > 0) return { ok: true };");
 
     const ui = await fetch(`${http.url}/ui/`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
     expect(ui.status).toBe(200);
@@ -185,6 +229,93 @@ describe("status page", () => {
       findingCount: null,
     });
     expect(JSON.stringify(reviews)).not.toContain("CANARY_SHOULD_NOT_BE_STORED");
+    const stored = await readFile(join(dataDir, "reviews.sqlite"));
+    expect(stored.toString("utf8")).not.toContain("CANARY_SHOULD_NOT_BE_STORED");
+    expect(stored.toString("utf8")).toContain("Charge positive amounts");
+  });
+
+  it("filters the list and hides unknown reviews", async () => {
+    const dataDir = await tempDataDir();
+    const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
+    await archive.open();
+    await archive.start({
+      taskId: "1",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      title: "Charge positive amounts",
+      sha: SHA_A,
+      baseSha: "1111111111111111111111111111111111111111",
+      baseRef: "main",
+      installationId: 99,
+      trigger: "opened",
+    });
+    await archive.finish({
+      taskId: "1",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      outcome: "completed",
+      verdict: "fix_recommended",
+      findingCount: 1,
+      findings: [],
+    });
+    await archive.finish({
+      taskId: "1",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      outcome: "completed",
+      verdict: "clean",
+      findingCount: 0,
+      findings: [],
+    });
+    await archive.start({
+      taskId: "2",
+      owner: "other",
+      repo: "app",
+      number: 3,
+      title: "Rename helpers",
+      sha: SHA_A,
+      baseSha: "1111111111111111111111111111111111111111",
+      baseRef: "main",
+      installationId: 99,
+      trigger: "command",
+    });
+    await archive.finish({
+      taskId: "2",
+      owner: "other",
+      repo: "app",
+      number: 3,
+      outcome: "completed",
+      verdict: "clean",
+      findingCount: 0,
+      findings: [],
+    });
+    archive.close();
+
+    const github = new MemoryGitHub();
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const http = await startHttp(service, { host: "127.0.0.1", port: 0, uiToken: UI_TOKEN, dataDir });
+    closers.push(async () => {
+      await http.close();
+      await service.close();
+    });
+
+    const filtered = await fetch(`${http.url}/ui?result=pass&repo=other/app&q=rename`, {
+      headers: { authorization: `Bearer ${UI_TOKEN}` },
+    });
+    expect(filtered.status).toBe(200);
+    const html = await filtered.text();
+    expect(html).toContain("other/app #3");
+    expect(html).toContain("/dureview");
+    expect(html).toContain("Pass");
+    expect(html).not.toContain("acme/demo #7");
+
+    const missing = await fetch(`${http.url}/ui/reviews/missing`, {
+      headers: { authorization: `Bearer ${UI_TOKEN}` },
+    });
+    expect(missing.status).toBe(404);
   });
 });
 

@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ReviewLogEntry } from "../review/history.js";
 import { VERSION } from "../version.js";
 
 const CODEX_PROVIDER = "openai-codex";
@@ -21,7 +20,6 @@ export type DashboardStatus = {
   codex: CodexLogin;
   githubApp: boolean;
   githubToken: boolean;
-  reviews: ReviewLogEntry[];
 };
 
 export async function loadDashboard(input: {
@@ -31,7 +29,6 @@ export async function loadDashboard(input: {
   githubApp: boolean;
   githubToken: boolean;
   startedAt: number;
-  reviews: ReviewLogEntry[];
 }): Promise<DashboardStatus> {
   const uptimeMs = Math.max(0, Date.now() - input.startedAt);
   return {
@@ -42,7 +39,6 @@ export async function loadDashboard(input: {
     codex: await readCodexLogin(input.dataDir),
     githubApp: input.githubApp,
     githubToken: input.githubToken,
-    reviews: input.reviews,
   };
 }
 
