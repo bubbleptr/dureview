@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { GitCheckout } from "../src/review/checkout.js";
+import { GitCheckout } from "../src/review/git-checkout.js";
 import { BASE_SHA, MemoryGitHub, reviewRequest, tempDataDir } from "./support.js";
 
 describe("base branch .dureview.md", () => {

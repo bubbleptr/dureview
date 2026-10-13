@@ -227,6 +227,70 @@ The page does not include the webhook secret, GitHub tokens, the App private key
 
 `auth.json`, `session.sqlite`, and `reviews.json` live in the data directory. Checkouts live in `checkouts/<owner>/<repo>/<sha>`.
 
+## Cloudflare Durable Objects (proof of concept)
+
+`cf/` is a separate Worker. It does not replace `dureview serve`, the Docker image, or the Fly volume. The image build ignores `cf/` (see `.dockerignore`). The Node process still checks out with `git` into `/data/checkouts` and still reads the model credential from `/data/auth.json` unless `OPENAI_API_KEY` is set.
+
+The Worker accepts `POST /webhook`, checks `X-Hub-Signature-256` with WebCrypto, and routes `owner/repo#number` to one `ReviewSession` Durable Object. That object runs the same prepare / review / post task through [PiHarness](https://developers.cloudflare.com/agents/harnesses/pi/) (`agents/harness/pi`). Repository reads go through a `RepoFs` interface. The Node process keeps `GitCheckout`. The Durable Object uses `@cloudflare/computer` `Workspace` (SQLite virtual filesystem) and `createGitClient` from `@cloudflare/computer/git` to shallow-fetch `refs/pull/<n>/head`. The model is offered `read`, `grep`, and `submit_review` only.
+
+The Durable Object model is an OpenAI-compatible chat API. DeepSeek is the example (`MODEL_BASE_URL`, `MODEL_ID`, `MODEL_PROVIDER`). There is no ChatGPT login on this path. `reviews.json` and the status page stay on the Node process.
+
+Pinned for this proof of concept: `agents` 0.28.1, `@cloudflare/computer` 0.5.1, `@platformatic/vfs` 0.5.0 (the git client loads it). pi-durable stays 1.1.0 from the repository root. `cf/package.json` does not install a second copy.
+
+### Configure
+
+Non-secret settings are in `cf/wrangler.toml`. Secrets are not in that file:
+
+```bash
+cd cf
+npm ci
+npx wrangler secret put DUREVIEW_WEBHOOK_SECRET
+npx wrangler secret put GITHUB_APP_PRIVATE_KEY
+npx wrangler secret put MODEL_API_KEY
+# PAT instead of an App. Leave GITHUB_APP_ID unset.
+# npx wrangler secret put GITHUB_TOKEN
+```
+
+`GITHUB_APP_PRIVATE_KEY` is the PEM. Newlines can be written as `\n`. `GITHUB_APP_ID` is a plain `[vars]` entry in `wrangler.toml`. A personal access token uses the `GITHUB_TOKEN` secret and an empty App id. Default model settings:
+
+| Binding | Default | Role |
+| --- | --- | --- |
+| `MODEL_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible origin, no `/v1` suffix |
+| `MODEL_ID` | `deepseek-chat` | Model id sent to that API |
+| `MODEL_PROVIDER` | `deepseek` | pi-ai provider id. `faux` is the test double |
+| `MODEL_API_KEY` | secret | Bearer key. Required unless the provider is `faux` |
+| `DUREVIEW_THINKING` | `off` | Same level names as the Node process |
+| `DUREVIEW_DEFAULT_TRIGGER` | `manual` | Same default as the Node process |
+| `GITHUB_API_URL` | `https://api.github.com` | API root |
+
+`compatibility_date` is `2026-08-22` because the workerd binary shipped with `@cloudflare/vitest-pool-workers` 0.23.0 rejects newer dates. Wrangler 4.150 accepts that date. `@cloudflare/vitest-pool-workers` is deprecated upstream (renamed to `@cloudflare/vitest-plugin`); this proof of concept stays on 0.23.0.
+
+### Run the local test
+
+From the repository root, with Node.js 22.19 or newer:
+
+```bash
+npm run test:cf
+```
+
+That starts a local git smart-HTTP server, shallow-fetches the fixture pull request into the Durable Object workspace, runs the faux model, and posts to an in-memory GitHub. One case evicts the object while the post phase is paused and checks that the alarm finishes the comment after the object comes back. `npm test` in the repository root does not run this suite.
+
+### Deploy
+
+These commands are the deploy path. Only the dry-run was executed.
+
+```bash
+cd cf
+npx wrangler deploy --dry-run --outdir /tmp/dureview-cf-bundle
+npx wrangler deploy
+```
+
+Point the GitHub App webhook at `https://<worker-host>/webhook`. The same webhook secret must be the Worker secret. `GET /health` returns `{"ok":true}`.
+
+`wrangler deploy --dry-run` on this tree reported `Total Upload: 3297.64 KiB / gzip: 613.77 KiB`. The uncompressed size is what counts against the 64 MiB limit. The gzip figure is informational.
+
+Workers limits this shape can hit, and that this proof of concept did not measure on Cloudflare's network: CPU time (Durable Objects default to 30 seconds per invocation, configurable up to 5 minutes on the paid plan; the free plan is 10 milliseconds) and subrequests (each git HTTP round trip and each GitHub or model call counts; paid defaults to 10,000 per invocation, free to 50). The script size limit is 64 MiB uncompressed. Durable Object SQLite, which holds both PiHarness and the workspace, is 10 GB on the paid plan and 1 GB on the free plan. An alarm's wall clock is 15 minutes. PiHarness is beta and hands a long wait back to the alarm around 10 minutes. A one-file local clone is not a stand-in for a large GitHub repository.
+
 ## Development
 
 ```bash
@@ -234,6 +298,7 @@ npm ci
 npm run build
 npm test
 npm run e2e
+npm run test:cf
 ```
 
 Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, the manual default when `.dureview.md` is missing or omits `trigger`, `DUREVIEW_DEFAULT_TRIGGER`, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, status-page authentication, and the recent-review log.

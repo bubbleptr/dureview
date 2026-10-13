@@ -16,12 +16,14 @@ import { publishReview, type PublishResult } from "../github/publish.js";
 import { log } from "../log.js";
 import { commandReviewKey, pullOnceKey, reviewKey, type ReviewRequest } from "../types.js";
 import type { RepoCheckout } from "./checkout.js";
+import { nodeRepoFs } from "./files.js";
 import type { ReviewPolicy } from "./policy.js";
 import { buildUserPrompt, ADVERSARIAL_ROLE } from "./prompt.js";
+import type { RepoFs } from "./repo.js";
 import type { ReviewFinished } from "./history.js";
 import type { ReviewSubmission } from "./schema.js";
 import { ReviewDraft, ReviewIndex } from "./state.js";
-import { reviewTools } from "./tools.js";
+import { createReviewTools } from "./tools.js";
 
 export type ReviewHooks = {
   /** Test hook. Runs after generation and before any GitHub write. */
@@ -37,6 +39,8 @@ export type ReviewDeps = {
   modelId: string;
   thinking: ModelThinkingLevel;
   hooks?: ReviewHooks;
+  /** Read-only repository access for the read and grep tools. Defaults to the Node filesystem. */
+  files?: RepoFs;
   /** Records a terminal outcome for the status page. Failures here do not fail the review. */
   onFinished?: (event: ReviewFinished) => Promise<void>;
 };
@@ -74,6 +78,7 @@ export type EnqueueMode =
   | { kind: "command"; commentId: number };
 
 export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; task: ReviewTask } {
+  const tools = createReviewTools(deps.files ?? nodeRepoFs);
   let extension!: Extension;
   const recordFailure = (
     current: { id: TaskId<ReviewResult>; input: ReviewRequest },
@@ -118,7 +123,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             model: { provider: deps.provider, modelId: deps.modelId },
             thinkingLevel: deps.thinking,
             extensions: [extension],
-            tools: [...reviewTools],
+            tools: [...tools],
             cwd: prepared.dir,
           });
           const checkpoint: ReviewState = {
@@ -258,7 +263,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
 
   extension = defineExtension({
     name: "dureview",
-    tools: reviewTools,
+    tools,
     sections: [section("role", () => ADVERSARIAL_ROLE, { tag: false })],
     tasks: [task],
   });

@@ -1,5 +1,6 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import type { RepoDirent, RepoFileKind, RepoFs, RepoStat } from "./repo.js";
 
 const SKIP_DIRS = new Set([".git", "node_modules", "dist", "coverage", ".next", "build"]);
 const MAX_READ_LINES = 400;
@@ -11,12 +12,29 @@ const MAX_FILE_BYTES = 512 * 1024;
 export type ReadArgs = { path: string; offset?: number; limit?: number };
 export type GrepArgs = { pattern: string; path?: string };
 
-export async function readRepoFile(cwd: string, args: ReadArgs): Promise<string> {
-  const file = await resolveInside(cwd, args.path);
-  const info = await stat(file);
-  if (!info.isFile()) throw new Error(`${args.path} is not a file`);
+export const nodeRepoFs: RepoFs = {
+  realpath(file) {
+    return realpath(file);
+  },
+  async stat(file): Promise<RepoStat> {
+    const info = await stat(file);
+    return { kind: nodeKind(info), size: info.size };
+  },
+  readFile(file) {
+    return readFile(file, "utf8");
+  },
+  async readdir(dir): Promise<RepoDirent[]> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    return entries.map((entry) => ({ name: entry.name, kind: nodeKind(entry) }));
+  },
+};
+
+export async function readRepoFile(cwd: string, args: ReadArgs, fs: RepoFs = nodeRepoFs): Promise<string> {
+  const file = await resolveInside(cwd, args.path, fs);
+  const info = await fs.stat(file);
+  if (info.kind !== "file") throw new Error(`${args.path} is not a file`);
   if (info.size > MAX_FILE_BYTES * 4) throw new Error(`${args.path} is too large to read`);
-  const text = await readFile(file, "utf8");
+  const text = await fs.readFile(file, "utf8");
   if (text.includes("\0")) throw new Error(`${args.path} looks like a binary file`);
   const lines = splitLines(text);
   const offset = normalizeOffset(args.offset);
@@ -35,9 +53,9 @@ export async function readRepoFile(cwd: string, args: ReadArgs): Promise<string>
   return body + note;
 }
 
-export async function grepRepo(cwd: string, args: GrepArgs): Promise<string> {
-  const base = await realpath(cwd);
-  const root = await resolveInside(cwd, args.path ?? ".");
+export async function grepRepo(cwd: string, args: GrepArgs, fs: RepoFs = nodeRepoFs): Promise<string> {
+  const base = await fs.realpath(cwd);
+  const root = await resolveInside(cwd, args.path ?? ".", fs);
   const matcher = matcherFor(args.pattern);
   const matches: string[] = [];
   let visited = 0;
@@ -45,25 +63,25 @@ export async function grepRepo(cwd: string, args: GrepArgs): Promise<string> {
 
   async function walk(dir: string): Promise<void> {
     if (truncated || matches.length >= MAX_GREP_MATCHES) return;
-    const entries = await readdir(dir, { withFileTypes: true });
+    const entries = await fs.readdir(dir);
     for (const entry of entries) {
       if (matches.length >= MAX_GREP_MATCHES || truncated) return;
-      if (entry.isSymbolicLink()) continue;
+      if (entry.kind === "symlink") continue;
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
+      if (entry.kind === "directory") {
         if (SKIP_DIRS.has(entry.name)) continue;
         await walk(full);
         continue;
       }
-      if (!entry.isFile()) continue;
+      if (entry.kind !== "file") continue;
       visited += 1;
       if (visited > MAX_GREP_FILES) {
         truncated = true;
         return;
       }
-      const info = await stat(full);
+      const info = await fs.stat(full);
       if (info.size > MAX_FILE_BYTES) continue;
-      const text = await readFile(full, "utf8");
+      const text = await fs.readFile(full, "utf8");
       if (text.includes("\0")) continue;
       const lines = splitLines(text);
       for (let index = 0; index < lines.length; index++) {
@@ -76,9 +94,9 @@ export async function grepRepo(cwd: string, args: GrepArgs): Promise<string> {
     }
   }
 
-  const info = await stat(root);
-  if (info.isFile()) {
-    const text = await readFile(root, "utf8");
+  const info = await fs.stat(root);
+  if (info.kind === "file") {
+    const text = await fs.readFile(root, "utf8");
     const lines = splitLines(text);
     for (let index = 0; index < lines.length && matches.length < MAX_GREP_MATCHES; index++) {
       const line = lines[index] ?? "";
@@ -94,14 +112,21 @@ export async function grepRepo(cwd: string, args: GrepArgs): Promise<string> {
   return matches.join("\n") + (truncated ? "\n[search stopped at the file limit]" : "");
 }
 
-export async function resolveInside(root: string, requestPath: string): Promise<string> {
+export async function resolveInside(root: string, requestPath: string, fs: RepoFs = nodeRepoFs): Promise<string> {
   if (requestPath.includes("\0")) throw new Error("Invalid path");
-  const base = await realpath(root);
+  const base = await fs.realpath(root);
   const absolute = path.resolve(base, requestPath);
-  const resolved = await realpath(absolute);
+  const resolved = await fs.realpath(absolute);
   const relative = path.relative(base, resolved);
   if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) return resolved;
   throw new Error(`Path escapes the repository: ${requestPath}`);
+}
+
+function nodeKind(info: { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }): RepoFileKind {
+  if (info.isSymbolicLink()) return "symlink";
+  if (info.isDirectory()) return "directory";
+  if (info.isFile()) return "file";
+  return "other";
 }
 
 function splitLines(text: string): string[] {

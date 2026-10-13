@@ -1,0 +1,29 @@
+name = "dureview-cf"
+main = "src/index.ts"
+# 2026-08-22 is the newest date the workerd binary inside
+# @cloudflare/vitest-pool-workers 0.23.0 will start. Wrangler 4.150 accepts it.
+compatibility_date = "2026-08-22"
+compatibility_flags = ["nodejs_compat"]
+
+# Non-secret settings. Put secrets in Worker secrets, not in this file:
+#   wrangler secret put DUREVIEW_WEBHOOK_SECRET
+#   wrangler secret put GITHUB_APP_PRIVATE_KEY
+#   wrangler secret put MODEL_API_KEY
+# Optional secret when the App is unset: GITHUB_TOKEN
+# Optional var: GITHUB_APP_ID
+
+[vars]
+MODEL_BASE_URL = "https://api.deepseek.com"
+MODEL_ID = "deepseek-chat"
+MODEL_PROVIDER = "deepseek"
+GITHUB_API_URL = "https://api.github.com"
+DUREVIEW_THINKING = "off"
+DUREVIEW_DEFAULT_TRIGGER = "manual"
+
+[[durable_objects.bindings]]
+name = "REVIEW"
+class_name = "ReviewSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ReviewSession"]
