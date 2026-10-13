@@ -6,6 +6,32 @@ import { GithubRest } from "./github/client.js";
 import { log } from "./log.js";
 import { GitCheckout } from "./review/checkout.js";
 import { DureviewService, type ServiceOptions } from "./service.js";
+import { authorizeUi } from "./ui/auth.js";
+import { renderDashboard } from "./ui/page.js";
+import { loadDashboard } from "./ui/status.js";
+
+export type HttpOptions = {
+  host: string;
+  port: number;
+  /** Unset disables the status page. Never written into a response. */
+  uiToken?: string;
+  dataDir?: string;
+  githubApp?: boolean;
+  githubToken?: boolean;
+  githubApiUrl?: string;
+  provider?: string;
+  modelId?: string;
+  startedAt?: number;
+};
+
+const UI_HEADERS = {
+  "cache-control": "no-store",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+  "x-frame-options": "DENY",
+  "content-security-policy":
+    "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+};
 
 export async function serveCommand(config: Config): Promise<void> {
   assertServeConfig(config);
@@ -35,12 +61,25 @@ export async function serveCommand(config: Config): Promise<void> {
     provider,
     modelId: config.modelId,
   });
-  const http = await startHttp(service, config);
+  const startedAt = Date.now();
+  const http = await startHttp(service, {
+    host: config.host,
+    port: config.port,
+    uiToken: config.uiToken,
+    dataDir: config.dataDir,
+    githubApp: Boolean(config.githubAppId && config.githubAppPrivateKey),
+    githubToken: Boolean(config.githubToken),
+    githubApiUrl: config.githubApiUrl,
+    provider,
+    modelId: config.modelId,
+    startedAt,
+  });
   log("info", "dureview listening", {
     url: http.url,
     provider,
     model: config.modelId,
     github: config.githubAppId ? "app" : "pat",
+    ui: config.uiToken ? "enabled" : "disabled",
   });
 
   await new Promise<void>((resolve) => {
@@ -55,10 +94,10 @@ export async function serveCommand(config: Config): Promise<void> {
 
 export async function startHttp(
   service: DureviewService,
-  config: Pick<Config, "host" | "port">,
+  config: HttpOptions,
 ): Promise<{ url: string; close(): Promise<void> }> {
   const server = createServer((req, res) => {
-    void handle(service, req, res);
+    void handle(service, config, req, res);
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -76,7 +115,12 @@ export async function startHttp(
   };
 }
 
-async function handle(service: DureviewService, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handle(
+  service: DureviewService,
+  config: HttpOptions,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
   try {
     const url = req.url?.split("?")[0] ?? "/";
     if (req.method === "GET" && (url === "/health" || url === "/health/")) {
@@ -89,11 +133,39 @@ async function handle(service: DureviewService, req: IncomingMessage, res: Serve
       send(res, result.status, result.body);
       return;
     }
+    // The status page is off unless DUREVIEW_UI_TOKEN is set. Health and webhook are unchanged.
+    if (req.method === "GET" && config.uiToken && (url === "/" || url === "/ui" || url === "/ui/")) {
+      await serveUi(service, config, req, res, config.uiToken);
+      return;
+    }
     send(res, 404, { error: "not found" });
   } catch (error) {
     log("error", "request failed", { error: error instanceof Error ? error.message : String(error) });
     if (!res.headersSent) send(res, 500, { error: "internal error" });
   }
+}
+
+async function serveUi(
+  service: DureviewService,
+  config: HttpOptions,
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+): Promise<void> {
+  if (!authorizeUi(header(req, "authorization"), token)) {
+    sendUnauthorized(res);
+    return;
+  }
+  const status = await loadDashboard({
+    dataDir: config.dataDir,
+    provider: config.provider ?? "unknown",
+    model: config.modelId ?? "unknown",
+    githubApp: config.githubApp === true,
+    githubToken: config.githubToken === true,
+    startedAt: config.startedAt ?? Date.now(),
+    reviews: await service.recentReviews(),
+  });
+  sendHtml(res, renderDashboard(status, config.githubApiUrl ?? "https://api.github.com"));
 }
 
 function header(req: IncomingMessage, name: string): string | undefined {
@@ -122,6 +194,26 @@ function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
 function send(res: ServerResponse, status: number, body: Record<string, unknown>): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(payload) });
+  res.end(payload);
+}
+
+function sendHtml(res: ServerResponse, html: string): void {
+  res.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(html),
+    ...UI_HEADERS,
+  });
+  res.end(html);
+}
+
+function sendUnauthorized(res: ServerResponse): void {
+  const payload = JSON.stringify({ error: "unauthorized" });
+  res.writeHead(401, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(payload),
+    "www-authenticate": 'Basic realm="dureview", charset="UTF-8"',
+    ...UI_HEADERS,
+  });
   res.end(payload);
 }
 

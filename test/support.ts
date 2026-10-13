@@ -326,6 +326,7 @@ export function testConfig(dataDir: string): Config {
     githubAppPrivateKey: undefined,
     githubApiUrl: "https://api.github.com",
     skipDrafts: false,
+    uiToken: undefined,
   };
 }
 
