@@ -6,7 +6,15 @@ import type { Context } from "@earendil-works/chord";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import type { Config } from "../src/config.js";
-import type { GitHub, IssueComment, PullReview, ReviewCommentDraft } from "../src/github/client.js";
+import {
+  RequestChangesRejectedError,
+  type GitHub,
+  type IssueComment,
+  type PullReview,
+  type PullReviewComment,
+  type ReviewCommentDraft,
+  type ReviewEvent,
+} from "../src/github/client.js";
 import { loadDureviewFile, type Checkout, type RepoCheckout } from "../src/review/checkout.js";
 import { defaultPolicy, type ReviewPolicy } from "../src/review/policy.js";
 import { findingFingerprint, type Finding, type ReviewSubmission, type Verdict } from "../src/review/schema.js";
@@ -146,24 +154,37 @@ export function scriptedReview(summary: string, findings: Finding[] = [FINDING])
 
 export class MemoryGitHub implements GitHub {
   comments: IssueComment[] = [];
-  reviews: Array<PullReview & { comments: ReviewCommentDraft[] }> = [];
+  reviews: Array<PullReview & { comments: ReviewCommentDraft[]; event: ReviewEvent }> = [];
+  reviewComments: PullReviewComment[] = [];
+  /** Method names invoked, in order. */
+  calls: string[] = [];
+  /** When set, createReview throws this before writing. */
+  createError: Error | null = null;
+  /** GitHub forbids REQUEST_CHANGES when the token user opened the pull request. */
+  rejectOwnRequestChanges = false;
+  /** resolveReviewThread throws, so the publisher replies instead. */
+  failResolve = false;
   #next = 1;
 
   async getPullDiff(): Promise<string> {
+    this.calls.push("getPullDiff");
     return FIXTURE_DIFF;
   }
 
   async listIssueComments(): Promise<IssueComment[]> {
+    this.calls.push("listIssueComments");
     return this.comments.map((comment) => ({ ...comment }));
   }
 
   async createIssueComment(_request: ReviewRequest, body: string): Promise<IssueComment> {
+    this.calls.push("createIssueComment");
     const comment = { id: this.#next++, body };
     this.comments.push(comment);
     return { ...comment };
   }
 
   async updateIssueComment(_request: ReviewRequest, commentId: number, body: string): Promise<IssueComment> {
+    this.calls.push("updateIssueComment");
     const comment = this.comments.find((item) => item.id === commentId);
     if (!comment) throw new Error(`comment ${commentId} not found`);
     comment.body = body;
@@ -171,16 +192,72 @@ export class MemoryGitHub implements GitHub {
   }
 
   async listReviews(): Promise<PullReview[]> {
+    this.calls.push("listReviews");
     return this.reviews.map((review) => ({ id: review.id, body: review.body }));
   }
 
   async createReview(
     _request: ReviewRequest,
-    review: { sha: string; body: string; comments: ReviewCommentDraft[] },
+    review: { sha: string; body: string; event?: ReviewEvent; comments: ReviewCommentDraft[] },
   ): Promise<PullReview> {
-    const created = { id: this.#next++, body: review.body, comments: review.comments };
+    this.calls.push("createReview");
+    if (this.createError) throw this.createError;
+    const event = review.event ?? "COMMENT";
+    if (event === "REQUEST_CHANGES" && this.rejectOwnRequestChanges) {
+      throw new RequestChangesRejectedError("Can not request changes on your own pull request");
+    }
+    const id = this.#next++;
+    const created = { id, body: review.body, event, comments: review.comments };
     this.reviews.push(created);
-    return { id: created.id, body: created.body };
+    for (const comment of review.comments) {
+      const commentId = this.#next++;
+      this.reviewComments.push({
+        id: commentId,
+        body: comment.body,
+        path: comment.path,
+        line: comment.line,
+        threadId: `PRRT_${commentId}`,
+        inReplyToId: null,
+        reviewId: id,
+        resolved: false,
+      });
+    }
+    return { id, body: review.body };
+  }
+
+  async listReviewComments(): Promise<PullReviewComment[]> {
+    this.calls.push("listReviewComments");
+    return this.reviewComments.map((comment) => ({ ...comment }));
+  }
+
+  async resolveReviewThread(_request: ReviewRequest, threadId: string): Promise<void> {
+    this.calls.push("resolveReviewThread");
+    if (this.failResolve) throw new Error("resolveReviewThread failed");
+    const matched = this.reviewComments.filter((comment) => comment.threadId === threadId);
+    if (matched.length === 0) throw new Error(`thread ${threadId} not found`);
+    for (const comment of matched) comment.resolved = true;
+  }
+
+  async replyToReviewComment(
+    _request: ReviewRequest,
+    commentId: number,
+    body: string,
+  ): Promise<PullReviewComment> {
+    this.calls.push("replyToReviewComment");
+    const parent = this.reviewComments.find((comment) => comment.id === commentId);
+    if (!parent) throw new Error(`comment ${commentId} not found`);
+    const reply: PullReviewComment = {
+      id: this.#next++,
+      body,
+      path: parent.path,
+      line: parent.line,
+      threadId: parent.threadId,
+      inReplyToId: parent.id,
+      reviewId: parent.reviewId,
+      resolved: parent.resolved,
+    };
+    this.reviewComments.push(reply);
+    return { ...reply };
   }
 }
 

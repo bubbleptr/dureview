@@ -1,31 +1,60 @@
-import type { GitHub } from "./client.js";
-import { disappeared, inlineFingerprintMarker, parseLedger, postedFingerprints } from "../review/ledger.js";
-import { classifyFindings, type ReviewPolicy } from "../review/policy.js";
-import { renderInlineDrafts, renderSummary } from "../review/render.js";
+import type { GitHub, PullReview, ReviewEvent } from "./client.js";
+import { isRequestChangesRejected } from "./client.js";
+import { log } from "../log.js";
+import {
+  disappeared,
+  inlineFingerprintMarker,
+  parseLedger,
+  postedFingerprints,
+  readInlineLedger,
+  reviewIdPostedByTask,
+  type InlineLedgerEntry,
+} from "../review/ledger.js";
+import { classifyFindings, type ReviewLanguage, type ReviewPolicy } from "../review/policy.js";
+import { renderFixedReply, renderInlineDrafts, renderSummary } from "../review/render.js";
 import type { ReviewSubmission } from "../review/schema.js";
 import { inlineMarker, summaryMarker, taskMarker, type ReviewRequest } from "../types.js";
 
 export type PublishResult = {
-  summaryCommentId: number;
-  summaryAction: "created" | "updated" | "unchanged";
+  summaryCommentId: number | null;
+  summaryAction: "created" | "updated" | "unchanged" | "skipped";
   reviewId: number | null;
   reviewAction: "created" | "unchanged" | "skipped";
 };
 
 /**
- * Post the summary comment and inline review.
+ * Post the review.
  *
- * Not replay-safe: a crash can happen after GitHub accepts the write and before
- * the task records success. Callers re-enter this function on resume. It lists
- * comments and reviews first and skips any write whose hidden marker is already
- * present, so the same task never double-posts. A later push uses a new task id,
- * finds the summary by the pull-request marker, and updates that comment.
+ * Not replay-safe: a crash can happen after GitHub accepts a write and before
+ * the task records success. Callers re-enter this function on resume.
  *
- * Inline comments are posted before the summary. A crash between the two writes
- * leaves the previous summary ledger intact, so resume computes the same fixed
- * set and skips fingerprints already listed on the review body.
+ * `summary: true` keeps the summary comment. It lists comments and reviews first
+ * and skips any write whose hidden marker is already present. Inline comments are
+ * posted before the summary, so a crash between the two writes leaves the previous
+ * summary ledger intact.
+ *
+ * `summary: false` (the default) posts one inline comment per finding and no summary.
+ * Each comment carries a fingerprint and task id. A later run reads those comments
+ * to dedupe, and resolves the thread when a finding is gone. A crash after any
+ * single finding is accepted does not post that finding again.
  */
 export async function publishReview(input: {
+  github: GitHub;
+  request: ReviewRequest;
+  taskId: string;
+  provider: string;
+  modelId: string;
+  review: ReviewSubmission;
+  policy: ReviewPolicy;
+  diff: string;
+  signal: AbortSignal;
+  afterRemoteWrite?: () => Promise<void>;
+}): Promise<PublishResult> {
+  if (input.policy.summary === true) return publishWithSummary(input);
+  return publishWithoutSummary(input);
+}
+
+async function publishWithSummary(input: {
   github: GitHub;
   request: ReviewRequest;
   taskId: string;
@@ -40,6 +69,7 @@ export async function publishReview(input: {
   const summaryTag = summaryMarker(input.request);
   const taskTag = taskMarker(input.taskId);
   const inlineTag = inlineMarker(input.taskId);
+  const language = languageOf(input.policy);
 
   const comments = await input.github.listIssueComments(input.request, input.signal);
   const reviews = await input.github.listReviews(input.request, input.signal);
@@ -64,7 +94,8 @@ export async function publishReview(input: {
       {
         sha: input.request.sha,
         body: `${inlineTag}\n${inlineFingerprintMarker(fingerprints)}\n`,
-        comments: renderInlineDrafts(classified.inline),
+        event: "COMMENT",
+        comments: renderInlineDrafts(classified.inline, language),
       },
       input.signal,
     );
@@ -82,6 +113,7 @@ export async function publishReview(input: {
     summaryTag,
     taskTag,
     maxInline: input.policy.maxInline,
+    language,
   });
   const already = comments.find((comment) => comment.body.includes(taskTag));
   let summaryCommentId: number;
@@ -101,4 +133,126 @@ export async function publishReview(input: {
 
   if (input.afterRemoteWrite) await input.afterRemoteWrite();
   return { summaryCommentId, summaryAction, reviewId, reviewAction };
+}
+
+async function publishWithoutSummary(input: {
+  github: GitHub;
+  request: ReviewRequest;
+  taskId: string;
+  provider: string;
+  modelId: string;
+  review: ReviewSubmission;
+  policy: ReviewPolicy;
+  diff: string;
+  signal: AbortSignal;
+  afterRemoteWrite?: () => Promise<void>;
+}): Promise<PublishResult> {
+  const language = languageOf(input.policy);
+  const comments = await input.github.listReviewComments(input.request, input.signal);
+  const ledger = readInlineLedger(comments);
+  const alreadyInlined = new Set(ledger.filter((entry) => !entry.handled).map((entry) => entry.fingerprint));
+  const classified = classifyFindings({
+    findings: input.review.findings,
+    diff: input.diff,
+    policy: input.policy,
+    alreadyInlined,
+  });
+  const open = new Set(classified.open.map((finding) => finding.fingerprint));
+  const stale = ledger.filter((entry) => !entry.handled && !open.has(entry.fingerprint));
+
+  let reviewId: number | null = null;
+  let reviewAction: PublishResult["reviewAction"] = "skipped";
+  if (classified.inline.length > 0) {
+    const event = reviewEvent(classified.inline.map((item) => item.finding.priority));
+    const created = await submitReview(
+      input.github,
+      input.request,
+      {
+        sha: input.request.sha,
+        body: "",
+        event,
+        comments: renderInlineDrafts(classified.inline, language, input.taskId),
+      },
+      input.signal,
+    );
+    reviewId = created.id;
+    reviewAction = "created";
+  } else {
+    const prior = reviewIdPostedByTask(comments, input.taskId);
+    if (prior !== undefined) {
+      reviewId = prior;
+      reviewAction = "unchanged";
+    }
+  }
+
+  for (const entry of stale) {
+    await markFixed(input, entry, language);
+  }
+
+  if (input.afterRemoteWrite) await input.afterRemoteWrite();
+  return { summaryCommentId: null, summaryAction: "skipped", reviewId, reviewAction };
+}
+
+function reviewEvent(priorities: readonly number[]): ReviewEvent {
+  return priorities.some((priority) => priority === 0 || priority === 1) ? "REQUEST_CHANGES" : "COMMENT";
+}
+
+async function submitReview(
+  github: GitHub,
+  request: ReviewRequest,
+  review: { sha: string; body: string; event: ReviewEvent; comments: Parameters<GitHub["createReview"]>[1]["comments"] },
+  signal: AbortSignal,
+): Promise<PullReview> {
+  try {
+    return await github.createReview(request, review, signal);
+  } catch (error) {
+    if (review.event !== "REQUEST_CHANGES" || !isRequestChangesRejected(error)) throw error;
+    log("warn", "GitHub rejected REQUEST_CHANGES on the author's own pull request; submitting COMMENT", {
+      repo: `${request.owner}/${request.repo}`,
+      pr: request.number,
+    });
+    return github.createReview(request, { ...review, event: "COMMENT" }, signal);
+  }
+}
+
+async function markFixed(
+  input: {
+    github: GitHub;
+    request: ReviewRequest;
+    signal: AbortSignal;
+  },
+  entry: InlineLedgerEntry,
+  language: ReviewLanguage,
+): Promise<void> {
+  const reply = renderFixedReply(language, input.request.sha, entry.fingerprint);
+  if (!entry.threadId) {
+    log("warn", "Review thread id is missing; replying that the finding is fixed", {
+      repo: `${input.request.owner}/${input.request.repo}`,
+      pr: input.request.number,
+      fingerprint: entry.fingerprint,
+    });
+    await input.github.replyToReviewComment(input.request, entry.commentId, reply, input.signal);
+    return;
+  }
+  try {
+    await input.github.resolveReviewThread(input.request, entry.threadId, input.signal);
+  } catch (error) {
+    if (isAlreadyResolved(error)) return;
+    log("warn", "Could not resolve review thread; replying that the finding is fixed", {
+      repo: `${input.request.owner}/${input.request.repo}`,
+      pr: input.request.number,
+      fingerprint: entry.fingerprint,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await input.github.replyToReviewComment(input.request, entry.commentId, reply, input.signal);
+  }
+}
+
+function isAlreadyResolved(error: unknown): boolean {
+  const text = error instanceof Error ? error.message.toLowerCase() : "";
+  return text.includes("already resolved");
+}
+
+function languageOf(policy: ReviewPolicy): ReviewLanguage {
+  return policy.language === "zh" ? "zh" : "en";
 }

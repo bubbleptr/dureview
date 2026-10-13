@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { disappeared, parseLedger } from "../src/review/ledger.js";
 import { classifyFindings, defaultPolicy } from "../src/review/policy.js";
-import { renderInlineComment, renderSummary } from "../src/review/render.js";
+import { findingMarker } from "../src/review/ledger.js";
+import { renderFixedReply, renderInlineComment, renderInlineDrafts, renderSummary } from "../src/review/render.js";
 import { FIXTURE_DIFF, reviewRequest, reviewSubmission, sampleFinding } from "./support.js";
 
 describe("comment rendering", () => {
@@ -20,7 +21,7 @@ describe("comment rendering", () => {
       suggestion: "const key = req.idempotencyKey ?? randomUUID();",
       evidence: [],
     });
-    expect(renderInlineComment(finding)).toBe(`**[P1] 🐛 重试时会重复扣款**  · correctness · 置信度 0.85
+    expect(renderInlineComment(finding, true, "zh")).toBe(`**[P1] 🐛 重试时会重复扣款**  · correctness · 置信度 0.85
 
 \`charge()\` 失败后外层又调用了一次，但 \`idempotencyKey\` 每次都重新生成（见 \`src/pay.ts:88\`），网关会把它当成新请求。
 **触发条件**：网关超时但实际已经成功扣款时。
@@ -43,8 +44,8 @@ const key = req.idempotencyKey ?? randomUUID();
       ruleRef: "payments",
     });
     const text = renderInlineComment(finding);
-    expect(text).toContain("**[P0] 🔒 Trust the client total**  · security · 置信度 0.9 · CWE-20");
-    expect(text).toContain("**证据**：`src/pay.ts:3`");
+    expect(text).toContain("**[P0] 🔒 Trust the client total**  · security · confidence 0.9 · CWE-20");
+    expect(text).toContain("**Evidence**: `src/pay.ts:3`");
     expect(text).toContain(`<sub>dureview · fp:${finding.fingerprint} · payments</sub>`);
     expect(text).not.toContain("```suggestion");
   });
@@ -78,6 +79,7 @@ const key = req.idempotencyKey ?? randomUUID();
       summaryTag: "<!-- dureview:summary acme/demo#7 -->",
       taskTag: "<!-- dureview:task 41 -->",
       maxInline: 10,
+      language: "zh",
     });
 
     expect(summary.startsWith("## dureview：⛔ 建议阻断\n合并前会重复扣款。（整体置信度 0.8 · head aaaaaaa）")).toBe(true);
@@ -100,11 +102,73 @@ const key = req.idempotencyKey ?? randomUUID();
       summaryTag: "<!-- tag -->",
       taskTag: "<!-- task -->",
       maxInline: 10,
+      language: "zh",
     });
     expect(clean).toContain("## dureview：✅ 未发现问题");
     expect(clean).toContain("<summary>已检查</summary>");
     expect(clean).toContain("payment capture on the happy path");
     expect(clean).not.toContain("| 级别 |");
     expect(clean).not.toContain("上一轮已修复");
+  });
+
+  it("renders English labels, verdicts, and the fixed reply by default", () => {
+    const finding = sampleFinding({
+      title: "Retry charges twice",
+      body: "A retry generates a new idempotency key.",
+      trigger: "The gateway times out after a successful capture.",
+      suggestion: null,
+    });
+    const inline = renderInlineComment(finding);
+    expect(inline).toContain("**[P1] 🐛 Retry charges twice**  · correctness · confidence 0.9");
+    expect(inline).toContain("**Trigger**: The gateway times out after a successful capture.");
+    expect(inline).not.toContain("置信度");
+    expect(inline).not.toContain("触发条件");
+
+    const request = reviewRequest();
+    const review = reviewSubmission("Stop the merge.", [finding], "block");
+    const summary = renderSummary({
+      request,
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      review,
+      classified: classifyFindings({ findings: review.findings, diff: FIXTURE_DIFF, policy: defaultPolicy() }),
+      fixed: [{ fp: "abc123abc123", title: "Old bug", path: "src/old.ts", start: 4, end: 4, priority: 1, kind: "bug" }],
+      summaryTag: "<!-- tag -->",
+      taskTag: "<!-- task -->",
+      maxInline: 10,
+    });
+    expect(summary.startsWith("## dureview: ⛔ Block\nStop the merge. (overall confidence 0.8 · head aaaaaaa)")).toBe(true);
+    expect(summary).toContain("| Severity | Finding | Location |");
+    expect(summary).toContain("✔ Fixed since the last review:");
+    expect(summary).toContain("- Old bug (src/old.ts:4 · fp:abc123abc123)");
+    expect(summary).not.toContain("建议阻断");
+
+    const clean = renderSummary({
+      request,
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      review: reviewSubmission("Nothing in this push.", [], "clean"),
+      classified: classifyFindings({ findings: [], diff: FIXTURE_DIFF, policy: defaultPolicy() }),
+      fixed: [],
+      summaryTag: "<!-- tag -->",
+      taskTag: "<!-- task -->",
+      maxInline: 10,
+    });
+    expect(clean).toContain("## dureview: ✅ Nothing to report");
+    expect(clean).toContain("<summary>Checked</summary>");
+
+    expect(renderFixedReply("en", "abc1234", finding.fingerprint)).toBe(
+      `fixed in abc1234\n<!-- dureview:fixed ${finding.fingerprint} abc1234 -->`,
+    );
+    expect(renderFixedReply("zh", "abc1234", finding.fingerprint)).toBe(
+      `已在 abc1234 修复\n<!-- dureview:fixed ${finding.fingerprint} abc1234 -->`,
+    );
+
+    const drafts = renderInlineDrafts(
+      classifyFindings({ findings: [finding], diff: FIXTURE_DIFF, policy: defaultPolicy() }).inline,
+      "en",
+      "41",
+    );
+    expect(drafts[0]?.body.endsWith(findingMarker(finding.fingerprint, "41"))).toBe(true);
   });
 });
