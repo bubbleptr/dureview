@@ -37,7 +37,7 @@ export class GitCheckout implements RepoCheckout {
       await rm(dir, { recursive: true, force: true });
       await mkdir(dir, { recursive: true });
       const token = await this.tokenFor(request, signal);
-      const header = token ? ["-c", `http.extraheader=AUTHORIZATION: bearer ${token}`] : [];
+      const header = token ? ["-c", `http.extraheader=AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`] : [];
       const base = ["-c", "safe.directory=*", ...header];
       await git(dir, [...base, "init"], signal);
       await git(dir, [...base, "remote", "add", "origin", request.cloneUrl], signal);
