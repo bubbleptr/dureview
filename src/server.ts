@@ -4,7 +4,8 @@ import { assertServeConfig, type Config } from "./config.js";
 import { createReviewModels, resolveProvider } from "./auth/session.js";
 import { GithubRest } from "./github/client.js";
 import { log } from "./log.js";
-import { GitCheckout } from "./review/checkout.js";
+import { GitCheckout } from "./review/git-checkout.js";
+import { openDureviewService } from "./open-service.js";
 import { DureviewService, type ServiceOptions } from "./service.js";
 import { authorizeUi } from "./ui/auth.js";
 import { renderDashboard } from "./ui/page.js";
@@ -56,7 +57,7 @@ export async function serveCommand(config: Config): Promise<void> {
     (request, signal) => github.accessToken(request, signal),
     { trigger: config.defaultTrigger },
   );
-  const service = await DureviewService.open({
+  const service = await openDureviewService({
     config,
     models,
     github,

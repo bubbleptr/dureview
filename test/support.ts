@@ -20,7 +20,7 @@ import { loadDureviewFile, type Checkout, type RepoCheckout } from "../src/revie
 import { defaultPolicy, type ReviewPolicy } from "../src/review/policy.js";
 import { findingFingerprint, type Finding, type ReviewSubmission, type Verdict } from "../src/review/schema.js";
 import type { ReviewHooks } from "../src/review/task.js";
-import { DureviewService } from "../src/service.js";
+import { openDureviewService } from "../src/open-service.js";
 import type { GitHubRepo, ReviewRequest } from "../src/types.js";
 
 export const SECRET = "test-webhook-secret";
@@ -351,7 +351,7 @@ export async function openTestService(options: {
   const config = testConfig(options.dataDir);
   if (options.skipDrafts) config.skipDrafts = true;
   if (options.defaultTrigger) config.defaultTrigger = options.defaultTrigger;
-  const service = await DureviewService.open({
+  const service = await openDureviewService({
     config,
     models,
     github: options.github,
