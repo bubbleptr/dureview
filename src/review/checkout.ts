@@ -19,8 +19,9 @@ export interface RepoCheckout {
 }
 
 /**
- * Fetch the pull request head into the data directory and read an optional `.dureview.md`.
- * The diff comes from GitHub so it matches the review comments' commit.
+ * Fetch the pull request head into the data directory and read `.dureview.md` from the base branch.
+ * The file is not taken from the pull request head, so the pull request cannot change its trigger
+ * rules, thresholds, or prompt. The diff comes from GitHub so it matches the review comments' commit.
  * Reuses a directory whose HEAD is already the requested SHA.
  */
 export class GitCheckout implements RepoCheckout {
@@ -49,9 +50,23 @@ export class GitCheckout implements RepoCheckout {
     }
     const diffText = await this.github.getPullDiff(request, signal);
     const { diff, truncated } = truncateDiff(diffText);
-    const loaded = await loadDureviewFile(dir);
+    const loaded = await readBaseDureview(this.github, request, signal);
     return { dir, diff, truncated, rules: loaded.rules, policy: loaded.policy };
   }
+}
+
+/**
+ * Load `.dureview.md` from the pull request base branch.
+ * A missing file uses the built-in policy. The pull request head is not consulted.
+ */
+export async function readBaseDureview(
+  github: GitHub,
+  request: Pick<ReviewRequest, "owner" | "repo" | "installationId" | "baseRef">,
+  signal: AbortSignal,
+): Promise<{ rules: string | null; policy: ReviewPolicy }> {
+  const text = await github.getRepoFile(request, ".dureview.md", request.baseRef, signal);
+  if (text === null) return { rules: null, policy: defaultPolicy() };
+  return parseDureviewDocument(text);
 }
 
 export async function loadDureviewFile(dir: string): Promise<{ rules: string | null; policy: ReviewPolicy }> {

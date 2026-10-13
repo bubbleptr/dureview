@@ -1,18 +1,31 @@
 import type { ReviewRequest } from "../types.js";
+import { isBranchRef, isReviewCommand, PULL_REVIEW_ACTIONS, type PullReviewAction } from "../review/trigger.js";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
 const SHA = /^[0-9a-f]{7,64}$/i;
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?(?:\[bot\])?$/;
+const REVIEW_ACTIONS = new Set<string>(PULL_REVIEW_ACTIONS);
+
+export type ReviewCommand = {
+  owner: string;
+  repo: string;
+  number: number;
+  commentId: number;
+  user: string;
+  cloneUrl: string;
+  installationId: number | null;
+};
 
 export type WebhookParse =
   | { kind: "ping" }
   | { kind: "ignore"; reason: string }
-  | { kind: "review"; request: ReviewRequest };
+  | { kind: "review"; action: PullReviewAction; request: ReviewRequest }
+  | { kind: "command"; command: ReviewCommand };
 
-const REVIEW_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
-
-/** Turn a verified `pull_request` delivery into a review request, or a reason to ignore it. */
+/** Turn a verified delivery into a review, a `/dureview` command, or a reason to ignore it. */
 export function parseWebhook(event: string | undefined, payload: unknown): WebhookParse {
   if (event === "ping") return { kind: "ping" };
+  if (event === "issue_comment") return parseIssueComment(payload);
   if (event !== "pull_request") return { kind: "ignore", reason: `event ${event ?? "missing"}` };
   if (!isRecord(payload)) return { kind: "ignore", reason: "payload is not an object" };
 
@@ -25,8 +38,9 @@ export function parseWebhook(event: string | undefined, payload: unknown): Webho
   const pull = recordField(payload, "pull_request");
   if (!repository || !pull) return { kind: "ignore", reason: "missing repository or pull_request" };
 
-  const owner = repositoryOwner(repository);
-  const repo = stringField(repository, "name");
+  const parsed = parseRepository(payload, repository);
+  if ("reason" in parsed) return { kind: "ignore", reason: parsed.reason };
+
   const number = pull.number;
   const title = stringField(pull, "title") ?? "";
   const draft = pull.draft === true;
@@ -34,37 +48,77 @@ export function parseWebhook(event: string | undefined, payload: unknown): Webho
   const base = recordField(pull, "base");
   const sha = head ? stringField(head, "sha") : undefined;
   const baseSha = base ? stringField(base, "sha") : undefined;
-  const cloneUrl = stringField(repository, "clone_url");
-  if (!owner || !repo || !NAME.test(owner) || !NAME.test(repo)) {
-    return { kind: "ignore", reason: "invalid repository name" };
-  }
+  const baseRef = base ? stringField(base, "ref") : undefined;
   if (typeof number !== "number" || !Number.isInteger(number) || number < 1) {
     return { kind: "ignore", reason: "invalid pull request number" };
   }
   if (!sha || !SHA.test(sha) || !baseSha || !SHA.test(baseSha)) {
     return { kind: "ignore", reason: "invalid commit sha" };
   }
-  if (!cloneUrl || !isSafeHttpsUrl(cloneUrl)) {
-    return { kind: "ignore", reason: "invalid clone url" };
-  }
-
-  const installation = recordField(payload, "installation");
-  const installationId = installation && typeof installation.id === "number" ? installation.id : null;
+  if (!baseRef || !isBranchRef(baseRef)) return { kind: "ignore", reason: "invalid base ref" };
 
   return {
     kind: "review",
+    action: action as PullReviewAction,
     request: {
-      owner,
-      repo,
+      ...parsed,
       number,
       sha,
       baseSha,
+      baseRef,
       title,
-      cloneUrl,
-      installationId,
       draft,
     },
   };
+}
+
+function parseIssueComment(payload: unknown): WebhookParse {
+  if (!isRecord(payload)) return { kind: "ignore", reason: "payload is not an object" };
+  const action = stringField(payload, "action");
+  if (action !== "created") return { kind: "ignore", reason: `action ${action ?? "missing"}` };
+
+  const issue = recordField(payload, "issue");
+  const comment = recordField(payload, "comment");
+  const repository = recordField(payload, "repository");
+  if (!issue || !comment || !repository) return { kind: "ignore", reason: "missing issue, comment, or repository" };
+  if (!recordField(issue, "pull_request")) return { kind: "ignore", reason: "not a pull request" };
+
+  const body = typeof comment.body === "string" ? comment.body : "";
+  if (!isReviewCommand(body)) return { kind: "ignore", reason: "not a command" };
+
+  const parsed = parseRepository(payload, repository);
+  if ("reason" in parsed) return { kind: "ignore", reason: parsed.reason };
+
+  const number = issue.number;
+  const commentId = comment.id;
+  const userRecord = recordField(comment, "user");
+  const user = userRecord ? stringField(userRecord, "login") : undefined;
+  if (typeof number !== "number" || !Number.isInteger(number) || number < 1) {
+    return { kind: "ignore", reason: "invalid pull request number" };
+  }
+  if (typeof commentId !== "number" || !Number.isSafeInteger(commentId) || commentId < 1) {
+    return { kind: "ignore", reason: "invalid comment" };
+  }
+  if (!user || !LOGIN.test(user)) return { kind: "ignore", reason: "invalid comment" };
+
+  return {
+    kind: "command",
+    command: { ...parsed, number, commentId, user },
+  };
+}
+
+function parseRepository(
+  payload: Record<string, unknown>,
+  repository: Record<string, unknown>,
+): { owner: string; repo: string; cloneUrl: string; installationId: number | null } | { reason: string } {
+  const owner = repositoryOwner(repository);
+  const repo = stringField(repository, "name");
+  const cloneUrl = stringField(repository, "clone_url");
+  if (!owner || !repo || !NAME.test(owner) || !NAME.test(repo)) return { reason: "invalid repository name" };
+  if (!cloneUrl || !isSafeHttpsUrl(cloneUrl)) return { reason: "invalid clone url" };
+  const installation = recordField(payload, "installation");
+  const installationId = installation && typeof installation.id === "number" ? installation.id : null;
+  return { owner, repo, cloneUrl, installationId };
 }
 
 function repositoryOwner(repository: Record<string, unknown>): string | undefined {

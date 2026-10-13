@@ -3,6 +3,9 @@ import type { Finding, Priority } from "./schema.js";
 
 export type ReviewProfile = "quiet" | "default" | "loud";
 
+/** When a pull request event starts a review. `/dureview` bypasses this. */
+export type ReviewTrigger = "auto" | "once" | "manual";
+
 /** Language for model prose and for dureview's own labels, verdicts, and fixed notes. */
 export type ReviewLanguage = "en" | "zh";
 
@@ -10,10 +13,20 @@ export type ReviewLanguage = "en" | "zh";
  * Thresholds applied after the model returns. Defaults match the review format:
  * drop confidence below 0.5, inline at most 10 comments, P2 inlines only at 0.7.
  * Summary comments are off. Finding titles and template strings are English.
+ * Drafts are skipped, and reviews run on open, reopen, push, and ready-for-review.
  * A repository `.dureview.md` front matter block can override any field.
+ * That file is read from the pull request's base branch.
  */
 export type ReviewPolicy = {
   profile: ReviewProfile;
+  /**
+   * `auto` reviews opened, reopened, synchronize, and ready_for_review.
+   * `once` reviews the first of those that is allowed (opened, or ready_for_review
+   * when the pull request started as a draft). `manual` reviews only on `/dureview`.
+   */
+  trigger: ReviewTrigger;
+  /** When false, draft pull requests are skipped until ready_for_review. */
+  drafts: boolean;
   /** Findings below this confidence are discarded. */
   minConfidence: number;
   /**
@@ -102,6 +115,8 @@ const PROFILE_PRESETS: Record<ReviewProfile, Pick<ReviewPolicy, "minInlinePriori
 export function defaultPolicy(): ReviewPolicy {
   return {
     profile: "default",
+    trigger: "auto",
+    drafts: false,
     minConfidence: 0.5,
     minInlinePriority: PROFILE_PRESETS.default.minInlinePriority,
     p2InlineMinConfidence: PROFILE_PRESETS.default.p2InlineMinConfidence,
@@ -277,6 +292,8 @@ function prose(text: string): string | null {
 
 type ExplicitPolicy = {
   profile?: ReviewProfile;
+  trigger?: ReviewTrigger;
+  drafts?: boolean;
   minConfidence?: number;
   minInlinePriority?: Priority;
   p2InlineMinConfidence?: number;
@@ -322,6 +339,8 @@ function parseFrontMatter(body: string): ReviewPolicy {
 
 const KNOWN_KEYS = new Set([
   "profile",
+  "trigger",
+  "drafts",
   "language",
   "summary",
   "min_confidence",
@@ -372,6 +391,17 @@ function assignScalar(explicit: ExplicitPolicy, key: string, value: string): voi
     explicit.profile = value;
     return;
   }
+  if (key === "trigger") {
+    if (value !== "auto" && value !== "once" && value !== "manual") {
+      throw new Error(`.dureview.md trigger must be auto, once, or manual, got ${value}.`);
+    }
+    explicit.trigger = value;
+    return;
+  }
+  if (key === "drafts") {
+    explicit.drafts = parseBoolean(value, key);
+    return;
+  }
   if (key === "ignore_defaults") {
     explicit.ignoreDefaults = parseBoolean(value, key);
     return;
@@ -416,6 +446,8 @@ function materializePolicy(explicit: ExplicitPolicy, ignore: string[]): ReviewPo
   const preset = PROFILE_PRESETS[profile];
   return {
     profile,
+    trigger: explicit.trigger ?? "auto",
+    drafts: explicit.drafts ?? false,
     minConfidence: explicit.minConfidence ?? 0.5,
     minInlinePriority: explicit.minInlinePriority ?? preset.minInlinePriority,
     p2InlineMinConfidence: explicit.p2InlineMinConfidence ?? preset.p2InlineMinConfidence,

@@ -197,6 +197,8 @@ Flag missing error handling.
       ignore: ["vendor/**", "generated/**"],
       language: "en",
       summary: false,
+      trigger: "auto",
+      drafts: false,
     });
   });
 
@@ -204,6 +206,16 @@ Flag missing error handling.
     const parsed = parseDureviewDocument("Flag success returned without calling the payment gateway.\n");
     expect(parsed.rules).toContain("Flag success");
     expect(parsed.policy).toEqual(defaultPolicy());
+  });
+
+  it("reads trigger and drafts, and rejects bad values", () => {
+    const parsed = parseDureviewDocument("---\ntrigger: once\ndrafts: true\n---\n");
+    expect(parsed.policy.trigger).toBe("once");
+    expect(parsed.policy.drafts).toBe(true);
+    expect(defaultPolicy().trigger).toBe("auto");
+    expect(defaultPolicy().drafts).toBe(false);
+    expect(() => parseDureviewDocument("---\ntrigger: sometimes\n---\n")).toThrow(/trigger/);
+    expect(() => parseDureviewDocument("---\ndrafts: yes\n---\n")).toThrow(/drafts/);
   });
 
   it("rejects an unknown key, a duplicate key, and a bad profile", () => {

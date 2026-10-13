@@ -14,7 +14,7 @@ import {
 import type { GitHub } from "../github/client.js";
 import { publishReview, type PublishResult } from "../github/publish.js";
 import { log } from "../log.js";
-import { reviewKey, type ReviewRequest } from "../types.js";
+import { commandReviewKey, pullOnceKey, reviewKey, type ReviewRequest } from "../types.js";
 import type { RepoCheckout } from "./checkout.js";
 import type { ReviewPolicy } from "./policy.js";
 import { buildUserPrompt, ADVERSARIAL_ROLE } from "./prompt.js";
@@ -58,7 +58,17 @@ export type ReviewResult = PublishResult & { conversationId: number };
 
 export type ReviewTask = Task<ReviewRequest, ReviewState, ReviewResult, object>;
 
-export type EnqueueResult = { taskId: TaskId<ReviewResult>; deduped: boolean };
+export type EnqueueResult = {
+  taskId: TaskId<ReviewResult>;
+  deduped: boolean;
+  /** Set when `trigger: once` already has a running or completed review for this pull request. */
+  onceSkipped?: boolean;
+};
+
+export type EnqueueMode =
+  | { kind: "sha" }
+  | { kind: "once" }
+  | { kind: "command"; commentId: number };
 
 export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; task: ReviewTask } {
   let extension!: Extension;
@@ -230,16 +240,32 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
  * Create one review task per pull request head. A second enqueue of the same SHA
  * returns the existing task while it is running or after it completed.
  * A failed task can be replaced so a later delivery can try again.
+ *
+ * `once` claims a single automatic review for the pull request and ignores later events.
+ * `command` uses a key of (sha, comment id), so it bypasses the head SHA dedupe, and it
+ * claims the once-mode slot when that slot is still open.
  */
 export function enqueueReview(
   root: Conversation,
   task: ReviewTask,
   request: ReviewRequest,
   context: Context,
+  mode: EnqueueMode = { kind: "sha" },
 ): Promise<EnqueueResult> {
-  const key = reviewKey(request);
+  const key = mode.kind === "command" ? commandReviewKey(request, mode.commentId) : reviewKey(request);
+  const onceKey = pullOnceKey(request);
   return root.commit(async (tx) => {
     const index = await tx.doc(ReviewIndex);
+    let claimOnce = mode.kind === "once" || mode.kind === "command";
+    if (claimOnce) {
+      const priorId = index.onceByPull[onceKey];
+      if (priorId !== undefined && (await taskCounts(tx, priorId))) {
+        if (mode.kind === "once") {
+          return { taskId: priorId as TaskId<ReviewResult>, deduped: true, onceSkipped: true };
+        }
+        claimOnce = false;
+      }
+    }
     const existingId = index.byKey[key];
     if (existingId !== undefined) {
       const existing = await tx.task(existingId as TaskId<ReviewResult>);
@@ -256,8 +282,19 @@ export function enqueueReview(
       ownership: { kind: "conversation" },
     })) as TaskId<ReviewResult>;
     index.byKey[key] = taskId;
+    if (claimOnce) index.onceByPull[onceKey] = taskId;
     return { taskId, deduped: false };
   }, context);
+}
+
+type IndexTransaction = Parameters<Parameters<Conversation["commit"]>[0]>[0];
+
+/** A running or completed task still occupies the once-mode slot. A failed task does not. */
+async function taskCounts(tx: IndexTransaction, taskId: number): Promise<boolean> {
+  const existing = await tx.task(taskId as TaskId<ReviewResult>);
+  if (existing === undefined) return false;
+  if (existing.state.status !== "terminal") return true;
+  return existing.state.outcome.status === "completed";
 }
 
 type TaskRuntime = Parameters<ReviewTask["definition"]["phases"]["prepare"]>[1];

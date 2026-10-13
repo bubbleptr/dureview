@@ -1,13 +1,24 @@
 import { createSign } from "node:crypto";
 import type { Config } from "../config.js";
 import { log } from "../log.js";
-import type { ReviewRequest } from "../types.js";
+import { isBranchRef } from "../review/trigger.js";
+import type { GitHubRepo, ReviewRequest } from "../types.js";
 
 export type IssueComment = { id: number; body: string };
 export type PullReview = { id: number; body: string };
 export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
 
 export type ReviewCommentDraft = { path: string; line: number; startLine?: number; body: string };
+
+/** Pull request fields needed to review the current head after a `/dureview` comment. */
+export type RemotePull = {
+  number: number;
+  title: string;
+  draft: boolean;
+  sha: string;
+  baseSha: string;
+  baseRef: string;
+};
 
 /** A pull request review comment, joined with its GraphQL review thread when that lookup succeeds. */
 export type PullReviewComment = {
@@ -79,12 +90,22 @@ export interface GitHub {
     body: string,
     signal: AbortSignal,
   ): Promise<PullReviewComment>;
+  /** File contents at `ref`, or null when GitHub returns 404. `.dureview.md` is read from the base branch. */
+  getRepoFile(request: GitHubRepo, path: string, ref: string, signal: AbortSignal): Promise<string | null>;
+  /** Login that authored this installation's comments, or the PAT user. */
+  viewerLogin(signal: AbortSignal): Promise<string>;
+  /** Effective permission: `admin`, `maintain`, `write`, `triage`, `read`, or `none`. */
+  collaboratorPermission(request: GitHubRepo, username: string, signal: AbortSignal): Promise<string>;
+  getPull(request: GitHubRepo, number: number, signal: AbortSignal): Promise<RemotePull>;
+  /** 👀 on an accepted `/dureview` comment. GitHub treats a repeat as the same reaction. */
+  reactToComment(request: GitHubRepo, commentId: number, signal: AbortSignal): Promise<void>;
 }
 
 type CachedToken = { token: string; expiresAt: number };
 
 export class GithubRest implements GitHub {
   #tokens = new Map<number, CachedToken>();
+  #viewer: string | undefined;
 
   constructor(private readonly config: Config) {}
 
@@ -273,18 +294,24 @@ export class GithubRest implements GitHub {
     return collected;
   }
 
-  async #text(request: ReviewRequest, path: string, signal: AbortSignal, accept: string): Promise<string> {
+  async #text(request: { installationId: number | null }, path: string, signal: AbortSignal, accept: string): Promise<string> {
     const response = await this.#send(request, "GET", path, signal, undefined, accept);
     return response.text();
   }
 
-  async #json<T>(request: ReviewRequest, method: string, path: string, signal: AbortSignal, body: unknown): Promise<T> {
+  async #json<T>(
+    request: { installationId: number | null },
+    method: string,
+    path: string,
+    signal: AbortSignal,
+    body?: unknown,
+  ): Promise<T> {
     const response = await this.#send(request, method, path, signal, body);
     return (await response.json()) as T;
   }
 
   async #send(
-    request: ReviewRequest,
+    request: { installationId: number | null },
     method: string,
     path: string,
     signal: AbortSignal,
@@ -317,11 +344,90 @@ export class GithubRest implements GitHub {
     throw lastError;
   }
 
+  async getRepoFile(request: GitHubRepo, filePath: string, ref: string, signal: AbortSignal): Promise<string | null> {
+    const encoded = filePath
+      .split("/")
+      .map((part) => encodeURIComponent(part))
+      .join("/");
+    const path = `/repos/${request.owner}/${request.repo}/contents/${encoded}?ref=${encodeURIComponent(ref)}`;
+    try {
+      return await this.#text(request, path, signal, "application/vnd.github.raw");
+    } catch (error) {
+      if (githubStatus(error) === 404) return null;
+      throw error;
+    }
+  }
+
+  async viewerLogin(signal: AbortSignal): Promise<string> {
+    if (this.#viewer) return this.#viewer;
+    if (this.config.githubAppId && this.config.githubAppPrivateKey) {
+      const slug = await this.#appSlug(signal);
+      this.#viewer = `${slug}[bot]`;
+      return this.#viewer;
+    }
+    const payload = await this.#json<{ login?: unknown }>({ installationId: null }, "GET", "/user", signal);
+    if (typeof payload.login !== "string" || payload.login.length === 0) {
+      throw new Error("GitHub user response had no login.");
+    }
+    this.#viewer = payload.login;
+    return this.#viewer;
+  }
+
+  async collaboratorPermission(request: GitHubRepo, username: string, signal: AbortSignal): Promise<string> {
+    const path = `/repos/${request.owner}/${request.repo}/collaborators/${encodeURIComponent(username)}/permission`;
+    try {
+      const payload = await this.#json<{ permission?: unknown }>(request, "GET", path, signal);
+      if (typeof payload.permission !== "string" || payload.permission.length === 0) {
+        throw new Error("GitHub permission response had no permission.");
+      }
+      return payload.permission;
+    } catch (error) {
+      if (githubStatus(error) === 404) return "none";
+      throw error;
+    }
+  }
+
+  async getPull(request: GitHubRepo, number: number, signal: AbortSignal): Promise<RemotePull> {
+    const payload = await this.#json<unknown>(request, "GET", `/repos/${request.owner}/${request.repo}/pulls/${number}`, signal);
+    return parseRemotePull(payload, number);
+  }
+
+  async reactToComment(request: GitHubRepo, commentId: number, signal: AbortSignal): Promise<void> {
+    await this.#json(request, "POST", `/repos/${request.owner}/${request.repo}/issues/comments/${commentId}/reactions`, signal, {
+      content: "eyes",
+    });
+  }
+
   accessToken(request: ReviewRequest, signal: AbortSignal): Promise<string> {
     return this.#token(request, signal);
   }
 
-  async #token(request: ReviewRequest, signal: AbortSignal): Promise<string> {
+  async #appSlug(signal: AbortSignal): Promise<string> {
+    if (!this.config.githubAppId || !this.config.githubAppPrivateKey) {
+      throw new Error("GitHub App credentials are not configured.");
+    }
+    const jwt = appJwt(this.config.githubAppId, this.config.githubAppPrivateKey);
+    const response = await fetch(`${this.config.githubApiUrl}/app`, {
+      signal,
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${jwt}`,
+        "user-agent": "dureview",
+        "x-github-api-version": "2022-11-28",
+      },
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 500);
+      throw new Error(`GitHub App lookup failed (${response.status}): ${detail}`);
+    }
+    const payload = (await response.json()) as { slug?: unknown };
+    if (typeof payload.slug !== "string" || !/^[A-Za-z0-9-]+$/.test(payload.slug)) {
+      throw new Error("GitHub App response had no slug.");
+    }
+    return payload.slug;
+  }
+
+  async #token(request: { installationId: number | null }, signal: AbortSignal): Promise<string> {
     if (this.config.githubToken && !this.config.githubAppId) return this.config.githubToken;
     if (!this.config.githubAppId || !this.config.githubAppPrivateKey) {
       if (this.config.githubToken) return this.config.githubToken;
@@ -424,6 +530,33 @@ const REVIEW_THREADS_QUERY = `query($owner:String!,$name:String!,$number:Int!,$c
 const RESOLVE_REVIEW_THREAD = `mutation($id:ID!) {
   resolveReviewThread(input:{threadId:$id}) { thread { isResolved } }
 }`;
+
+const COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
+
+function parseRemotePull(payload: unknown, number: number): RemotePull {
+  if (!isRecord(payload)) throw new Error("GitHub pull request response was not an object.");
+  const title = typeof payload.title === "string" ? payload.title : "";
+  const draft = payload.draft === true;
+  const head = isRecord(payload.head) ? payload.head : undefined;
+  const base = isRecord(payload.base) ? payload.base : undefined;
+  const sha = head && typeof head.sha === "string" ? head.sha : "";
+  const baseSha = base && typeof base.sha === "string" ? base.sha : "";
+  const baseRef = base && typeof base.ref === "string" ? base.ref : "";
+  if (payload.number !== number || !COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha) || !isBranchRef(baseRef)) {
+    throw new Error(`GitHub pull request ${number} was missing a head SHA or base branch.`);
+  }
+  return { number, title, draft, sha, baseSha, baseRef };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function githubStatus(error: unknown): number | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const match = /failed \((\d+)\)/.exec(error.message);
+  return match?.[1] ? Number(match[1]) : undefined;
+}
 
 function delay(signal: AbortSignal, ms: number): Promise<void> {
   if (signal.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));
