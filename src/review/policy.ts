@@ -1,6 +1,17 @@
 import { commentableLines } from "./diff.js";
 import type { Finding, Priority } from "./schema.js";
 
+/**
+ * `.dureview.md` or the configured model is something the operator has to fix.
+ * The review check uses this type for `action_required` instead of matching error text.
+ */
+export class ReviewConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReviewConfigError";
+  }
+}
+
 export type ReviewProfile = "quiet" | "default" | "loud";
 
 /** When a pull request event starts a review. `/dureview` bypasses this. */
@@ -332,21 +343,21 @@ function parseFrontMatter(body: string, defaults: PolicyDefaults): ReviewPolicy 
       index += 1;
       continue;
     }
-    if (/^\s/.test(raw)) throw new Error(`Invalid .dureview.md config line: ${raw}`);
+    if (/^\s/.test(raw)) throw new ReviewConfigError(`Invalid .dureview.md config line: ${raw}`);
     const matched = /^([A-Za-z0-9_]+)\s*:\s*(.*)$/.exec(raw);
-    if (!matched?.[1]) throw new Error(`Invalid .dureview.md config line: ${raw}`);
+    if (!matched?.[1]) throw new ReviewConfigError(`Invalid .dureview.md config line: ${raw}`);
     const key = matched[1];
     const value = matched[2] ?? "";
-    if (seen.has(key)) throw new Error(`Duplicate .dureview.md key: ${key}`);
+    if (seen.has(key)) throw new ReviewConfigError(`Duplicate .dureview.md key: ${key}`);
     seen.add(key);
-    if (!KNOWN_KEYS.has(key)) throw new Error(`Unknown .dureview.md key: ${key}`);
+    if (!KNOWN_KEYS.has(key)) throw new ReviewConfigError(`Unknown .dureview.md key: ${key}`);
     if (key === "ignore") {
       const parsed = parseIgnore(value, lines, index);
       ignore = parsed.items;
       index = parsed.next;
       continue;
     }
-    if (value.trim() === "") throw new Error(`.dureview.md key ${key} needs a value.`);
+    if (value.trim() === "") throw new ReviewConfigError(`.dureview.md key ${key} needs a value.`);
     assignScalar(explicit, key, value.trim());
     index += 1;
   }
@@ -375,7 +386,7 @@ function parseIgnore(
   const trimmed = value.trim();
   if (trimmed === "[]") return { items: [], next: index + 1 };
   if (trimmed.startsWith("[")) return { items: parseFlowList(trimmed), next: index + 1 };
-  if (trimmed !== "") throw new Error(`Invalid .dureview.md ignore value: ${value}`);
+  if (trimmed !== "") throw new ReviewConfigError(`Invalid .dureview.md ignore value: ${value}`);
   const items: string[] = [];
   let next = index + 1;
   while (next < lines.length) {
@@ -393,7 +404,7 @@ function parseIgnore(
 }
 
 function parseFlowList(value: string): string[] {
-  if (!value.endsWith("]")) throw new Error(`Invalid .dureview.md ignore list: ${value}`);
+  if (!value.endsWith("]")) throw new ReviewConfigError(`Invalid .dureview.md ignore list: ${value}`);
   const inner = value.slice(1, -1).trim();
   if (!inner) return [];
   return inner.split(",").map((part) => unquote(part.trim())).filter((part) => part.length > 0);
@@ -402,14 +413,14 @@ function parseFlowList(value: string): string[] {
 function assignScalar(explicit: ExplicitPolicy, key: string, value: string): void {
   if (key === "profile") {
     if (value !== "quiet" && value !== "default" && value !== "loud") {
-      throw new Error(`.dureview.md profile must be quiet, default, or loud, got ${value}.`);
+      throw new ReviewConfigError(`.dureview.md profile must be quiet, default, or loud, got ${value}.`);
     }
     explicit.profile = value;
     return;
   }
   if (key === "trigger") {
     if (value !== "auto" && value !== "once" && value !== "manual") {
-      throw new Error(`.dureview.md trigger must be auto, once, or manual, got ${value}.`);
+      throw new ReviewConfigError(`.dureview.md trigger must be auto, once, or manual, got ${value}.`);
     }
     explicit.trigger = value;
     return;
@@ -428,35 +439,35 @@ function assignScalar(explicit: ExplicitPolicy, key: string, value: string): voi
   }
   if (key === "language") {
     if (value !== "en" && value !== "zh") {
-      throw new Error(`.dureview.md language must be en or zh, got ${value}.`);
+      throw new ReviewConfigError(`.dureview.md language must be en or zh, got ${value}.`);
     }
     explicit.language = value;
     return;
   }
   if (key === "min_confidence" || key === "p2_inline_min_confidence") {
     const number = parseNumber(value, key);
-    if (number < 0 || number > 1) throw new Error(`.dureview.md ${key} must be between 0 and 1.`);
+    if (number < 0 || number > 1) throw new ReviewConfigError(`.dureview.md ${key} must be between 0 and 1.`);
     if (key === "min_confidence") explicit.minConfidence = number;
     else explicit.p2InlineMinConfidence = number;
     return;
   }
   if (key === "min_inline_priority") {
     const number = parseInteger(value, key);
-    if (number < 0 || number > 3) throw new Error(".dureview.md min_inline_priority must be 0, 1, 2, or 3.");
+    if (number < 0 || number > 3) throw new ReviewConfigError(".dureview.md min_inline_priority must be 0, 1, 2, or 3.");
     explicit.minInlinePriority = number as Priority;
     return;
   }
   if (key === "max_inline") {
     const number = parseInteger(value, key);
-    if (number < 0 || number > 100) throw new Error(".dureview.md max_inline must be an integer from 0 to 100.");
+    if (number < 0 || number > 100) throw new ReviewConfigError(".dureview.md max_inline must be an integer from 0 to 100.");
     explicit.maxInline = number;
   }
 }
 
 function materializePolicy(explicit: ExplicitPolicy, ignore: string[], defaults: PolicyDefaults): ReviewPolicy {
-  if (ignore.length > 50) throw new Error(".dureview.md ignore accepts at most 50 globs.");
+  if (ignore.length > 50) throw new ReviewConfigError(".dureview.md ignore accepts at most 50 globs.");
   for (const glob of ignore) {
-    if (glob.length === 0 || glob.length > 200) throw new Error(`.dureview.md ignore glob is empty or too long: ${glob}`);
+    if (glob.length === 0 || glob.length > 200) throw new ReviewConfigError(`.dureview.md ignore glob is empty or too long: ${glob}`);
   }
   const profile = explicit.profile ?? "default";
   const preset = PROFILE_PRESETS[profile];
@@ -478,16 +489,16 @@ function materializePolicy(explicit: ExplicitPolicy, ignore: string[], defaults:
 function parseBoolean(value: string, key: string): boolean {
   if (value === "true") return true;
   if (value === "false") return false;
-  throw new Error(`.dureview.md ${key} must be true or false.`);
+  throw new ReviewConfigError(`.dureview.md ${key} must be true or false.`);
 }
 
 function parseNumber(value: string, key: string): number {
-  if (!/^\d+(\.\d+)?$/.test(value)) throw new Error(`.dureview.md ${key} must be a number from 0 to 1.`);
+  if (!/^\d+(\.\d+)?$/.test(value)) throw new ReviewConfigError(`.dureview.md ${key} must be a number from 0 to 1.`);
   return Number(value);
 }
 
 function parseInteger(value: string, key: string): number {
-  if (!/^\d+$/.test(value)) throw new Error(`.dureview.md ${key} must be an integer.`);
+  if (!/^\d+$/.test(value)) throw new ReviewConfigError(`.dureview.md ${key} must be an integer.`);
   return Number(value);
 }
 

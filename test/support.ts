@@ -177,6 +177,10 @@ export class MemoryGitHub implements GitHub {
   checkLog: MemoryCheckRun[] = [];
   /** When set, check run calls throw `GitHub ... failed (status)`. */
   checkErrorStatus: number | null = null;
+  /** Remaining `updateCheckRun` failures. Each call throws 500 and decrements. */
+  checkUpdateFailures = 0;
+  /** After a check run is stored, wait. Used to abort between create and the checkpoint. */
+  holdCreate: ((signal: AbortSignal) => Promise<void>) | null = null;
   /** When set, createReview throws this before writing. */
   createError: Error | null = null;
   /** GitHub forbids REQUEST_CHANGES when the token user opened the pull request. */
@@ -317,6 +321,7 @@ export class MemoryGitHub implements GitHub {
   async createCheckRun(
     request: GitHubRepo,
     input: { name: string; sha: string; externalId: string },
+    signal: AbortSignal = new AbortController().signal,
   ): Promise<CheckRun> {
     this.calls.push("createCheckRun");
     this.#rejectChecks("POST", `/repos/${request.owner}/${request.repo}/check-runs`);
@@ -329,18 +334,26 @@ export class MemoryGitHub implements GitHub {
       externalId: input.externalId,
       title: null,
       summary: null,
+      detailsUrl: null,
     };
     this.checkRuns.push(run);
     this.checkLog.push({ ...run });
+    if (this.holdCreate) await this.holdCreate(signal);
     return { id: run.id, status: run.status, conclusion: null, externalId: run.externalId };
   }
 
   async updateCheckRun(
     request: GitHubRepo,
     checkRunId: number,
-    input: { conclusion: CheckConclusion; title: string; summary: string },
+    input: { conclusion: CheckConclusion; title: string; summary: string; detailsUrl?: string },
   ): Promise<CheckRun> {
     this.calls.push("updateCheckRun");
+    if (this.checkUpdateFailures > 0) {
+      this.checkUpdateFailures -= 1;
+      throw new Error(
+        `GitHub PATCH /repos/${request.owner}/${request.repo}/check-runs/${checkRunId} failed (500): temporary`,
+      );
+    }
     this.#rejectChecks("PATCH", `/repos/${request.owner}/${request.repo}/check-runs/${checkRunId}`);
     const run = this.checkRuns.find((item) => item.id === checkRunId);
     if (!run) throw new Error(`check run ${checkRunId} not found`);
@@ -348,6 +361,7 @@ export class MemoryGitHub implements GitHub {
     run.conclusion = input.conclusion;
     run.title = input.title;
     run.summary = input.summary;
+    if (input.detailsUrl) run.detailsUrl = input.detailsUrl;
     this.checkLog.push({ ...run });
     return { id: run.id, status: run.status, conclusion: run.conclusion, externalId: run.externalId };
   }
@@ -367,6 +381,7 @@ export type MemoryCheckRun = {
   externalId: string | null;
   title: string | null;
   summary: string | null;
+  detailsUrl: string | null;
 };
 
 export class FixtureCheckout implements RepoCheckout {

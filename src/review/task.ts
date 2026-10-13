@@ -15,9 +15,18 @@ import type { GitHub } from "../github/client.js";
 import { publishReview, type PublishResult } from "../github/publish.js";
 import { log } from "../log.js";
 import { commandReviewKey, pullOnceKey, reviewKey, type ReviewRequest } from "../types.js";
-import { beginReviewCheck, finishReviewCheck, reviewCheckError, reviewCheckOutcome } from "./checks.js";
+import {
+  beginReviewCheck,
+  CheckUpdateError,
+  findOwnCheckRun,
+  finishReviewCheck,
+  reviewCheckCancelled,
+  reviewCheckError,
+  reviewCheckOutcome,
+  type ReviewCheckOutput,
+} from "./checks.js";
 import type { RepoCheckout } from "./checkout.js";
-import type { ReviewLanguage, ReviewPolicy } from "./policy.js";
+import { ReviewConfigError, type ReviewLanguage, type ReviewPolicy } from "./policy.js";
 import type { ReviewFinished } from "./history.js";
 import { buildUserPrompt, ADVERSARIAL_ROLE } from "./prompt.js";
 import type { ReviewSubmission } from "./schema.js";
@@ -29,6 +38,8 @@ export type ReviewHooks = {
   beforePost?: (context: Context) => Promise<void>;
   /** Test hook. Runs after GitHub has accepted the writes and before the task is marked complete. */
   afterRemoteWrite?: (context: Context) => Promise<void>;
+  /** Test hook. Runs after a new check run is created and before that id is checkpointed. */
+  afterCheckCreated?: (context: Context) => Promise<void>;
 };
 
 export type ReviewDeps = {
@@ -53,10 +64,23 @@ type Prepared = {
   truncated: boolean;
 };
 
+type CheckCheckpoint = {
+  /** Set once a check run exists. Absent until then, including after a transient failure. */
+  checkRunId?: number;
+  /** The App returned 403. Later phases must not try the Checks API again. */
+  checksSkipped?: boolean;
+  /** A transient Checks API failure. The next phase tries again and looks up `external_id`. */
+  checkRetry?: boolean;
+  /** Publish result, recorded before the check is completed so a later commit cannot flip it. */
+  published?: PublishResult;
+  /** Conclusion already chosen for the check. Completing the check retries this output. */
+  checkOutput?: ReviewCheckOutput;
+};
+
 export type ReviewState =
-  | { phase: "prepare"; checkRunId?: number | null }
-  | ({ phase: "review"; checkRunId: number | null } & Prepared)
-  | ({ phase: "post"; checkRunId: number | null; review: ReviewSubmission } & Prepared);
+  | ({ phase: "prepare" } & CheckCheckpoint)
+  | ({ phase: "review"; review?: undefined } & CheckCheckpoint & Prepared)
+  | ({ phase: "post"; review: ReviewSubmission } & CheckCheckpoint & Prepared);
 
 export type ReviewResult = PublishResult & { conversationId: number };
 
@@ -85,36 +109,59 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
         const signal = signalOf(context);
         const request = current.input;
         let language: ReviewLanguage = "en";
-        const stored = readCheckRunId(current.state.checkpoint);
-        let checkRunId = stored ?? null;
-        const fail = (message: string) =>
+        let slot = slotFrom(current.state.checkpoint);
+        const fail = (error: unknown) =>
           failOrAbort(
             runtime,
             context,
-            message,
+            error,
             {
               github: deps.github,
               request,
-              checkRunId,
+              checkRunId: slotId(slot),
               language,
               signal,
             },
             () => notifyFinished(deps, failedEvent(current)),
           );
         try {
-          if (stored === undefined) {
-            checkRunId = await beginReviewCheck(deps.github, request, String(current.id), signal);
-            await runtime.commit(
-              () => ({ status: "running", checkpoint: { phase: "prepare", checkRunId } }),
-              context,
-            );
-            return;
+          if (slot.kind === "missing" || slot.kind === "retry") {
+            const begun = await beginReviewCheck(deps.github, request, String(current.id), language, signal);
+            if (context.abortSignal?.aborted) throw new Error("aborted");
+            if (begun.status === "open" && begun.created && deps.hooks?.afterCheckCreated) {
+              await deps.hooks.afterCheckCreated(context);
+            }
+            if (context.abortSignal?.aborted) throw new Error("aborted");
+            if (begun.status === "open") {
+              slot = { kind: "open", checkRunId: begun.id };
+              await runtime.commit(
+                () => ({ status: "running", checkpoint: { phase: "prepare", ...checkFields(slot) } }),
+                context,
+              );
+              return;
+            }
+            if (begun.status === "skipped") {
+              slot = { kind: "skipped" };
+              await runtime.commit(
+                () => ({ status: "running", checkpoint: { phase: "prepare", checksSkipped: true } }),
+                context,
+              );
+              return;
+            }
+            if (slot.kind !== "retry") {
+              await runtime.commit(
+                () => ({ status: "running", checkpoint: { phase: "prepare", checkRetry: true } }),
+                context,
+              );
+              return;
+            }
+            slot = { kind: "retry" };
           }
           const prepared = await deps.checkout.prepare(request, signal);
           language = prepared.policy.language;
           const model = runtime.models.getModel(deps.provider, deps.modelId);
           if (!model) {
-            await fail(`Unknown model ${deps.provider}/${deps.modelId}.`);
+            await fail(new ReviewConfigError(`Unknown model ${deps.provider}/${deps.modelId}.`));
             return;
           }
           await runtime.commit(async (tx) => {
@@ -130,7 +177,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             });
             const checkpoint: ReviewState = {
               phase: "review",
-              checkRunId,
+              ...checkFields(slot),
               conversationId: created.id,
               checkoutDir: prepared.dir,
               diff: prepared.diff,
@@ -143,28 +190,23 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             return { status: "running", checkpoint };
           }, context);
         } catch (error) {
-          await fail(error instanceof Error ? error.message : String(error));
+          if (context.abortSignal?.aborted) throw error instanceof Error ? error : new Error(String(error));
+          await fail(error);
         }
       },
       review: async (current, runtime, context) => {
         const signal = signalOf(context);
         const checkpoint = current.state.checkpoint;
-        const checkRunId = await ensureReviewCheck(
-          deps.github,
-          current.input,
-          String(current.id),
-          readCheckRunId(checkpoint),
-          signal,
-        );
-        const fail = (message: string) =>
+        const slot = await resolveCheck(deps.github, current.input, String(current.id), checkpoint.policy.language, checkpoint, signal);
+        const fail = (error: unknown) =>
           failOrAbort(
             runtime,
             context,
-            message,
+            error,
             {
               github: deps.github,
               request: current.input,
-              checkRunId,
+              checkRunId: slotId(slot),
               language: checkpoint.policy.language,
               signal,
             },
@@ -225,65 +267,87 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               evidence: [...finding.evidence],
             })),
           };
-          const next: ReviewState = { ...checkpoint, phase: "post", checkRunId, review };
+          const next: ReviewState = { ...checkpoint, phase: "post", ...checkFields(slot), review };
           await runtime.commit(() => ({ status: "running", checkpoint: next }), context);
         } catch (error) {
-          await fail(error instanceof Error ? error.message : String(error));
+          if (context.abortSignal?.aborted) throw error instanceof Error ? error : new Error(String(error));
+          await fail(error);
         }
       },
       post: async (current, runtime, context) => {
         const signal = signalOf(context);
         const checkpoint = current.state.checkpoint;
-        const checkRunId = await ensureReviewCheck(
+        const slot = await resolveCheck(
           deps.github,
           current.input,
           String(current.id),
-          readCheckRunId(checkpoint),
+          checkpoint.policy.language,
+          checkpoint,
           signal,
         );
-        const fail = (message: string) =>
+        const fail = (error: unknown) =>
           failOrAbort(
             runtime,
             context,
-            message,
+            error,
             {
               github: deps.github,
               request: current.input,
-              checkRunId,
+              checkRunId: slotId(slot),
               language: checkpoint.policy.language,
               signal,
             },
             () => notifyFinished(deps, failedEvent(current)),
           );
+        let checkCompleted = false;
         try {
-          if (deps.hooks?.beforePost) await deps.hooks.beforePost(context);
-          const published = await publishReview({
-            github: deps.github,
-            request: current.input,
-            taskId: String(current.id),
-            provider: checkpoint.provider,
-            modelId: checkpoint.modelId,
-            review: checkpoint.review,
-            policy: checkpoint.policy,
-            diff: checkpoint.diff,
-            signal,
-            afterRemoteWrite: deps.hooks?.afterRemoteWrite
-              ? async () => {
-                  await deps.hooks?.afterRemoteWrite?.(context);
-                }
-              : undefined,
-          });
-          await finishReviewCheck(
-            deps.github,
-            current.input,
-            checkRunId,
-            reviewCheckOutcome({
+          let published = checkpoint.published;
+          let checkOutput = checkpoint.checkOutput;
+          if (!published || !checkOutput) {
+            if (deps.hooks?.beforePost) await deps.hooks.beforePost(context);
+            published = await publishReview({
+              github: deps.github,
+              request: current.input,
+              taskId: String(current.id),
+              provider: checkpoint.provider,
+              modelId: checkpoint.modelId,
+              review: checkpoint.review,
+              policy: checkpoint.policy,
+              diff: checkpoint.diff,
+              signal,
+              afterRemoteWrite: deps.hooks?.afterRemoteWrite
+                ? async () => {
+                    await deps.hooks?.afterRemoteWrite?.(context);
+                  }
+                : undefined,
+            });
+            checkOutput = reviewCheckOutcome({
               findings: checkpoint.review.findings,
               diff: checkpoint.diff,
               policy: checkpoint.policy,
-            }),
+            });
+            // Record the publish before the check is completed. A commit failure here
+            // has not written success, so it cannot be rewritten into a failure.
+            await runtime.commit(
+              () => ({
+                status: "running",
+                checkpoint: { ...checkpoint, phase: "post", ...checkFields(slot), published, checkOutput },
+              }),
+              context,
+            );
+            return;
+          }
+          await finishReviewCheck(
+            deps.github,
+            current.input,
+            slotId(slot),
+            checkOutput,
             signal,
+            slotId(slot) === null
+              ? undefined
+              : { taskId: String(current.id), language: checkpoint.policy.language },
           );
+          checkCompleted = true;
           log("info", "posted review", {
             repo: `${current.input.owner}/${current.input.repo}`,
             pr: current.input.number,
@@ -312,11 +376,61 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             context,
           );
         } catch (error) {
-          await fail(error instanceof Error ? error.message : String(error));
+          if (context.abortSignal?.aborted) throw error instanceof Error ? error : new Error(String(error));
+          if (error instanceof CheckUpdateError) {
+            log("error", "could not update the dureview check run", { error: error.message });
+            await notifyFinished(deps, failedEvent(current));
+            await runtime.commit(
+              () => ({ status: "terminal", outcome: { status: "failed", error: { message: error.message } } }),
+              context,
+            );
+            return;
+          }
+          const published = checkpoint.published;
+          if (checkCompleted && published) {
+            await runtime.commit(
+              () => ({
+                status: "terminal",
+                outcome: {
+                  status: "completed",
+                  result: { ...published, conversationId: checkpoint.conversationId },
+                },
+              }),
+              context,
+            );
+            return;
+          }
+          await fail(error);
         }
       },
     },
-    abort: async (_current, runtime, context) => {
+    abort: async (current, runtime, context) => {
+      const signal = signalOf(context);
+      const checkpoint = current.state.checkpoint;
+      if (checkpoint.checksSkipped !== true) {
+        try {
+          const id = await findOwnCheckRun(
+            deps.github,
+            current.input,
+            String(current.id),
+            typeof checkpoint.checkRunId === "number" ? checkpoint.checkRunId : null,
+            signal,
+          );
+          if (id !== null) {
+            await finishReviewCheck(
+              deps.github,
+              current.input,
+              id,
+              reviewCheckCancelled(languageOf(checkpoint)),
+              signal,
+            );
+          }
+        } catch (error) {
+          log("error", "could not finish the dureview check run after abort", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       await runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context);
     },
   });
@@ -393,24 +507,52 @@ async function taskCounts(tx: IndexTransaction, taskId: number): Promise<boolean
 
 type TaskRuntime = Parameters<ReviewTask["definition"]["phases"]["prepare"]>[1];
 
+type CheckSlot =
+  | { kind: "missing" }
+  | { kind: "skipped" }
+  | { kind: "retry" }
+  | { kind: "open"; checkRunId: number };
+
 /**
- * Open the check once per task. A stored null means an earlier attempt skipped it
- * (the App returned 403, or the Checks API failed) and should not be retried.
+ * Open the check, or reuse one this task already created (`external_id`).
+ * A stored skip is only the 403 case. `retry` means a transient failure and is tried again.
  */
-async function ensureReviewCheck(
+async function resolveCheck(
   github: GitHub,
   request: ReviewRequest,
   taskId: string,
-  stored: number | null | undefined,
+  language: ReviewLanguage,
+  checkpoint: ReviewState,
   signal: AbortSignal,
-): Promise<number | null> {
-  if (stored !== undefined) return stored;
-  return beginReviewCheck(github, request, taskId, signal);
+): Promise<CheckSlot> {
+  const stored = slotFrom(checkpoint);
+  if (stored.kind === "skipped" || stored.kind === "open") return stored;
+  const begun = await beginReviewCheck(github, request, taskId, language, signal);
+  if (begun.status === "open") return { kind: "open", checkRunId: begun.id };
+  if (begun.status === "skipped") return { kind: "skipped" };
+  return { kind: "retry" };
 }
 
-function readCheckRunId(checkpoint: ReviewState): number | null | undefined {
-  if (!("checkRunId" in checkpoint)) return undefined;
-  return checkpoint.checkRunId ?? null;
+function slotFrom(checkpoint: ReviewState): CheckSlot {
+  if (checkpoint.checksSkipped === true) return { kind: "skipped" };
+  if (typeof checkpoint.checkRunId === "number") return { kind: "open", checkRunId: checkpoint.checkRunId };
+  if (checkpoint.checkRetry === true) return { kind: "retry" };
+  return { kind: "missing" };
+}
+
+function slotId(slot: CheckSlot): number | null {
+  return slot.kind === "open" ? slot.checkRunId : null;
+}
+
+function checkFields(slot: CheckSlot): { checkRunId?: number; checksSkipped?: true; checkRetry?: true } {
+  if (slot.kind === "skipped") return { checksSkipped: true };
+  if (slot.kind === "open") return { checkRunId: slot.checkRunId };
+  if (slot.kind === "retry") return { checkRetry: true };
+  return {};
+}
+
+function languageOf(checkpoint: ReviewState): ReviewLanguage {
+  return checkpoint.phase === "prepare" ? "en" : checkpoint.policy.language;
 }
 
 /**
@@ -422,7 +564,7 @@ function readCheckRunId(checkpoint: ReviewState): number | null | undefined {
 async function failOrAbort(
   runtime: TaskRuntime,
   context: Context,
-  message: string,
+  error: unknown,
   check: {
     github: GitHub;
     request: ReviewRequest;
@@ -432,8 +574,22 @@ async function failOrAbort(
   },
   onFailed?: () => Promise<void>,
 ): Promise<void> {
-  if (context.abortSignal?.aborted) throw new Error(message);
-  await finishReviewCheck(check.github, check.request, check.checkRunId, reviewCheckError(message, check.language), check.signal);
+  const message = error instanceof Error ? error.message : String(error);
+  if (context.abortSignal?.aborted) throw error instanceof Error ? error : new Error(message);
+  try {
+    await finishReviewCheck(
+      check.github,
+      check.request,
+      check.checkRunId,
+      reviewCheckError(error, check.language),
+      check.signal,
+    );
+  } catch (updateError) {
+    if (context.abortSignal?.aborted) throw updateError instanceof Error ? updateError : new Error(String(updateError));
+    log("error", "could not update the dureview check run", {
+      error: updateError instanceof Error ? updateError.message : String(updateError),
+    });
+  }
   if (context.abortSignal?.aborted) throw new Error(message);
   log("error", "review failed", { error: message });
   if (onFailed) await onFailed();

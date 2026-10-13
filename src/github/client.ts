@@ -118,8 +118,9 @@ export interface GitHub {
   /** 👀 on an accepted `/dureview` comment. GitHub treats a repeat as the same reaction. */
   reactToComment(request: GitHubRepo, commentId: number, signal: AbortSignal): Promise<void>;
   /**
-   * Check runs named `name` on `sha`. Used to reuse the run this task already opened
-   * after a crash between the create call and the next checkpoint.
+   * Check runs named `name` on `sha`, including in-progress runs (`filter=all`).
+   * Used to reuse the run this task already opened after a crash between the create
+   * call and the next checkpoint, and to close another in-progress run on the same SHA.
    */
   listCheckRuns(request: GitHubRepo, sha: string, name: string, signal: AbortSignal): Promise<CheckRun[]>;
   /** Opens an in-progress check run on `sha`. `externalId` is the review task id. */
@@ -132,7 +133,7 @@ export interface GitHub {
   updateCheckRun(
     request: GitHubRepo,
     checkRunId: number,
-    input: { conclusion: CheckConclusion; title: string; summary: string },
+    input: { conclusion: CheckConclusion; title: string; summary: string; detailsUrl?: string },
     signal: AbortSignal,
   ): Promise<CheckRun>;
 }
@@ -439,7 +440,7 @@ export class GithubRest implements GitHub {
     const checkName = encodeURIComponent(name);
     const ref = encodeURIComponent(sha);
     for (let page = 1; page <= 5; page++) {
-      const path = `/repos/${request.owner}/${request.repo}/commits/${ref}/check-runs?check_name=${checkName}&per_page=100&page=${page}`;
+      const path = `/repos/${request.owner}/${request.repo}/commits/${ref}/check-runs?check_name=${checkName}&filter=all&per_page=100&page=${page}`;
       const payload = await this.#json<{ check_runs?: unknown }>(request, "GET", path, signal);
       const runs = Array.isArray(payload.check_runs) ? payload.check_runs : [];
       for (const run of runs) {
@@ -477,7 +478,7 @@ export class GithubRest implements GitHub {
   async updateCheckRun(
     request: GitHubRepo,
     checkRunId: number,
-    input: { conclusion: CheckConclusion; title: string; summary: string },
+    input: { conclusion: CheckConclusion; title: string; summary: string; detailsUrl?: string },
     signal: AbortSignal,
   ): Promise<CheckRun> {
     const payload = await this.#json(
@@ -489,6 +490,7 @@ export class GithubRest implements GitHub {
         status: "completed",
         conclusion: input.conclusion,
         completed_at: new Date().toISOString(),
+        ...(input.detailsUrl ? { details_url: input.detailsUrl } : {}),
         output: { title: input.title, summary: input.summary },
       },
     );

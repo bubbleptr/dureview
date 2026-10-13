@@ -1,15 +1,17 @@
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { GithubRest } from "../src/github/client.js";
-import { REVIEW_CHECK_NAME, reviewCheckError, reviewCheckOutcome } from "../src/review/checks.js";
+import { REVIEW_CHECK_NAME, REVIEW_CONFIG_DOCS_URL, reviewCheckError, reviewCheckOutcome } from "../src/review/checks.js";
 import type { RepoCheckout } from "../src/review/checkout.js";
-import { defaultPolicy, type ReviewPolicy } from "../src/review/policy.js";
+import { ReviewConfigError, defaultPolicy, type ReviewPolicy } from "../src/review/policy.js";
 import {
   FINDING,
   FIXTURE_DIFF,
   FIXTURE_DIR,
   MemoryGitHub,
+  hangUntilAbort,
   openTestService,
   reviewRequest,
   sampleFinding,
@@ -64,11 +66,11 @@ describe("check conclusions", () => {
       sampleFinding({ priority: 3, title: "Log the amount", confidence: 0.6 }),
       sampleFinding({ priority: 3, title: "Comment the branch", confidence: 0.6 }),
     ];
-    expect(reviewCheckOutcome({ findings: several, diff, policy: { ...policy, language: "zh" } })).toMatchObject({
-      conclusion: "success",
-      title: "有 3 条建议",
-      summary: "P0：0\nP1：0\nP2：1\nP3：2",
-    });
+    const zh = reviewCheckOutcome({ findings: several, diff, policy: { ...policy, language: "zh" } });
+    expect(zh).toMatchObject({ conclusion: "success", title: "有 3 条建议" });
+    expect(zh.summary.startsWith("P0：0\nP1：0\nP2：1\nP3：2")).toBe(true);
+    expect(zh.summary).toContain("未发到行内评论：");
+    expect(zh.summary).toContain("P3 src/pay.ts Log the amount");
   });
 
   it("ignores findings the review drops, and still counts a P0 that is not inlined", () => {
@@ -77,10 +79,14 @@ describe("check conclusions", () => {
     const ignored = sampleFinding({ priority: 1, title: "Generated", path: "dist/app.js", confidence: 0.9 });
     expect(reviewCheckOutcome({ findings: [ignored], diff, policy }).title).toBe("No findings");
     const outside = sampleFinding({ priority: 0, title: "Off the diff", startLine: 99, endLine: 99, confidence: 0.9 });
-    expect(reviewCheckOutcome({ findings: [outside], diff, policy })).toMatchObject({
+    const outsideCheck = reviewCheckOutcome({ findings: [outside], diff, policy });
+    expect(outsideCheck).toMatchObject({
       conclusion: "failure",
-      summary: "P0: 1\nP1: 0\nP2: 0\nP3: 0",
+      title: "Blocking findings",
     });
+    expect(outsideCheck.summary).toContain("P0: 1\nP1: 0\nP2: 0\nP3: 0");
+    expect(outsideCheck.summary).toContain("Not posted inline:");
+    expect(outsideCheck.summary).toContain("P0 src/pay.ts Off the diff (outside the diff)");
     const suspected = sampleFinding({
       priority: 0,
       kind: "investigate",
@@ -88,7 +94,17 @@ describe("check conclusions", () => {
       title: "Maybe billed twice",
       confidence: 0.8,
     });
-    expect(reviewCheckOutcome({ findings: [suspected], diff, policy }).conclusion).toBe("failure");
+    const suspectedCheck = reviewCheckOutcome({ findings: [suspected], diff, policy: { ...policy, language: "zh" } });
+    expect(suspectedCheck.conclusion).toBe("failure");
+    expect(suspectedCheck.summary).toContain("未发到行内评论：");
+    expect(suspectedCheck.summary).toContain("Maybe billed twice");
+    const summarized = reviewCheckOutcome({
+      findings: [outside],
+      diff,
+      policy: { ...policy, summary: true },
+    });
+    expect(summarized.summary).toBe("P0: 1\nP1: 0\nP2: 0\nP3: 0");
+    expect(summarized.summary).not.toContain("Not posted inline:");
   });
 
   it("fails the check on a timeout or model error, and asks for action on bad configuration", () => {
@@ -101,15 +117,18 @@ describe("check conclusions", () => {
       conclusion: "failure",
       title: "审查失败",
     });
-    expect(reviewCheckError("Unknown model faux/missing.", "zh")).toEqual({
+    expect(reviewCheckError(new ReviewConfigError("Unknown model faux/missing."), "zh")).toEqual({
       conclusion: "action_required",
       title: "需要处理",
       summary: "Unknown model faux/missing.",
+      detailsUrl: REVIEW_CONFIG_DOCS_URL,
     });
-    expect(reviewCheckError(".dureview.md profile must be quiet, default, or loud, got noisy.", "en")).toMatchObject({
+    expect(reviewCheckError(new ReviewConfigError(".dureview.md profile must be quiet, default, or loud, got noisy."), "en")).toMatchObject({
       conclusion: "action_required",
       title: "Action required",
+      detailsUrl: REVIEW_CONFIG_DOCS_URL,
     });
+    expect(reviewCheckError(".dureview.md profile must be quiet, default, or loud, got noisy.", "en").conclusion).toBe("failure");
   });
 });
 
@@ -175,11 +194,11 @@ describe("check run on a review", () => {
     const settled = await run(service);
     expect(settled.state.outcome.status).toBe("completed");
     expect(github.reviews[0]?.event).toBe("COMMENT");
-    expect(github.checkRuns[0]).toMatchObject({
-      conclusion: "success",
-      title: "有 3 条建议",
-      summary: "P0：0\nP1：0\nP2：2\nP3：1",
-    });
+    expect(github.reviews[0]?.comments).toHaveLength(2);
+    expect(github.checkRuns[0]).toMatchObject({ conclusion: "success", title: "有 3 条建议" });
+    expect(github.checkRuns[0]?.summary.startsWith("P0：0\nP1：0\nP2：2\nP3：1")).toBe(true);
+    expect(github.checkRuns[0]?.summary).toContain("未发到行内评论：");
+    expect(github.checkRuns[0]?.summary).toContain("Log the amount");
   });
 
   it("completes the check as failure when the model never submits", async () => {
@@ -205,7 +224,7 @@ describe("check run on a review", () => {
   it("marks configuration errors as action required instead of leaving the check running", async () => {
     const checkout: RepoCheckout = {
       async prepare() {
-        throw new Error(".dureview.md profile must be quiet, default, or loud, got noisy.");
+        throw new ReviewConfigError(".dureview.md profile must be quiet, default, or loud, got noisy.");
       },
     };
     const { github, service } = await start({ checkout, responses: [] });
@@ -215,6 +234,7 @@ describe("check run on a review", () => {
       status: "completed",
       conclusion: "action_required",
       title: "Action required",
+      detailsUrl: REVIEW_CONFIG_DOCS_URL,
     });
     expect(github.checkRuns[0]?.summary).toContain(".dureview.md");
   });
@@ -262,7 +282,8 @@ describe("check run on a review", () => {
       spy.mockRestore();
     }
     expect(github.checkRuns).toHaveLength(0);
-    expect(errors.some((line) => line.includes("Could not create the dureview check run"))).toBe(true);
+    expect(errors.some((line) => line.includes("Could not list the dureview check run"))).toBe(true);
+    expect(github.calls.filter((call) => call === "listCheckRuns").length).toBeGreaterThan(1);
   });
 
   it("does not open a second check for the same head, and does open one for /dureview", async () => {
@@ -334,6 +355,189 @@ describe("check run on a review", () => {
     expect(github.checkRuns[0]).toMatchObject({ status: "completed", conclusion: "success", title: "未发现问题" });
   });
 
+  it("retries a check update and completes it instead of leaving the task successful while the check runs", async () => {
+    const github = new MemoryGitHub();
+    github.checkUpdateFailures = 1;
+    const { service } = await start({
+      github,
+      responses: scriptedReview("Nothing to bill twice.", []),
+      checkout: policyCheckout(),
+    });
+    const settled = await run(service);
+    expect(settled.state.outcome.status).toBe("completed");
+    expect(github.calls.filter((call) => call === "updateCheckRun").length).toBeGreaterThan(1);
+    expect(github.checkRuns).toHaveLength(1);
+    expect(github.checkRuns[0]).toMatchObject({ status: "completed", conclusion: "success", title: "No findings" });
+    expect(github.checkLog.some((run) => run.conclusion === "failure")).toBe(false);
+  });
+
+  it("fails the task when the check update keeps failing, and a later review closes the in-progress run", async () => {
+    const github = new MemoryGitHub();
+    github.checkUpdateFailures = 100;
+    const { service } = await start({
+      github,
+      responses: [...scriptedReview("First pass.", []), ...scriptedReview("Asked again.", [])],
+      checkout: policyCheckout(),
+    });
+    const failed = await run(service);
+    expect(failed.state.outcome.status).toBe("failed");
+    expect(github.checkRuns).toHaveLength(1);
+    expect(github.checkRuns[0]?.status).toBe("in_progress");
+
+    github.checkUpdateFailures = 0;
+    const again = await service.enqueue(reviewRequest());
+    expect(again.deduped).toBe(false);
+    const settled = await service.wait(again.taskId);
+    expect(settled.state.outcome.status).toBe("completed");
+    expect(github.checkRuns.every((run) => run.status === "completed")).toBe(true);
+    expect(github.checkRuns.some((run) => run.conclusion === "success")).toBe(true);
+  });
+
+  it("does not record a permanent skip when create is aborted, and reuses the run by external id", async () => {
+    const github = new MemoryGitHub();
+    const dataDir = await tempDataDir();
+    let markHeld!: () => void;
+    const held = new Promise<void>((resolve) => {
+      markHeld = resolve;
+    });
+    github.holdCreate = (signal) =>
+      new Promise((_resolve, reject) => {
+        markHeld();
+        signal.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), { once: true });
+      });
+    const first = await openTestService({ dataDir, github, checkout: policyCheckout(), responses: [] });
+    closers.push(() => first.service.close());
+    const pending = first.service.enqueue(reviewRequest());
+    await held;
+    const queued = await pending;
+    expect(github.checkRuns).toHaveLength(1);
+    expect(github.checkRuns[0]?.status).toBe("in_progress");
+    await first.service.close();
+    closers.pop();
+
+    github.holdCreate = null;
+    const second = await openTestService({
+      dataDir,
+      github,
+      responses: scriptedReview("Nothing to bill twice.", []),
+      checkout: policyCheckout(),
+    });
+    closers.push(() => second.service.close());
+    const settled = await second.service.wait(queued.taskId);
+    expect(settled.state.outcome.status).toBe("completed");
+    expect(github.calls.filter((call) => call === "createCheckRun")).toEqual(["createCheckRun"]);
+    expect(github.checkRuns).toHaveLength(1);
+    expect(github.checkRuns[0]).toMatchObject({ status: "completed", conclusion: "success" });
+  });
+
+  it("reuses the check created before the checkpoint was written", async () => {
+    const github = new MemoryGitHub();
+    const dataDir = await tempDataDir();
+    let markHeld!: () => void;
+    const held = new Promise<void>((resolve) => {
+      markHeld = resolve;
+    });
+    const first = await openTestService({
+      dataDir,
+      github,
+      responses: [],
+      checkout: policyCheckout(),
+      hooks: {
+        afterCheckCreated: (context) => {
+          markHeld();
+          return hangUntilAbort(context);
+        },
+      },
+    });
+    closers.push(() => first.service.close());
+    const queued = await first.service.enqueue(reviewRequest());
+    await held;
+    expect(github.calls.filter((call) => call === "createCheckRun")).toHaveLength(1);
+    await first.service.close();
+    closers.pop();
+
+    const second = await openTestService({
+      dataDir,
+      github,
+      responses: scriptedReview("Nothing to bill twice.", []),
+      checkout: policyCheckout({ language: "zh" }),
+    });
+    closers.push(() => second.service.close());
+    const settled = await second.service.wait(queued.taskId);
+    expect(settled.state.outcome.status).toBe("completed");
+    expect(github.calls.filter((call) => call === "createCheckRun")).toEqual(["createCheckRun"]);
+    expect(github.checkRuns[0]).toMatchObject({ status: "completed", conclusion: "success", title: "未发现问题" });
+  });
+
+  it("completes the check when the task is aborted", async () => {
+    const github = new MemoryGitHub();
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const hanging: RepoCheckout = {
+      prepare: (_request, signal) => {
+        markStarted();
+        return hangUntilAbort({ abortSignal: signal } as Parameters<typeof hangUntilAbort>[0]);
+      },
+    };
+    const { service } = await start({ github, checkout: hanging, responses: [] });
+    const queued = await service.enqueue(reviewRequest());
+    await started;
+    expect(github.checkRuns[0]?.status).toBe("in_progress");
+    await service.harness.abortTask(queued.taskId, BACKGROUND_CONTEXT);
+    const settled = await service.wait(queued.taskId);
+    expect(settled.state.outcome.status).toBe("aborted");
+    expect(github.checkRuns[0]).toMatchObject({
+      status: "completed",
+      conclusion: "cancelled",
+      title: "Review cancelled",
+    });
+  });
+
+  it("closes the other in-progress run when a second review starts on the same SHA", async () => {
+    const github = new MemoryGitHub();
+    github.remotePull = {
+      number: 7,
+      title: "Charge positive amounts",
+      draft: false,
+      sha: SHA_A,
+      baseSha: "1111111111111111111111111111111111111111",
+      baseRef: "main",
+    };
+    github.permissions.set("alice", "write");
+    let prepares = 0;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const checkout: RepoCheckout = {
+      prepare: (_request, signal) => {
+        prepares += 1;
+        if (prepares === 1) {
+          markStarted();
+          return hangUntilAbort({ abortSignal: signal } as Parameters<typeof hangUntilAbort>[0]);
+        }
+        return policyCheckout().prepare(_request, signal);
+      },
+    };
+    const { service } = await start({
+      github,
+      checkout,
+      responses: scriptedReview("Asked again.", []),
+    });
+    await service.enqueue(reviewRequest());
+    await started;
+    expect(github.checkRuns.filter((run) => run.status === "in_progress")).toHaveLength(1);
+
+    const response = await deliver(service, comment("/dureview", 8));
+    expect(response.status).toBe(202);
+    await service.wait(response.body.taskId as never);
+    expect(github.checkRuns.filter((run) => run.status === "in_progress")).toHaveLength(0);
+    expect(github.checkRuns.some((run) => run.conclusion === "neutral")).toBe(true);
+    expect(github.checkRuns.some((run) => run.conclusion === "success")).toBe(true);
+  });
+
   async function start(options: {
     github?: MemoryGitHub;
     responses?: Parameters<typeof openTestService>[0]["responses"];
@@ -371,6 +575,7 @@ describe("Checks API payload", () => {
       }
       expect(String(url)).toContain(`/commits/${SHA_A}/check-runs`);
       expect(String(url)).toContain("check_name=dureview");
+      expect(String(url)).toContain("filter=all");
       return Response.json({
         total_count: 1,
         check_runs: [{ id: 11, status: "in_progress", external_id: "4", conclusion: null, name: "dureview" }],
@@ -405,7 +610,23 @@ describe("Checks API payload", () => {
         conclusion: "success",
         output: { title: "No findings", summary: "No issues to report." },
       });
+      expect(bodies[1]).not.toHaveProperty("details_url");
       expect(typeof (bodies[1] as { completed_at?: string }).completed_at).toBe("string");
+      await client.updateCheckRun(
+        request,
+        11,
+        {
+          conclusion: "action_required",
+          title: "Action required",
+          summary: "Unknown model faux/missing.",
+          detailsUrl: REVIEW_CONFIG_DOCS_URL,
+        },
+        signal,
+      );
+      expect(bodies[2]).toMatchObject({
+        conclusion: "action_required",
+        details_url: REVIEW_CONFIG_DOCS_URL,
+      });
     } finally {
       fetchMock.mockRestore();
     }

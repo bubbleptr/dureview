@@ -86,9 +86,12 @@ Issue comment events deliver `/dureview`. The 👀 reaction uses the Issues writ
 Every review, including one started by `/dureview`, opens a check run named `dureview` on the pull request head commit. It stays in progress while the review runs, then completes:
 
 - No findings: **success**. The title is "No findings", or "未发现问题" when `language` is `zh`.
-- A P0 or P1: **failure**. The summary lists how many findings are at each priority.
+- A P0 or P1: **failure**. The summary lists how many findings are at each priority. Findings that were not posted inline (for example a line outside the diff, when `summary` is false) are listed under that count, so a failing check is explained on the commit even when the conversation has no comment.
 - Only P2 and P3: **success**. The title is "N suggestions", or "有 N 条建议".
-- The review itself fails (the model errors, times out, or throws): **failure**. A bad `.dureview.md` or an unknown model is **action required** instead. The summary is the error, and the check does not stay in progress.
+- The review itself fails (the model errors, times out, or throws): **failure**. A bad `.dureview.md` or an unknown model is **action required** instead, and the check links to the configuration section of this README. The summary is the error, and the check does not stay in progress.
+- The task is aborted: **cancelled**.
+
+A second review of the same commit completes any other in-progress `dureview` run on that SHA, so two overlapping reviews do not leave a spinning check. A transient Checks API error is retried. Only a 403 is treated as a missing permission: dureview logs it and continues, and does not remember that skip across a crash that happened before the check id was saved. If creating the check succeeded and the process stopped before the id was saved, the next attempt finds that run by its task id.
 
 In branch protection, require the status check `dureview`. A success conclusion is a review that found nothing blocking. Failure and action required block the merge when the check is required.
 
@@ -249,7 +252,7 @@ npm test
 npm run e2e
 ```
 
-Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, the manual default when `.dureview.md` is missing or omits `trigger`, `DUREVIEW_DEFAULT_TRIGGER`, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, status-page authentication, the recent-review log, and check runs (success, blocking failure, suggestions, a failed review, a 403 from the Checks API, and reuse after a crash during checkout).
+Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, the manual default when `.dureview.md` is missing or omits `trigger`, `DUREVIEW_DEFAULT_TRIGGER`, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, status-page authentication, the recent-review log, and check runs (success, blocking failure, suggestions, a failed review, a 403 from the Checks API, reuse after a crash during checkout, a retried check update, an abort during create, `filter=all`, and overlapping reviews on one SHA).
 
 Live Codex OAuth and a real GitHub App are not exercised here. Pi Durable is experimental and its API can change between releases. This repo pins `@earendil-works/pi-durable`, `@earendil-works/pi-ai`, and `@earendil-works/chord` at 1.1.0.
 
