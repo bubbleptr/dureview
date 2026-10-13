@@ -1,4 +1,5 @@
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, type ConversationId, type TaskId } from "@earendil-works/pi-durable";
@@ -11,6 +12,7 @@ import { verifyGithubSignature } from "./github/signature.js";
 import { parseWebhook, type ReviewCommand } from "./github/webhook.js";
 import { log } from "./log.js";
 import { readBaseDureview, type RepoCheckout } from "./review/checkout.js";
+import { ReviewLog, type ReviewLogEntry } from "./review/history.js";
 import { createReviewRuntime, enqueueReview, type EnqueueMode, type EnqueueResult, type ReviewHooks, type ReviewResult } from "./review/task.js";
 import { permissionAllowsCommand, shouldReviewPull, type PullReviewAction } from "./review/trigger.js";
 import type { ReviewRequest } from "./types.js";
@@ -34,10 +36,12 @@ export class DureviewService {
     private readonly task: ReturnType<typeof createReviewRuntime>["task"],
     private readonly config: Config,
     private readonly github: GitHub,
+    private readonly reviews: ReviewLog,
   ) {}
 
   static async open(options: ServiceOptions): Promise<DureviewService> {
     await mkdir(options.config.dataDir, { recursive: true, mode: 0o700 });
+    const reviews = new ReviewLog(join(options.config.dataDir, "reviews.json"));
     const { extension, task } = createReviewRuntime({
       checkout: options.checkout,
       github: options.github,
@@ -45,6 +49,7 @@ export class DureviewService {
       modelId: options.modelId,
       thinking: options.config.thinking,
       hooks: options.hooks,
+      onFinished: (event) => reviews.finish(event),
     });
     const registry = createRegistry();
     registry.install(extension);
@@ -68,13 +73,26 @@ export class DureviewService {
     );
     const root = await harness.root(BACKGROUND_CONTEXT);
     harness.resume();
-    return new DureviewService(harness, root.id, task, options.config, options.github);
+    return new DureviewService(harness, root.id, task, options.config, options.github, reviews);
   }
 
-  async enqueue(request: ReviewRequest, mode: EnqueueMode = { kind: "sha" }): Promise<EnqueueResult> {
+  async enqueue(request: ReviewRequest, mode: EnqueueMode = { kind: "sha" }, trigger = "unknown"): Promise<EnqueueResult> {
     const root = await this.harness.conversation(this.rootId, BACKGROUND_CONTEXT);
     if (!root) throw new Error("Root conversation is missing.");
     const result = await enqueueReview(root, this.task, request, BACKGROUND_CONTEXT, mode);
+    if (!result.deduped && !result.onceSkipped) {
+      try {
+        await this.reviews.start({
+          taskId: String(result.taskId),
+          owner: request.owner,
+          repo: request.repo,
+          number: request.number,
+          trigger,
+        });
+      } catch (error) {
+        log("error", "could not record review", { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     const message = result.onceSkipped
       ? "skipped once-mode review"
       : result.deduped
@@ -87,6 +105,11 @@ export class DureviewService {
       taskId: String(result.taskId),
     });
     return result;
+  }
+
+  /** Newest reviews first. Empty when the log is missing or unreadable. */
+  recentReviews(): Promise<ReviewLogEntry[]> {
+    return this.reviews.list();
   }
 
   async wait(taskId: TaskId<ReviewResult>) {
@@ -148,7 +171,7 @@ export class DureviewService {
       });
       return { status: 200, body: { ignored: true, reason: decision.reason } };
     }
-    const queued = await this.enqueue(request, decision.once ? { kind: "once" } : { kind: "sha" });
+    const queued = await this.enqueue(request, decision.once ? { kind: "once" } : { kind: "sha" }, action);
     if (queued.onceSkipped) {
       log("info", "skipped pull request", {
         repo: `${request.owner}/${request.repo}`,
@@ -193,7 +216,7 @@ export class DureviewService {
       draft: pull.draft,
     };
     await this.github.reactToComment(repo, command.commentId, signal);
-    const queued = await this.enqueue(request, { kind: "command", commentId: command.commentId });
+    const queued = await this.enqueue(request, { kind: "command", commentId: command.commentId }, "command");
     log("info", queued.deduped ? "skipped duplicate /dureview" : "enqueued /dureview", {
       repo: `${request.owner}/${request.repo}`,
       pr: request.number,

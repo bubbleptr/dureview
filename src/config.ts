@@ -29,6 +29,8 @@ export type Config = {
   githubAppPrivateKey: string | undefined;
   githubApiUrl: string;
   skipDrafts: boolean;
+  /** When unset, `GET /` and `GET /ui` stay disabled. */
+  uiToken: string | undefined;
 };
 
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
@@ -48,6 +50,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     githubAppPrivateKey: loadPrivateKey(env),
     githubApiUrl: (env.GITHUB_API_URL ?? "https://api.github.com").replace(/\/$/, ""),
     skipDrafts: env.DUREVIEW_SKIP_DRAFTS === "1" || env.DUREVIEW_SKIP_DRAFTS === "true",
+    uiToken: emptyToUndefined(env.DUREVIEW_UI_TOKEN)?.trim(),
   };
 }
 

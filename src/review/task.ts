@@ -18,6 +18,7 @@ import { commandReviewKey, pullOnceKey, reviewKey, type ReviewRequest } from "..
 import type { RepoCheckout } from "./checkout.js";
 import type { ReviewPolicy } from "./policy.js";
 import { buildUserPrompt, ADVERSARIAL_ROLE } from "./prompt.js";
+import type { ReviewFinished } from "./history.js";
 import type { ReviewSubmission } from "./schema.js";
 import { ReviewDraft, ReviewIndex } from "./state.js";
 import { reviewTools } from "./tools.js";
@@ -36,6 +37,8 @@ export type ReviewDeps = {
   modelId: string;
   thinking: ModelThinkingLevel;
   hooks?: ReviewHooks;
+  /** Records a terminal outcome for the status page. Failures here do not fail the review. */
+  onFinished?: (event: ReviewFinished) => Promise<void>;
 };
 
 type Prepared = {
@@ -72,6 +75,23 @@ export type EnqueueMode =
 
 export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; task: ReviewTask } {
   let extension!: Extension;
+  const recordFailure = (
+    current: { id: TaskId<ReviewResult>; input: ReviewRequest },
+    runtime: TaskRuntime,
+    context: Context,
+    message: string,
+  ) =>
+    failOrAbort(runtime, context, message, () =>
+      notifyFinished(deps, {
+        taskId: String(current.id),
+        owner: current.input.owner,
+        repo: current.input.repo,
+        number: current.input.number,
+        outcome: "failed",
+        verdict: null,
+        findingCount: null,
+      }),
+    );
   const task = defineTask<ReviewRequest, ReviewState, ReviewResult>({
     name: "dureview.review",
     version: 1,
@@ -82,12 +102,12 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
         try {
           prepared = await deps.checkout.prepare(current.input, signalOf(context));
         } catch (error) {
-          await failOrAbort(runtime, context, error instanceof Error ? error.message : String(error));
+          await recordFailure(current, runtime, context, error instanceof Error ? error.message : String(error));
           return;
         }
         const model = runtime.models.getModel(deps.provider, deps.modelId);
         if (!model) {
-          await failOrAbort(runtime, context, `Unknown model ${deps.provider}/${deps.modelId}.`);
+          await recordFailure(current, runtime, context, `Unknown model ${deps.provider}/${deps.modelId}.`);
           return;
         }
         await runtime.commit(async (tx) => {
@@ -120,7 +140,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
         const conversationId = checkpoint.conversationId as ConversationId;
         const conversation = await runtime.conversation(conversationId, context);
         if (!conversation) {
-          await failOrAbort(runtime, context, "Review conversation is missing.");
+          await recordFailure(current, runtime, context, "Review conversation is missing.");
           return;
         }
         const prompt = buildUserPrompt({
@@ -136,7 +156,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
         );
         const firstSettled = await first.wait(context);
         if (firstSettled.status !== "done") {
-          await failOrAbort(runtime, context, `Review run did not finish: ${firstSettled.reason}`);
+          await recordFailure(current, runtime, context, `Review run did not finish: ${firstSettled.reason}`);
           return;
         }
         let draft = await runtime.snapshot(ReviewDraft, conversationId, context);
@@ -152,13 +172,13 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
           );
           const nudged = await nudge.wait(context);
           if (nudged.status !== "done") {
-            await failOrAbort(runtime, context, `Review nudge did not finish: ${nudged.reason}`);
+            await recordFailure(current, runtime, context, `Review nudge did not finish: ${nudged.reason}`);
             return;
           }
           draft = await runtime.snapshot(ReviewDraft, conversationId, context);
         }
         if (!draft?.submitted) {
-          await failOrAbort(runtime, context, "The model finished without calling submit_review.");
+          await recordFailure(current, runtime, context, "The model finished without calling submit_review.");
           return;
         }
         const review: ReviewSubmission = {
@@ -209,6 +229,15 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
           taskId: String(current.id),
           summaryAction: published.summaryAction,
           reviewAction: published.reviewAction,
+        });
+        await notifyFinished(deps, {
+          taskId: String(current.id),
+          owner: current.input.owner,
+          repo: current.input.repo,
+          number: current.input.number,
+          outcome: "completed",
+          verdict: checkpoint.review.verdict,
+          findingCount: checkpoint.review.findings.length,
         });
         await runtime.commit(
           () => ({
@@ -303,13 +332,28 @@ type TaskRuntime = Parameters<ReviewTask["definition"]["phases"]["prepare"]>[1];
  * Record a terminal failure. Shutdown aborts the invocation while the scheduler is already
  * closing, so the error is rethrown and the checkpoint stays put for the next process.
  */
-async function failOrAbort(runtime: TaskRuntime, context: Context, message: string): Promise<void> {
+async function failOrAbort(
+  runtime: TaskRuntime,
+  context: Context,
+  message: string,
+  onFailed?: () => Promise<void>,
+): Promise<void> {
   if (context.abortSignal?.aborted) throw new Error(message);
   log("error", "review failed", { error: message });
+  if (onFailed) await onFailed();
   await runtime.commit(
     () => ({ status: "terminal", outcome: { status: "failed", error: { message } } }),
     context,
   );
+}
+
+async function notifyFinished(deps: ReviewDeps, event: ReviewFinished): Promise<void> {
+  if (!deps.onFinished) return;
+  try {
+    await deps.onFinished(event);
+  } catch (error) {
+    log("error", "could not record review", { error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 function signalOf(context: Context): AbortSignal {
