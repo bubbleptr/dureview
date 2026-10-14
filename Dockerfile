@@ -10,8 +10,9 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY tsconfig.json vite.config.ts ./
+COPY scripts/smoke-pi-ai-external.mjs scripts/smoke-pi-ai-external.mjs
 COPY src ./src
-RUN npm run build && npm prune --omit=dev
+RUN npm run build && npm prune --omit=dev && node scripts/smoke-pi-ai-external.mjs
 
 ENV DUREVIEW_DATA_DIR=/data \
     DUREVIEW_HOST=0.0.0.0 \
