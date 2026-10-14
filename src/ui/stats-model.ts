@@ -35,6 +35,7 @@ export type StatsPageModel = {
   cards: StatsCard[];
   trend: { models: string[]; points: StatsTrendPoint[] };
   priorities: StatsBar[];
+  types: StatsBar[];
   categories: StatsBar[];
   verdicts: StatsBar[];
   failures: StatsBar[];

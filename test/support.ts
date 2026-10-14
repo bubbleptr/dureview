@@ -21,7 +21,13 @@ import {
 } from "../src/github/client.js";
 import { loadDureviewFile, type Checkout, type RepoCheckout } from "../src/review/checkout.js";
 import { defaultPolicy, type ReviewPolicy } from "../src/review/policy.js";
-import { findingFingerprint, type Finding, type ReviewSubmission, type Verdict } from "../src/review/schema.js";
+import {
+  findingFingerprint,
+  resolveFindingClassification,
+  type Finding,
+  type ReviewSubmission,
+  type Verdict,
+} from "../src/review/schema.js";
 import type { ReviewHooks } from "../src/review/task.js";
 import { DureviewService } from "../src/service.js";
 import type { GitHubRepo, ReviewRequest } from "../src/types.js";
@@ -49,7 +55,7 @@ index 1111111..2222222 100644
 `;
 
 export function sampleFinding(overrides: Partial<Omit<Finding, "fingerprint">> = {}): Finding {
-  const finding = {
+  const merged = {
     title: "Return success without billing",
     priority: 1 as const,
     kind: "bug" as const,
@@ -60,12 +66,21 @@ export function sampleFinding(overrides: Partial<Omit<Finding, "fingerprint">> =
     body: "Positive amounts return success without capturing the charge, so the customer is never billed.",
     trigger: "charge() is called with a positive amount.",
     evidence: [] as string[],
-    suggestion: null,
-    cwe: null,
-    ruleRef: null,
+    suggestion: null as string | null,
+    cwe: null as string | null,
+    ruleRef: null as string | null,
     confidence: 0.9,
+    type: undefined as Finding["type"] | undefined,
+    subtype: undefined as Finding["subtype"] | undefined,
     ...overrides,
   };
+  const classification = resolveFindingClassification({
+    kind: merged.kind,
+    priority: merged.priority,
+    type: merged.type,
+    subtype: merged.subtype,
+  });
+  const finding = { ...merged, ...classification };
   return { ...finding, fingerprint: findingFingerprint(finding) };
 }
 
@@ -90,6 +105,8 @@ export function findingArgs(finding: Finding) {
     title: finding.title,
     priority: finding.priority,
     kind: finding.kind,
+    type: finding.type,
+    subtype: finding.subtype,
     category: finding.category,
     path: finding.path,
     start_line: finding.startLine,

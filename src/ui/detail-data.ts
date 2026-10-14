@@ -1,5 +1,6 @@
 import type { PullFile } from "../github/client.js";
 import { reviewResult, type ReviewDetail, type StoredComment } from "../review/archive.js";
+import { formatFindingType } from "../review/schema.js";
 import type { DureviewService } from "../service.js";
 import { fileStatusMark, placeReview, type PlacedLine } from "./diff.js";
 import type {
@@ -135,6 +136,7 @@ function commentView(comment: StoredComment): DetailCommentView {
     ordinal: comment.ordinal,
     anchor: `c-${comment.ordinal}`,
     priority: comment.priority,
+    typeLabel: formatFindingType({ type: comment.findingType, subtype: comment.subtype }),
     tags: commentTags(comment.kind, comment.category),
     confidence: `${Math.round(comment.confidence * 100)}%`,
     title: comment.title,
@@ -179,6 +181,7 @@ function summaryView(review: ReviewDetail, now: number): DetailSummary {
     findings: review.comments.map((comment) => ({
       anchor: `c-${comment.ordinal}`,
       priority: comment.priority,
+      typeLabel: formatFindingType({ type: comment.findingType, subtype: comment.subtype }),
       title: comment.title,
       where: `${comment.path}:${comment.startLine}`,
     })),
@@ -219,6 +222,7 @@ function settingsView(review: ReviewDetail): DetailSettings {
     { key: "profile", value: policy.profile },
     { key: "language", value: policy.language },
     { key: "summary", value: policy.summary ? "true" : "false" },
+    { key: "post informational", value: policy.postInformational ? "true" : "false" },
     { key: "min confidence", value: String(policy.minConfidence) },
     { key: "inline through", value: `P${policy.minInlinePriority}` },
     { key: "P2 inline confidence", value: String(policy.p2InlineMinConfidence) },

@@ -19,6 +19,8 @@ export type StatsSnapshot = {
   failures: Array<{ reason: string; count: number }>;
   priorities: { p0: number; p1: number; p2: number; p3: number; unknownReviews: number };
   categories: Array<{ category: string; count: number }>;
+  /** Bug, flag, security, and unknown for rows stored before a type was recorded. */
+  types: Array<{ type: string; count: number }>;
   verdicts: { block: number; fixRecommended: number; clean: number; unknown: number };
   trend: Array<{
     day: string;
@@ -237,6 +239,27 @@ export function queryReviewStats(db: DatabaseSync, filter: StatsQuery): StatsSna
        LIMIT 8`,
     )
     .all(...scope.params);
+  const types = db
+    .prepare(
+      `SELECT finding_type, COUNT(*) AS n FROM (
+         SELECT CASE
+           WHEN f.finding_type IN ('bug', 'flag', 'security') THEN f.finding_type
+           ELSE 'unknown'
+         END AS finding_type
+         FROM findings f
+         JOIN reviews r ON r.task_id = f.task_id
+         WHERE ${scope.clause}
+         UNION ALL
+         SELECT 'unknown' AS finding_type
+         FROM comments c
+         JOIN reviews r ON r.task_id = c.task_id
+         WHERE ${scope.clause}
+           AND NOT EXISTS (SELECT 1 FROM findings f WHERE f.task_id = c.task_id)
+       )
+       GROUP BY finding_type
+       ORDER BY n DESC, finding_type`,
+    )
+    .all(...scope.params, ...scope.params);
   const categories = db
     .prepare(
       `SELECT category, COUNT(*) AS n FROM (
@@ -283,6 +306,9 @@ export function queryReviewStats(db: DatabaseSync, filter: StatsQuery): StatsSna
     },
     categories: categories
       .map((row) => ({ category: text(row, "category") || "unknown", count: int(row, "n") }))
+      .filter((row) => row.count > 0),
+    types: types
+      .map((row) => ({ type: text(row, "finding_type") || "unknown", count: int(row, "n") }))
       .filter((row) => row.count > 0),
     verdicts: {
       block: int(verdicts, "block"),

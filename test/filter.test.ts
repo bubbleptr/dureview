@@ -197,6 +197,7 @@ Flag missing error handling.
       ignore: ["vendor/**", "generated/**"],
       language: "en",
       summary: false,
+      postInformational: false,
       trigger: "manual",
       drafts: false,
     });

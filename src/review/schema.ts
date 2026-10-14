@@ -6,15 +6,30 @@ import { Value } from "typebox/value";
 /** Highest number of findings stored from one model call. Inline posting is capped separately. */
 export const MAX_FINDINGS = 30;
 
-const nullableString = (maxLength: number) => Type.Union([Type.String({ maxLength }), Type.Null()]);
+const nullableString = (maxLength: number, description?: string) =>
+  Type.Union([Type.String({ maxLength, ...(description ? { description } : {}) }), Type.Null()]);
 
 export const FindingSchema = Type.Object(
   {
     title: Type.String({ maxLength: 80, minLength: 1, description: "At most 80 characters. Say what to fix." }),
     priority: Type.Integer({ minimum: 0, maximum: 3, description: "0 = P0, 1 = P1, 2 = P2, 3 = P3" }),
     kind: StringEnum(["bug", "security", "investigate"], {
-      description: "bug or security when you can name a trigger. investigate when you only suspect it.",
+      description: "bug or security when you can name a trigger. investigate when you only suspect it. Match type: bug, security, or flag.",
     }),
+    type: Type.Optional(
+      Type.String({
+        maxLength: 40,
+        description:
+          "Orthogonal to priority. bug (confirmed error), flag (annotation), or security (vulnerability). Required on new reviews.",
+      }),
+    ),
+    subtype: Type.Optional(
+      Type.String({
+        maxLength: 40,
+        description:
+          "bug: severe or non_severe. flag: investigate or informational. security: critical or warning.",
+      }),
+    ),
     category: StringEnum(
       [
         "correctness",
@@ -47,7 +62,9 @@ export const FindingSchema = Type.Object(
       }),
     ),
     suggestion: Type.Optional(nullableString(8_000)),
-    cwe: Type.Optional(nullableString(40)),
+    cwe: Type.Optional(
+      nullableString(40, "CWE id such as CWE-89 for a security finding, or null when you do not know it."),
+    ),
     rule_ref: Type.Optional(nullableString(200)),
     confidence: Type.Number({ minimum: 0, maximum: 1 }),
   },
@@ -71,6 +88,9 @@ export const ReviewSubmissionSchema = Type.Object(
 export type Verdict = "block" | "fix_recommended" | "clean";
 export type Priority = 0 | 1 | 2 | 3;
 export type FindingKind = "bug" | "security" | "investigate";
+/** Devin-style finding class. Orthogonal to P0–P3 priority and to category. */
+export type FindingType = "bug" | "flag" | "security";
+export type FindingSubtype = "severe" | "non_severe" | "investigate" | "informational" | "critical" | "warning";
 export type FindingCategory =
   | "correctness"
   | "security"
@@ -85,6 +105,9 @@ export type Finding = {
   title: string;
   priority: Priority;
   kind: FindingKind;
+  /** bug, flag, or security. Orthogonal to priority. */
+  type: FindingType;
+  subtype: FindingSubtype;
   category: FindingCategory;
   path: string;
   startLine: number;
@@ -113,7 +136,7 @@ type ParsedSubmission = Static<typeof ReviewSubmissionSchema>;
 export function parseReviewSubmission(raw: unknown): ReviewSubmission {
   let parsed: ParsedSubmission;
   try {
-    parsed = Value.Parse(ReviewSubmissionSchema, raw);
+    parsed = Value.Parse(ReviewSubmissionSchema, coerceSubmission(raw));
   } catch (error) {
     throw new Error(`submit_review payload is invalid: ${formatParseError(error)}`);
   }
@@ -151,10 +174,19 @@ function normalizeFinding(raw: ParsedSubmission["findings"][number]): Finding {
   }
   const title = raw.title.trim();
   const suggestion = cleanOptionalText(raw.suggestion);
+  const priority = asPriority(raw.priority);
+  const classification = resolveFindingClassification({
+    kind: raw.kind,
+    priority,
+    type: raw.type,
+    subtype: raw.subtype,
+  });
   return {
     title,
-    priority: asPriority(raw.priority),
-    kind: asKind(raw.kind),
+    priority,
+    kind: classification.kind,
+    type: classification.type,
+    subtype: classification.subtype,
     category: asCategory(raw.category),
     path,
     startLine: raw.start_line,
@@ -163,7 +195,7 @@ function normalizeFinding(raw: ParsedSubmission["findings"][number]): Finding {
     trigger: raw.trigger.trim(),
     evidence: (raw.evidence ?? []).map((item) => item.trim()).filter((item) => item.length > 0),
     suggestion,
-    cwe: cleanOptionalText(raw.cwe),
+    cwe: normalizeCwe(cleanOptionalText(raw.cwe)),
     ruleRef: cleanOptionalText(raw.rule_ref),
     confidence: raw.confidence,
     fingerprint: findingFingerprint({ path, category: raw.category, title }),
@@ -180,9 +212,179 @@ function asPriority(value: number): Priority {
   throw new Error("submit_review payload is invalid: priority must be 0, 1, 2, or 3.");
 }
 
-function asKind(value: string): FindingKind {
+const SUBTYPES: Record<FindingType, readonly FindingSubtype[]> = {
+  bug: ["severe", "non_severe"],
+  flag: ["investigate", "informational"],
+  security: ["critical", "warning"],
+};
+
+const TYPE_LABELS = {
+  en: { bug: "Bug", flag: "Flag", security: "Security" },
+  zh: { bug: "缺陷", flag: "标注", security: "安全" },
+} as const;
+
+const SUBTYPE_LABELS = {
+  en: {
+    severe: "severe",
+    non_severe: "non-severe",
+    investigate: "investigate",
+    informational: "informational",
+    critical: "Critical",
+    warning: "Warning",
+  },
+  zh: {
+    severe: "严重",
+    non_severe: "一般",
+    investigate: "待核实",
+    informational: "说明",
+    critical: "严重",
+    warning: "警告",
+  },
+} as const;
+
+/** True for a flag that explains behavior or confirms correctness and asks for no change. */
+export function isInformational(finding: { type?: string | null; subtype?: string | null }): boolean {
+  return finding.type === "flag" && finding.subtype === "informational";
+}
+
+/**
+ * Fill type and subtype when an older or malformed payload omits them or pairs them badly.
+ * Kind follows type: bug, security, or investigate for either flag subtype.
+ * Priority only chooses the default subtype. It does not choose the type.
+ */
+export function resolveFindingClassification(input: {
+  kind: string;
+  priority: number;
+  type?: string | null;
+  subtype?: string | null;
+}): { type: FindingType; subtype: FindingSubtype; kind: FindingKind } {
+  const kind = parseKind(input.kind) ?? "bug";
+  const priority = input.priority === 0 || input.priority === 1 || input.priority === 2 || input.priority === 3 ? input.priority : 1;
+  const typeToken = token(input.type);
+  const subtypeToken = token(input.subtype);
+  let type = parseType(typeToken);
+  const hinted = parseSubtype(subtypeToken);
+  if (!type && hinted) type = typeForSubtype(hinted);
+  if (!type) type = typeForKind(kind);
+  const subtype = hinted && subtypeMatches(type, hinted) ? hinted : defaultSubtype(type, priority, kind);
+  return { type, subtype, kind: kindForType(type) };
+}
+
+/**
+ * `P1 · Bug (severe)`, `P0 · Security · Critical · CWE-89`.
+ * Returns null when the stored type is missing, which is how rows from before this column render.
+ */
+export function formatFindingType(input: {
+  type?: string | null;
+  subtype?: string | null;
+  cwe?: string | null;
+  priority?: number | null;
+  language?: "en" | "zh";
+}): string | null {
+  const type = parseType(token(input.type));
+  const subtype = parseSubtype(token(input.subtype));
+  if (!type || !subtype || !subtypeMatches(type, subtype)) return null;
+  const language = input.language === "zh" ? "zh" : "en";
+  const typeLabel = TYPE_LABELS[language][type];
+  const subtypeLabel = SUBTYPE_LABELS[language][subtype];
+  const body = type === "security" ? `${typeLabel} · ${subtypeLabel}` : `${typeLabel} (${subtypeLabel})`;
+  const cwe = normalizeCwe(input.cwe);
+  const prefix =
+    input.priority === 0 || input.priority === 1 || input.priority === 2 || input.priority === 3
+      ? `P${input.priority} · `
+      : "";
+  return `${prefix}${body}${cwe ? ` · ${cwe}` : ""}`;
+}
+
+/** `CWE-89`, `cwe-89`, and `89` become `CWE-89`. Anything else is dropped. */
+export function normalizeCwe(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const match = /^(?:CWE[-\s:]*)?(\d{1,5})$/i.exec(trimmed);
+  const digits = match?.[1];
+  if (!digits) return null;
+  const id = String(Number(digits));
+  if (id === "0") return null;
+  return `CWE-${id}`;
+}
+
+function coerceSubmission(raw: unknown): unknown {
+  if (!isRecord(raw) || !Array.isArray(raw.findings)) return raw;
+  return {
+    ...raw,
+    findings: raw.findings.map((item) => {
+      if (!isRecord(item)) return item;
+      const next: Record<string, unknown> = { ...item };
+      if (next.type !== undefined && typeof next.type !== "string") delete next.type;
+      if (next.subtype !== undefined && typeof next.subtype !== "string") delete next.subtype;
+      if (next.cwe !== undefined && next.cwe !== null && typeof next.cwe !== "string") {
+        next.cwe = typeof next.cwe === "number" && Number.isInteger(next.cwe) ? String(next.cwe) : null;
+      }
+      return next;
+    }),
+  };
+}
+
+function parseKind(value: string): FindingKind | null {
   if (value === "bug" || value === "security" || value === "investigate") return value;
-  throw new Error("submit_review payload is invalid: kind must be bug, security, or investigate.");
+  return null;
+}
+
+function parseType(value: string): FindingType | null {
+  if (value === "bug" || value === "flag" || value === "security") return value;
+  return null;
+}
+
+function parseSubtype(value: string): FindingSubtype | null {
+  if (
+    value === "severe" ||
+    value === "non_severe" ||
+    value === "investigate" ||
+    value === "informational" ||
+    value === "critical" ||
+    value === "warning"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function subtypeMatches(type: FindingType, subtype: FindingSubtype): boolean {
+  return SUBTYPES[type].includes(subtype);
+}
+
+function typeForSubtype(subtype: FindingSubtype): FindingType {
+  if (subtype === "severe" || subtype === "non_severe") return "bug";
+  if (subtype === "critical" || subtype === "warning") return "security";
+  return "flag";
+}
+
+function typeForKind(kind: FindingKind): FindingType {
+  if (kind === "security") return "security";
+  if (kind === "investigate") return "flag";
+  return "bug";
+}
+
+function kindForType(type: FindingType): FindingKind {
+  if (type === "security") return "security";
+  if (type === "flag") return "investigate";
+  return "bug";
+}
+
+function defaultSubtype(type: FindingType, priority: Priority, kind: FindingKind): FindingSubtype {
+  if (type === "bug") return priority <= 1 ? "severe" : "non_severe";
+  if (type === "security") return priority <= 1 ? "critical" : "warning";
+  return kind === "investigate" ? "investigate" : "informational";
+}
+
+function token(value: string | null | undefined): string {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function asCategory(value: string): FindingCategory {

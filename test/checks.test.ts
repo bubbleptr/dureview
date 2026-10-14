@@ -94,6 +94,15 @@ describe("check conclusions", () => {
       title: "Maybe billed twice",
       confidence: 0.8,
     });
+    const note = sampleFinding({
+      priority: 0,
+      type: "flag",
+      subtype: "informational",
+      title: "Explains the early return",
+      confidence: 0.9,
+      trigger: "",
+    });
+    expect(reviewCheckOutcome({ findings: [note], diff, policy }).title).toBe("No findings");
     const suspectedCheck = reviewCheckOutcome({ findings: [suspected], diff, policy: { ...policy, language: "zh" } });
     expect(suspectedCheck.conclusion).toBe("failure");
     expect(suspectedCheck.summary).toContain("未发到行内评论：");

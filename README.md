@@ -158,7 +158,7 @@ A comment on the pull request whose first line is `/dureview` (leading and trail
 
 The same `owner/repo#number@sha` is not reviewed twice by an automatic event. A later push (a new SHA) is a new review when `trigger` is `auto`. What it posts depends on `summary` in `.dureview.md` (default `false`).
 
-With `summary: false`, dureview posts one inline comment per finding and nothing else. A review with no findings, and no earlier inline comment to resolve, writes nothing to the conversation. The `dureview` check run on the head commit still completes as success, which is how you can see that the review finished. It still reads existing inline comments so a finding that disappeared can be closed. A P0 or P1 inline finding submits the review as **Request changes**. Any other posted finding uses **Comment**. dureview does not approve. GitHub rejects Request changes when the token's user opened the pull request; dureview logs that and submits Comment instead. `investigate` findings and findings with an empty trigger are not posted. A finding that was posted before and is absent on the next push has its review thread resolved. If the thread cannot be resolved, dureview replies `fixed in <sha>` (or `已在 <sha> 修复` when `language` is `zh`).
+With `summary: false`, dureview posts one inline comment per finding and nothing else. A review with no findings, and no earlier inline comment to resolve, writes nothing to the conversation. The `dureview` check run on the head commit still completes as success, which is how you can see that the review finished. It still reads existing inline comments so a finding that disappeared can be closed. A P0 or P1 inline finding submits the review as **Request changes**. Any other posted finding uses **Comment**. An informational flag never requests changes, even at P0. dureview does not approve. GitHub rejects Request changes when the token's user opened the pull request; dureview logs that and submits Comment instead. `investigate` findings and findings with an empty trigger are not posted. Informational flags are stored and are not posted unless `post_informational` is true. A finding that was posted before and is absent on the next push has its review thread resolved. If the thread cannot be resolved, dureview replies `fixed in <sha>` (or `已在 <sha> 修复` when `language` is `zh`).
 
 With `summary: true`, a later push updates the existing summary comment. Inline comments are posted only for findings that were not already commented. A finding that disappears is marked fixed in the summary. The review event stays Comment.
 
@@ -175,7 +175,7 @@ The default prompt is adversarial and disciplined. It looks for real bugs, secur
 `submit_review` returns one JSON document:
 
 - `verdict`: `block`, `fix_recommended`, or `clean`, plus a short `verdict_reason`, an optional `overall_confidence` from 0 to 1, and up to six `checked` risk areas.
-- `findings`: each has a title, `priority` `0`–`3` (P0–P3), `kind` (`bug`, `security`, or `investigate`), `category` (`correctness`, `security`, `data_integrity`, `concurrency`, `error_handling`, `performance`, `api_contract`, `test_gap`), `path`, `start_line`, `end_line`, `body`, `trigger`, `confidence`, and an optional `suggestion` that can replace that line range. `evidence` lists `path:line` locations when another call site is affected. `cwe` and `rule_ref` are optional.
+- `findings`: each has a title, `priority` `0`–`3` (P0–P3), `type` and `subtype`, `kind` (`bug`, `security`, or `investigate`), `category` (`correctness`, `security`, `data_integrity`, `concurrency`, `error_handling`, `performance`, `api_contract`, `test_gap`), `path`, `start_line`, `end_line`, `body`, `trigger`, `confidence`, and an optional `suggestion` that can replace that line range. `type` is orthogonal to priority: `bug` (`severe` or `non_severe`), `flag` (`investigate` or `informational`), or `security` (`critical` or `warning`). `evidence` lists `path:line` locations when another call site is affected. `cwe` is an optional id such as `CWE-89` on a security finding. `rule_ref` is optional. A payload that omits or garbles `type` or `subtype` is kept: the server fills them from `kind` and priority instead of rejecting the review.
 
 The server computes `fingerprint` as the first 12 hex characters of SHA-256 over the path, category, and normalized title. The model does not choose it. That fingerprint is how a later push recognizes the same finding.
 
@@ -191,9 +191,9 @@ The server computes `fingerprint` as the first 12 hex characters of SHA-256 over
 
 The summary, task, and inline markers are used when `summary: true`. The finding marker is embedded in each inline comment when `summary: false`, and the fixed marker is embedded in a reply when a thread could not be resolved. If the process dies after GitHub accepted a write, resume sees the marker and does not post a second copy. The summary marker is per pull request, so the next push updates that comment instead of adding another.
 
-Before anything is posted, the server drops findings below the confidence floor, skips lockfiles, generated files, binaries, and `dist/` (plus any globs in `.dureview.md`), and refuses paths outside the repository. `investigate` findings, P3 findings, and P2 findings under the P2 confidence bar are not inline. So are bug or security findings with an empty trigger. A line range that does not overlap the diff is not inline either. Everything else can be an inline comment, at most `max_inline` per run, highest priority first. A GitHub suggestion block is included only when the suggestion replaces that exact diff range.
+Before anything is posted, the server drops findings below the confidence floor, skips lockfiles, generated files, binaries, and `dist/` (plus any globs in `.dureview.md`), and refuses paths outside the repository. `investigate` findings, P3 findings, and P2 findings under the P2 confidence bar are not inline. So are bug or security findings with an empty trigger. Informational flags are not posted unless `post_informational` is true, and they never make the review event `REQUEST_CHANGES`. A line range that does not overlap the diff is not inline either. Everything else can be an inline comment, at most `max_inline` per run, highest priority first. A GitHub suggestion block is included only when the suggestion replaces that exact diff range. Inline comments and the summary show the type next to the priority, for example `P1 · Bug (severe)` or `P0 · Security · Critical · CWE-89`.
 
-When `summary: false` (the default), those non-inline findings are dropped. Nothing is posted when none of the findings are inline and no earlier dureview inline comment needs to be resolved. Inline comments are one pull request review on `side: RIGHT`. The event is `REQUEST_CHANGES` when any of those comments is P0 or P1, and `COMMENT` otherwise. A multi-line finding sets `start_line`. The review body is empty. Each comment ends with the finding marker. On a later push, dureview reads existing inline comments, skips fingerprints that are already open, and calls GitHub's GraphQL `resolveReviewThread` for a fingerprint that is gone. If that mutation fails, or the thread id is missing, it replies on the comment instead.
+When `summary: false` (the default), those non-inline findings are dropped. Nothing is posted when none of the findings are inline and no earlier dureview inline comment needs to be resolved. Inline comments are one pull request review on `side: RIGHT`. The event is `REQUEST_CHANGES` when any of those comments is P0 or P1 and is not an informational flag, and `COMMENT` otherwise. A multi-line finding sets `start_line`. The review body is empty. Each comment ends with the finding marker. On a later push, dureview reads existing inline comments, skips fingerprints that are already open, and calls GitHub's GraphQL `resolveReviewThread` for a fingerprint that is gone. If that mutation fails, or the thread id is missing, it replies on the comment instead.
 
 When `summary: true`, non-inline findings go in the summary: `investigate`, missing triggers, P3, low-confidence P2, and out-of-range lines each have a collapsed section. The summary comment is updated in place. Its heading is the verdict (block, fix recommended, or clean), in the configured language. The body lists actionable findings by severity, then the collapsed sections, then what was checked. A clean review with no findings shows that checked list. Findings from the previous push that are gone are listed as fixed. The inline review uses `event: COMMENT`. Its body records the fingerprints that were posted, so a later push does not comment on them again. Labels, verdict words, and the fixed note follow `language` in both modes. The model is told to write finding titles, bodies, triggers, the verdict reason, and the checked list in that language.
 
@@ -209,6 +209,7 @@ trigger: auto
 drafts: false
 language: en
 summary: false
+post_informational: false
 min_confidence: 0.5
 min_inline_priority: 2
 p2_inline_min_confidence: 0.7
@@ -232,6 +233,7 @@ ignore:
 | `profile` | `default` | `quiet` inlines P0–P1 only. `default` also inlines P2 when confidence is at least `p2_inline_min_confidence`. `loud` uses the same priorities and lowers that P2 bar to `min_confidence`. |
 | `language` | `en` | `en` or `zh`. The model writes finding titles and bodies in this language. Labels, verdict words, and fixed notes use it too. |
 | `summary` | `false` | When `true`, also post and update one summary comment, and keep non-inline findings there. When `false`, post one inline comment per finding and nothing else. |
+| `post_informational` | `false` | When `true`, informational flags may be posted. They still do not request changes. When `false`, they stay in the database and are left off GitHub. |
 | `min_confidence` | `0.5` | Drop findings below this. `0.5` is kept. |
 | `min_inline_priority` | `1` for quiet, `2` otherwise | Highest priority number that may be inline. `0` is P0 only, `1` is P0–P1, `2` is P0–P2, `3` also allows P3. `investigate` is never inline. When `summary` is false, findings that are not inline are not posted. |
 | `p2_inline_min_confidence` | `0.7`, or `0.5` when the profile is `loud` | P2 confidence required for an inline comment. |
@@ -264,7 +266,7 @@ Metadata, posted comments, every finding, model usage, and the failure reason ar
 
 ## Statistics
 
-`GET /ui` is the overview and uses the same token as the review list. `GET /ui/stats` redirects to it. The page is a row of counts (reviews, average and p95 duration, findings, average tokens, estimated cost), a daily token chart split by model, bar charts for priority, category, verdict, and failure reasons, then tables for the most expensive pull requests, the busiest repositories, and the pull requests with the most findings. Filters are the last 24 hours, 7 days (the default), 30 days, or all time, plus one repository. Aggregates run in SQL.
+`GET /ui` is the overview and uses the same token as the review list. `GET /ui/stats` redirects to it. The page is a row of counts (reviews, average and p95 duration, findings, average tokens, estimated cost), a daily token chart split by model, bar charts for priority, type, category, verdict, and failure reasons, then tables for the most expensive pull requests, the busiest repositories, and the pull requests with the most findings. Type counts are bug, flag, and security. A finding stored before that column existed is unknown. Filters are the last 24 hours, 7 days (the default), 30 days, or all time, plus one repository. Aggregates run in SQL.
 
 Day buckets follow the browser's timezone. The page reloads with a `tz` offset in minutes so `strftime` groups by local calendar days. Times elsewhere on the review pages stay in local time as well. A review with no recorded usage is left out of token averages and the trend. It is not counted as zero. A provider that reports zero tokens or a zero cost is stored as zero. The daily series is the `model` column. A stored thinking level stays on the review and does not split or rename that series.
 
@@ -283,7 +285,7 @@ A run that fails after the model has answered still stores those numbers. A fail
 
 ## Findings table
 
-The `comments` table is still the comments drawn on the diff page, and only for a completed review. The `findings` table is a separate row for every finding the model returned, including ones that were not posted inline: `investigate`, P3, low confidence, out of range, ignored paths, overflow past `max_inline`, and fingerprints already on the pull request. There is no clustering UI. The table is there so findings can be grouped later.
+The `comments` table is still the comments drawn on the diff page, and only for a completed review. It stores `finding_type` and `subtype` too, so the detail page can show the type next to the priority. Those columns are null on comments written before types existed. The `findings` table is a separate row for every finding the model returned, including ones that were not posted inline: `investigate`, P3, low confidence, out of range, ignored paths, overflow past `max_inline`, and fingerprints already on the pull request. There is no clustering UI. The table is there so findings can be grouped later.
 
 | Column | Meaning |
 | --- | --- |
@@ -293,6 +295,7 @@ The `comments` table is still the comments drawn on the diff page, and only for 
 | `title`, `body` | Finding text. |
 | `trigger_text` | The trigger the model cited. |
 | `priority`, `kind`, `category` | P0–P3, `bug` / `security` / `investigate`, and the finding category. An empty category is stored as `unknown`. |
+| `finding_type`, `subtype` | `bug` (`severe`, `non_severe`), `flag` (`investigate`, `informational`), or `security` (`critical`, `warning`). Null on rows written before the column existed. `category` is unchanged. |
 | `cwe`, `rule_ref` | Optional identifiers from the model. |
 | `confidence` | Model confidence, 0–1. |
 | `path`, `start_line`, `end_line` | File and line range. |
@@ -302,7 +305,7 @@ The `comments` table is still the comments drawn on the diff page, and only for 
 | `skip_reason` | Why it was not a new inline comment. Null when it was posted inline. A summary mention keeps the skip reason and sets `posted` to 1. |
 | `created_at` | When the review finished, ISO-8601. |
 
-`skip_reason` is one of `low_confidence`, `ignored`, `out_of_range`, `investigate`, `empty_trigger`, `priority`, `p2_confidence`, `overflow`, `already_inlined`, or `publish_failed`. `publish_failed` means the run reached posting and GitHub was not written, so a finding that would have been posted is stored with `posted` 0. A resume that finds this task's own inline comment still stores `posted` 1. A comment left by an earlier task stays `already_inlined`.
+`skip_reason` is one of `low_confidence`, `ignored`, `out_of_range`, `investigate`, `empty_trigger`, `priority`, `p2_confidence`, `overflow`, `already_inlined`, `publish_failed`, or `informational`. `informational` means the flag was stored and not posted because `post_informational` is false. `publish_failed` means the run reached posting and GitHub was not written, so a finding that would have been posted is stored with `posted` 0. A resume that finds this task's own inline comment still stores `posted` 1. A comment left by an earlier task stays `already_inlined`.
 
 Indexes: `findings_task` (`task_id`), `findings_repo` (`owner`, `repo`, `number`), `findings_category` (`category`, `priority`), `findings_fingerprint` (`fingerprint`), `findings_created` (`created_at`), `findings_language` (`language`), `findings_path` (`path`). `reviews_repo_started` covers repository and time filters on the review rows.
 

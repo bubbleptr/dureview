@@ -71,10 +71,18 @@ export function OverviewPage({ model, status = null }: { model: StatsPageModel; 
         <p className="text-xs leading-5 text-muted-foreground">{model.usageNote}</p>
       </FigureBlock>
 
-      <div className="grid grid-cols-1 gap-10 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-10 lg:grid-cols-2">
         <FigureBlock title="Priority" caption="Share of stored findings. Bar length is the count.">
           <ClientChart render={(charts) => <charts.DistributionChart rows={model.priorities} color="var(--chart-1)" />} />
           <BarDataTable caption="Findings by priority" rows={model.priorities} />
+        </FigureBlock>
+        <FigureBlock title="Type" caption="Bug, flag, and security. Unknown was stored before types existed. Bar length is the count.">
+          {model.types.every((row) => row.count === 0) ? (
+            <Empty>No findings in this range.</Empty>
+          ) : (
+            <ClientChart render={(charts) => <charts.DistributionChart rows={model.types} color="var(--chart-1)" />} />
+          )}
+          <BarDataTable caption="Findings by type" rows={model.types} />
         </FigureBlock>
         <FigureBlock title="Category" caption="Includes findings that were not posted. Bar length is the count.">
           {model.categories.length === 0 ? (

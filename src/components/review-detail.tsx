@@ -589,6 +589,7 @@ function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: b
     >
       <header className="mb-1 flex flex-wrap items-baseline gap-2">
         <Badge className={PRIORITY_BADGE[comment.priority] ?? PRIORITY_BADGE[3]}>P{comment.priority}</Badge>
+        {comment.typeLabel ? <Badge variant="outline">{comment.typeLabel}</Badge> : null}
         {comment.tags.map((tag) => (
           <span key={tag} className="text-xs text-muted-foreground">
             {tag}
@@ -658,6 +659,7 @@ function CompleteSummary({ summary }: { summary: Extract<DetailSummary, { mode: 
             <li key={finding.anchor} className="border-t">
               <a className="flex flex-wrap items-baseline gap-1.5 px-3 py-1.5 text-sm hover:bg-muted/50" href={`#${finding.anchor}`}>
                 <Badge className={PRIORITY_BADGE[finding.priority] ?? PRIORITY_BADGE[3]}>P{finding.priority}</Badge>
+                {finding.typeLabel ? <Badge variant="outline">{finding.typeLabel}</Badge> : null}
                 <span>{finding.title}</span>
                 <span className="font-mono text-xs text-muted-foreground">{finding.where}</span>
               </a>

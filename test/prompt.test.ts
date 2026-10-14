@@ -7,6 +7,9 @@ describe("review prompt", () => {
   it("keeps the adversarial review limited to issues this change introduces", () => {
     expect(ADVERSARIAL_ROLE).toContain("this pull request introduces");
     expect(ADVERSARIAL_ROLE).toContain("pre-existing bugs");
+    expect(ADVERSARIAL_ROLE).toContain("orthogonal to type");
+    expect(ADVERSARIAL_ROLE).toContain("informational");
+    expect(ADVERSARIAL_ROLE).toContain("CWE-89");
     expect(ADVERSARIAL_ROLE).toContain("investigate");
     expect(ADVERSARIAL_ROLE).toContain("concrete trigger");
     expect(ADVERSARIAL_ROLE).toContain("Do not inflate priority");

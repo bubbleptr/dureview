@@ -41,6 +41,26 @@ describe("finding records", () => {
     expect(byTitle.get("Already")).toMatchObject({ posted: false, skipReason: "already_inlined" });
   });
 
+  it("stores informational flags and posts them only when the setting is on", () => {
+    const note = sampleFinding({
+      title: "Amount check is intentional",
+      type: "flag",
+      subtype: "informational",
+      priority: 0,
+      confidence: 0.95,
+      trigger: "",
+    });
+    const held = postingsForReview({ findings: [note], diff: FIXTURE_DIFF, policy: defaultPolicy() });
+    expect(recordedFindings([note], held)[0]).toMatchObject({ posted: false, skipReason: "informational" });
+
+    const posted = postingsForReview({
+      findings: [note],
+      diff: FIXTURE_DIFF,
+      policy: { ...defaultPolicy(), postInformational: true },
+    });
+    expect(recordedFindings([note], posted)[0]).toMatchObject({ posted: true, skipReason: null });
+  });
+
   it("marks summary mentions as posted while keeping the inline skip reason", () => {
     const policy = { ...defaultPolicy(), summary: true };
     const outside = sampleFinding({ title: "Other file", path: "src/other.ts", priority: 1, confidence: 0.9 });

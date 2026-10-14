@@ -24,6 +24,7 @@ export async function buildStatsPage(
     cards: cards(snapshot),
     trend: trend(snapshot),
     priorities: priorityBars(snapshot),
+    types: typeBars(snapshot),
     categories: shareBars(
       snapshot.categories.map((row) => ({ name: labelize(row.category), count: row.count })),
     ),
@@ -111,6 +112,18 @@ function priorityBars(snapshot: StatsSnapshot): StatsPageModel["priorities"] {
     { name: "P2", count: snapshot.priorities.p2 },
     { name: "P3", count: snapshot.priorities.p3 },
   ];
+  return shareBars(rows);
+}
+
+function typeBars(snapshot: StatsSnapshot): StatsPageModel["types"] {
+  const count = (type: string) => snapshot.types.find((row) => row.type === type)?.count ?? 0;
+  const rows = [
+    { name: "Bug", count: count("bug") },
+    { name: "Flag", count: count("flag") },
+    { name: "Security", count: count("security") },
+  ];
+  const unknown = count("unknown");
+  if (unknown > 0) rows.push({ name: "Unknown", count: unknown });
   return shareBars(rows);
 }
 

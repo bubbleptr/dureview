@@ -26,7 +26,16 @@ export type GitHubRepo = {
   installationId: number | null;
 };
 
-export type { Finding, FindingCategory, FindingKind, Priority, ReviewSubmission, Verdict } from "./review/schema.js";
+export type {
+  Finding,
+  FindingCategory,
+  FindingKind,
+  FindingSubtype,
+  FindingType,
+  Priority,
+  ReviewSubmission,
+  Verdict,
+} from "./review/schema.js";
 
 /** Stable dedupe key: the same pull request head is not reviewed twice by automatic events. */
 export function reviewKey(request: Pick<ReviewRequest, "owner" | "repo" | "number" | "sha">): string {

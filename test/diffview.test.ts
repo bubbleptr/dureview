@@ -304,6 +304,8 @@ function stored(finding: ReturnType<typeof sampleFinding>, ordinal = 0): StoredC
     endLine: finding.endLine,
     priority: finding.priority,
     kind: finding.kind,
+    findingType: finding.type,
+    subtype: finding.subtype,
     category: finding.category,
     title: finding.title,
     body: finding.body,
