@@ -11,8 +11,8 @@ import type { GitHub } from "./github/client.js";
 import { verifyGithubSignature } from "./github/signature.js";
 import { parseWebhook, type ReviewCommand } from "./github/webhook.js";
 import { log } from "./log.js";
-import { readBaseDureview, type RepoCheckout } from "./review/checkout.js";
-import { loadReviewFilePair, type ReviewFileContents } from "./ui/file-contents.js";
+import { readBaseDureview, safeRepoPath, type RepoCheckout } from "./review/checkout.js";
+import { loadReviewFilePair, matchReviewedFile, type ReviewFileContents } from "./ui/file-contents.js";
 import { ReviewArchive, REVIEWS_DB_FILE, type ReviewDetail, type ReviewFilter, type ReviewList } from "./review/archive.js";
 import type { PullFile } from "./github/client.js";
 import { ReviewLog, type ReviewLogEntry } from "./review/history.js";
@@ -166,7 +166,10 @@ export class DureviewService {
   }
 
   /**
-   * Full old and new text for one changed file.
+   * Full old and new text for one changed file in this review's diff.
+   * The path must be a pull-request filename, or the previous filename of a rename.
+   * Anything else is rejected: 400 for a traversal or a previous path that is not
+   * that file's other name, 404 when the task or file is not in the diff.
    * The local checkout is preferred. GitHub is used when that checkout is gone.
    * Binary files, oversized files, and a failed lookup return `unavailable`.
    */
@@ -175,9 +178,34 @@ export class DureviewService {
     filePath: string,
     previousPath: string | null,
     signal: AbortSignal,
-  ): Promise<ReviewFileContents> {
+  ): Promise<ReviewFileContents | { kind: "rejected"; status: 400 | 404 }> {
+    if (!safeRepoPath(filePath) || (previousPath !== null && !safeRepoPath(previousPath))) {
+      return { kind: "rejected", status: 400 };
+    }
     const review = await this.archive.get(taskId);
-    if (!review) return { kind: "unavailable" };
+    if (!review) return { kind: "rejected", status: 404 };
+    let files: PullFile[];
+    try {
+      files = await this.github.listPullFiles(
+        {
+          owner: review.owner,
+          repo: review.repo,
+          number: review.number,
+          installationId: review.installationId,
+        },
+        signal,
+      );
+    } catch (error) {
+      if (signal.aborted) throw error;
+      log("error", "could not load pull request diff", {
+        repo: `${review.owner}/${review.repo}`,
+        pr: review.number,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { kind: "rejected", status: 404 };
+    }
+    const matched = matchReviewedFile(files, filePath, previousPath);
+    if (matched.kind === "rejected") return matched;
     return loadReviewFilePair({
       checkoutRoot: join(this.config.dataDir, "checkouts"),
       github: this.github,
@@ -186,8 +214,8 @@ export class DureviewService {
       installationId: review.installationId,
       sha: review.sha,
       baseSha: review.baseSha,
-      path: filePath,
-      previousPath,
+      path: matched.path,
+      previousPath: matched.previousPath,
       signal,
     });
   }

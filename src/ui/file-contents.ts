@@ -8,6 +8,40 @@ import {
   type CheckoutFile,
 } from "../review/checkout.js";
 
+export type ReviewedFile = { filename: string; previousFilename: string | null };
+
+/**
+ * The changed file a caller may read, or why the request is rejected.
+ * `path` must be that file's name, or its previous name when it was renamed.
+ * A supplied previous path must be the other name in that same pair.
+ */
+export function matchReviewedFile(
+  files: readonly ReviewedFile[],
+  path: string,
+  previousPath: string | null,
+): { kind: "file"; path: string; previousPath: string | null } | { kind: "rejected"; status: 400 | 404 } {
+  if (!safeRepoPath(path) || (previousPath !== null && !safeRepoPath(previousPath))) {
+    return { kind: "rejected", status: 400 };
+  }
+  const named = reviewedPair(files.find((file) => file.filename === path));
+  const renamed = reviewedPair(
+    files.find((file) => file.previousFilename === path && file.previousFilename !== file.filename),
+  );
+  const file = named ?? renamed;
+  if (!file) return { kind: "rejected", status: 404 };
+  if (previousPath !== null && previousPath !== file.path && previousPath !== file.previousPath) {
+    return { kind: "rejected", status: 400 };
+  }
+  return { kind: "file", path: file.path, previousPath: file.previousPath };
+}
+
+function reviewedPair(file: ReviewedFile | undefined): { path: string; previousPath: string | null } | null {
+  if (!file || !safeRepoPath(file.filename)) return null;
+  const previous = file.previousFilename && file.previousFilename !== file.filename ? file.previousFilename : null;
+  if (previous && !safeRepoPath(previous)) return null;
+  return { path: file.filename, previousPath: previous };
+}
+
 export type ReviewFileContents =
   | { kind: "files"; oldText: string | null; newText: string | null }
   | { kind: "unavailable" };

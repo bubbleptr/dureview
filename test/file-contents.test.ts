@@ -1,11 +1,15 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { hydratePartialDiff } from "@pierre/diffs";
+import { afterEach, describe, expect, it } from "vitest";
+import { ReviewArchive, REVIEWS_DB_FILE } from "../src/review/archive.js";
 import { CHECKOUT_FILE_BYTES } from "../src/review/checkout.js";
+import { gitDiffText } from "../src/ui/diff.js";
 import { toDiffFiles } from "../src/ui/diff-files.js";
-import { loadReviewFilePair } from "../src/ui/file-contents.js";
-import { MemoryGitHub, tempDataDir } from "./support.js";
+import { loadReviewFilePair, matchReviewedFile } from "../src/ui/file-contents.js";
+import { parseReviewPatch } from "../src/ui/review-presentation.js";
+import { BASE_SHA, MemoryGitHub, openTestService, SHA_A, tempDataDir } from "./support.js";
 
 describe("review file contents", () => {
   it("reads both sides from the local checkout and does not call GitHub", async () => {
@@ -80,11 +84,68 @@ describe("review file contents", () => {
       signal: AbortSignal.timeout(15_000),
     });
     expect(loaded).toEqual({ kind: "files", oldText: null, newText: "added\n" });
-    expect(toDiffFiles({ type: "change", name: "src/pay.ts" }, { oldText: null, newText: "added\n" })).toBeNull();
+    expect(toDiffFiles({ type: "change", name: "src/pay.ts" }, { oldText: null, newText: "added\n" })).toEqual({
+      oldFile: { name: "src/pay.ts", contents: "" },
+      newFile: { name: "src/pay.ts", contents: "added\n" },
+    });
+    expect(toDiffFiles({ type: "new", name: "src/pay.ts" }, { oldText: null, newText: "added\n" })).toEqual({
+      oldFile: { name: "src/pay.ts", contents: "" },
+      newFile: { name: "src/pay.ts", contents: "added\n" },
+    });
     expect(toDiffFiles({ type: "rename-pure", name: "src/pay.ts" }, { oldText: null, newText: "added\n" })).toEqual({
       oldFile: null,
       newFile: { name: "src/pay.ts", contents: "added\n" },
     });
+    expect(toDiffFiles({ type: "deleted", name: "src/old.ts" }, { oldText: "gone\n", newText: null })).toEqual({
+      oldFile: { name: "src/old.ts", contents: "gone\n" },
+      newFile: { name: "src/old.ts", contents: "" },
+    });
+    expect(toDiffFiles({ type: "change", name: "src/old.ts" }, { oldText: "gone\n", newText: null })).toEqual({
+      oldFile: { name: "src/old.ts", contents: "gone\n" },
+      newFile: { name: "src/old.ts", contents: "" },
+    });
+    expect(toDiffFiles({ type: "change", name: "src/pay.ts" }, { oldText: null, newText: null })).toBeNull();
+  });
+
+  it("hydrates an added file from an empty old side and a deleted file from an empty new side", () => {
+    const added = parseReviewPatch(
+      gitDiffText({
+        filename: "src/new.ts",
+        previousFilename: null,
+        status: "added",
+        patch: "@@ -0,0 +1 @@\n+hello\n",
+      }),
+    );
+    expect(added?.type).toBe("change");
+    const addedFiles = toDiffFiles(added ?? { type: "change", name: "src/new.ts" }, { oldText: null, newText: "hello\nmore\n" });
+    expect(addedFiles).toEqual({
+      oldFile: { name: "src/new.ts", contents: "" },
+      newFile: { name: "src/new.ts", contents: "hello\nmore\n" },
+    });
+    if (!added || !addedFiles) throw new Error("added file did not parse");
+    const hydratedAdded = hydratePartialDiff("clone", added, addedFiles);
+    expect(hydratedAdded.isPartial).toBe(false);
+    expect(hydratedAdded.additionLines.join("")).toContain("more");
+
+    const removed = parseReviewPatch(
+      gitDiffText({
+        filename: "src/old.ts",
+        previousFilename: null,
+        status: "removed",
+        patch: "@@ -1 +0,0 @@\n-hello\n",
+      }),
+    );
+    expect(removed?.type).toBe("change");
+    expect(removed?.name).toBe("src/old.ts");
+    const removedFiles = toDiffFiles(removed ?? { type: "change", name: "src/old.ts" }, { oldText: "hello\ngone\n", newText: null });
+    expect(removedFiles).toEqual({
+      oldFile: { name: "src/old.ts", contents: "hello\ngone\n" },
+      newFile: { name: "src/old.ts", contents: "" },
+    });
+    if (!removed || !removedFiles) throw new Error("deleted file did not parse");
+    const hydratedRemoved = hydratePartialDiff("clone", removed, removedFiles);
+    expect(hydratedRemoved.isPartial).toBe(false);
+    expect(hydratedRemoved.deletionLines.join("")).toContain("gone");
   });
 
   it("leaves binary and oversized blobs unavailable", async () => {
@@ -190,6 +251,127 @@ describe("review file contents", () => {
     expect(missing).toEqual({ kind: "unavailable" });
     expect(failed).toEqual({ kind: "unavailable" });
     expect(binary).toEqual({ kind: "unavailable" });
+  });
+});
+
+describe("reviewed diff file allowlist", () => {
+  const files = [
+    { filename: "src/pay.ts", previousFilename: null },
+    { filename: "new/name.ts", previousFilename: "old/name.ts" },
+  ];
+
+  it("matches a changed path and a rename's previous path, and rejects the rest", () => {
+    expect(matchReviewedFile(files, "src/pay.ts", null)).toEqual({
+      kind: "file",
+      path: "src/pay.ts",
+      previousPath: null,
+    });
+    expect(matchReviewedFile(files, "new/name.ts", "old/name.ts")).toEqual({
+      kind: "file",
+      path: "new/name.ts",
+      previousPath: "old/name.ts",
+    });
+    expect(matchReviewedFile(files, "old/name.ts", null)).toEqual({
+      kind: "file",
+      path: "new/name.ts",
+      previousPath: "old/name.ts",
+    });
+    expect(matchReviewedFile(files, ".env", null)).toEqual({ kind: "rejected", status: 404 });
+    expect(matchReviewedFile(files, "src/pay.ts", ".env")).toEqual({ kind: "rejected", status: 400 });
+    expect(matchReviewedFile(files, "../.env", null)).toEqual({ kind: "rejected", status: 400 });
+    expect(matchReviewedFile(files, "src/pay.ts", "../.env")).toEqual({ kind: "rejected", status: 400 });
+    expect(matchReviewedFile([{ filename: "src/pay.ts", previousFilename: "../.env" }], "src/pay.ts", null)).toEqual({
+      kind: "rejected",
+      status: 404,
+    });
+  });
+});
+
+describe("reviewFileContents allowlist", () => {
+  const closers: Array<() => Promise<void>> = [];
+  afterEach(async () => {
+    while (closers.length > 0) await closers.pop()?.();
+  });
+
+  it("reads a diff file and refuses every other path without loading it", async () => {
+    const dataDir = await tempDataDir();
+    const archive = new ReviewArchive(join(dataDir, REVIEWS_DB_FILE));
+    await archive.open();
+    await archive.start({
+      taskId: "4",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      title: "Charge positive amounts",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+      trigger: "opened",
+    });
+    archive.close();
+
+    const github = new MemoryGitHub();
+    github.pullFiles = [
+      {
+        filename: "src/pay.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\n-old\n+new\n",
+        previousFilename: null,
+      },
+      {
+        filename: "new/name.ts",
+        status: "renamed",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\n-before\n+after\n",
+        previousFilename: "old/name.ts",
+      },
+    ];
+    github.files.set(`${SHA_A}\0src/pay.ts`, "new\n");
+    github.files.set(`${BASE_SHA}\0src/pay.ts`, "old\n");
+    github.files.set(`${SHA_A}\0new/name.ts`, "after\n");
+    github.files.set(`${BASE_SHA}\0old/name.ts`, "before\n");
+    github.files.set(`${SHA_A}\0.env`, "SECRET\n");
+    github.files.set(`${BASE_SHA}\0.env`, "SECRET\n");
+    github.files.set(`${BASE_SHA}\0../.env`, "SECRET\n");
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    closers.push(() => service.close());
+    const signal = AbortSignal.timeout(15_000);
+
+    expect(await service.reviewFileContents("4", "src/pay.ts", null, signal)).toEqual({
+      kind: "files",
+      oldText: "old\n",
+      newText: "new\n",
+    });
+    expect(await service.reviewFileContents("4", "new/name.ts", "old/name.ts", signal)).toEqual({
+      kind: "files",
+      oldText: "before\n",
+      newText: "after\n",
+    });
+    expect(await service.reviewFileContents("4", "old/name.ts", null, signal)).toEqual({
+      kind: "files",
+      oldText: "before\n",
+      newText: "after\n",
+    });
+
+    const reads = github.filePaths.length;
+    const lists = github.calls.filter((call) => call === "listPullFiles").length;
+    expect(await service.reviewFileContents("4", ".env", null, signal)).toEqual({ kind: "rejected", status: 404 });
+    expect(await service.reviewFileContents("4", "src/pay.ts", ".env", signal)).toEqual({ kind: "rejected", status: 400 });
+    expect(await service.reviewFileContents("4", "../.env", null, signal)).toEqual({ kind: "rejected", status: 400 });
+    expect(await service.reviewFileContents("4", "src/pay.ts", "../secret", signal)).toEqual({ kind: "rejected", status: 400 });
+    expect(await service.reviewFileContents("missing", "src/pay.ts", null, signal)).toEqual({ kind: "rejected", status: 404 });
+    expect(github.filePaths).toHaveLength(reads);
+    expect(github.filePaths).not.toContain(".env");
+    expect(github.filePaths).not.toContain("../.env");
+    expect(github.calls.filter((call) => call === "listPullFiles").length).toBe(lists + 2);
+
+    github.pullFilesError = new Error("GitHub file list failed");
+    expect(await service.reviewFileContents("4", "src/pay.ts", null, signal)).toEqual({ kind: "rejected", status: 404 });
+    expect(github.filePaths).toHaveLength(reads);
   });
 });
 

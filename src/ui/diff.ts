@@ -160,8 +160,9 @@ export function gitDiffText(file: {
   const from = file.previousFilename ?? file.filename;
   const to = file.filename;
   const header = [`diff --git ${quoteGitPath("a", from)} ${quoteGitPath("b", to)}`];
-  if (added) header.push("new file mode 100644");
-  if (removed) header.push("deleted file mode 100644");
+  // Pierre expands `change` and rename diffs. `new file` / `deleted file` mode
+  // marks a type it will not hydrate, so an added or deleted file stays a
+  // change with `/dev/null` on the empty side.
   if ((file.status === "renamed" || file.status === "copied") && file.previousFilename && file.previousFilename !== file.filename) {
     const verb = file.status === "copied" ? "copy" : "rename";
     header.push(`${verb} from ${file.previousFilename}`);

@@ -11,12 +11,22 @@ export const getReviewFileContents = createServerFn({ method: "GET" })
   .handler(async ({ data }): Promise<
     { kind: "files"; oldText: string | null; newText: string | null } | { kind: "unavailable" }
   > => {
-    const { getRequest } = await import("@tanstack/react-start/server");
+    const { getRequest, setResponseStatus } = await import("@tanstack/react-start/server");
     const { getRuntime } = await import("../app/runtime.js");
     const { uiSession } = await import("../http/auth.js");
     const runtime = await getRuntime();
     const request = getRequest();
     if (uiSession(request, runtime.config.uiToken) !== "ok") return { kind: "unavailable" };
     if (!data.taskId || !data.path) return { kind: "unavailable" };
-    return runtime.service.reviewFileContents(data.taskId, data.path, data.previousPath, AbortSignal.timeout(20_000));
+    const loaded = await runtime.service.reviewFileContents(
+      data.taskId,
+      data.path,
+      data.previousPath,
+      AbortSignal.timeout(20_000),
+    );
+    if (loaded.kind === "rejected") {
+      setResponseStatus(loaded.status);
+      return { kind: "unavailable" };
+    }
+    return loaded;
   });
