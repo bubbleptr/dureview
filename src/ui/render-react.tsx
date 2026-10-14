@@ -3,10 +3,11 @@ import { LoginForm } from "../components/login-form.js";
 import { ReviewDetailView } from "../components/review-detail.js";
 import { ReviewListView } from "../components/review-list.js";
 import { SettingsForm } from "../components/settings-form.js";
-import { StatsPage } from "../components/stats-page.js";
+import { OverviewPage } from "../components/stats-page.js";
 import type { SettingsPageModel } from "../settings/page.js";
 import type { ReviewDetailModel } from "./detail-model.js";
 import type { ReviewListModel } from "./list-model.js";
+import type { ShellStatus } from "../components/app-shell.js";
 import type { StatsPageModel } from "./stats-model.js";
 import { preloadReviewPresentation } from "./review-preload.js";
 
@@ -15,7 +16,7 @@ export function renderLoginHtml(input: { next: string; error?: string }): string
 }
 
 export function renderListHtml(model: ReviewListModel): string {
-  return documentShell("dureview", renderToStaticMarkup(<ReviewListView model={model} />));
+  return documentShell("Reviews · dureview", renderToStaticMarkup(<ReviewListView model={model} />));
 }
 
 export function renderSettingsHtml(model: SettingsPageModel): string {
@@ -30,8 +31,8 @@ export async function renderDetailHtml(model: ReviewDetailModel): Promise<string
   );
 }
 
-export function renderStatsHtml(model: StatsPageModel): string {
-  return documentShell("Statistics · dureview", renderToStaticMarkup(<StatsPage model={model} />));
+export function renderOverviewHtml(model: StatsPageModel, status: ShellStatus | null = null): string {
+  return documentShell("Overview · dureview", renderToStaticMarkup(<OverviewPage model={model} status={status} />));
 }
 
 function documentShell(title: string, body: string): string {

@@ -127,7 +127,7 @@ describe("status page", () => {
     expect(settled.state.outcome.status).toBe("completed");
 
     const basic = Buffer.from(`dureview:${UI_TOKEN}`).toString("base64");
-    const page = await fetch(`${http.url}/`, { headers: { authorization: `Basic ${basic}` } });
+    const page = await fetch(`${http.url}/ui/reviews`, { headers: { authorization: `Basic ${basic}` } });
     expect(page.status).toBe(200);
     expect(page.headers.get("content-type")).toContain("text/html");
     expect(page.headers.get("cache-control")).toBe("no-store");
@@ -387,7 +387,7 @@ describe("status page", () => {
       await service.close();
     });
 
-    const filtered = await fetch(`${http.url}/ui?result=pass&repo=other/app&q=rename`, {
+    const filtered = await fetch(`${http.url}/ui/reviews?result=pass&repo=other/app&q=rename`, {
       headers: { authorization: `Bearer ${UI_TOKEN}` },
     });
     expect(filtered.status).toBe(200);
@@ -463,11 +463,9 @@ describe("status page", () => {
       await service.close();
     });
 
-    const locked = await fetch(`${http.url}/ui/stats`);
-    expect(locked.status).toBe(401);
-    const loginHtml = await locked.text();
-    expect(loginHtml).toContain('name="next" value="/ui/stats"');
-    expect(loginHtml).not.toContain(UI_TOKEN);
+    const locked = await fetch(`${http.url}/ui/stats`, { redirect: "manual" });
+    expect(locked.status).toBe(303);
+    expect(locked.headers.get("location")).toBe("/ui");
 
     const page = await fetch(`${http.url}/ui/stats?range=all`, {
       headers: { authorization: `Bearer ${UI_TOKEN}` },
@@ -475,16 +473,17 @@ describe("status page", () => {
     expect(page.status).toBe(200);
     expect(page.headers.get("cache-control")).toBe("no-store");
     const html = await page.text();
-    expect(html).toContain("Statistics");
+    expect(html).toContain("Overview");
     expect(html).toContain("Tokens by day");
     expect(html).toContain("Avg tokens");
     expect(html).toContain("acme/demo");
     expect(html).toContain("Charge positive amounts");
     expect(html).not.toContain(UI_TOKEN);
     expect(html).not.toContain(SHA_A);
+    expect(html).not.toContain('href="/ui/stats"');
 
     const list = await fetch(`${http.url}/ui`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
-    expect(await list.text()).toContain('href="/ui/stats"');
+    expect(await list.text()).toContain('href="/ui/reviews"');
 
     const next = await fetch(`${http.url}/ui/login`, {
       method: "POST",
@@ -492,7 +491,7 @@ describe("status page", () => {
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ token: UI_TOKEN, next: "/ui/stats" }),
     });
-    expect(next.headers.get("location")).toBe("/ui/stats");
+    expect(next.headers.get("location")).toBe("/ui");
   });
 });
 

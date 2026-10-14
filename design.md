@@ -50,12 +50,19 @@ SaaS landing page. This is an operator console for pull-request review.
   stored in `localStorage` and applied before first paint. The canonical guide
   prefers an implicit theme; dureview keeps the control so operators can work
   in either theme without a flash on reload.
-- The sidebar lists Overview, Reviews, Stats, and Settings. It collapses on a
-  wide screen and becomes a sheet on a narrow one. Its footer keeps version,
-  uptime, model, ChatGPT login expiry, and GitHub credential status.
-- Preserve existing routes, URL filters (`repo`, `result`, `since`, `from`,
-  `to`, `q`), auth, and server functions. Client-only `sort`, `dir`, and `page`
-  must not change those queries' meaning.
+- The sidebar lists Overview, Reviews, and Settings. Overview is `/ui` and is
+  only metrics: the counts, charts, token usage, and findings distribution that
+  used to live on `/ui/stats`. `GET /ui/stats` redirects to `/ui`. Reviews is
+  `/ui/reviews` and is only the review list. Settings is only settings. The
+  sidebar collapses on a wide screen and becomes a sheet on a narrow one. Its
+  footer keeps the theme control, version, uptime, model, ChatGPT login expiry,
+  and GitHub credential status. Repo and time-range filters sit in the page
+  they apply to, not in the top bar. The top bar is the sidebar control, the
+  page title, and a breadcrumb when the review detail page has one.
+- Keep URL filters (`repo`, `result`, `since`, `from`, `to`, `q` on the review
+  list; `range`, `repo`, and `tz` on the overview), auth, and server functions.
+  Client-only `sort`, `dir`, and `page` must not change those queries' meaning.
+  `GET /ui/stats` redirects to `/ui` and keeps the query string.
 
 ## Precedence
 

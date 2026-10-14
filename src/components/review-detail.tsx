@@ -1,5 +1,4 @@
-import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
-import type { FileDiffLoadedFiles, FileDiffMetadata } from "@pierre/diffs";
+import { Fragment, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { FileDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { FileTree, useFileTree } from "@pierre/trees/react";
 import type {
@@ -10,11 +9,20 @@ import type {
   DetailSummary,
   ReviewDetailModel,
 } from "../ui/detail-model.js";
-import { toDiffFiles } from "../ui/diff-files.js";
 import {
-  REVIEW_EXPAND_CSS,
+  commentAnchorIndexes,
+  focusSegments,
+  gapKey,
+  orderCommentedFirst,
+  sliceLines,
+  windowDiffText,
+  type FocusSegment,
+} from "../ui/diff-focus.js";
+import {
   parseReviewPatch,
   reviewAnnotations,
+  reviewDiffOptions,
+  reviewFindingCount,
   reviewTreeOptions,
   type ReviewPresentation,
 } from "../ui/review-presentation.js";
@@ -30,11 +38,18 @@ const PRIORITY_BADGE = [
   "border-transparent bg-muted text-muted-foreground",
 ] as const;
 
-const SEVERITY = [
-  "shadow-[inset_2px_0_0_#cf222e]",
-  "shadow-[inset_2px_0_0_#bc4c00]",
-  "shadow-[inset_2px_0_0_#9a6700]",
-  "shadow-[inset_2px_0_0_#57606a]",
+const COMMENT_ACCENT = [
+  "border-l-red-700 bg-red-50 dark:border-l-red-300 dark:bg-red-400/10",
+  "border-l-orange-700 bg-orange-50 dark:border-l-orange-300 dark:bg-orange-400/10",
+  "border-l-amber-700 bg-amber-50 dark:border-l-amber-300 dark:bg-amber-400/10",
+  "border-l-neutral-500 bg-muted/70 dark:border-l-neutral-400 dark:bg-muted/40",
+] as const;
+
+const LINE_BOX = [
+  "bg-red-50 shadow-[inset_3px_0_0_#b91c1c,inset_0_1px_0_#b91c1c,inset_0_-1px_0_#b91c1c] dark:bg-red-400/10 dark:shadow-[inset_3px_0_0_#fca5a5,inset_0_1px_0_#fca5a5,inset_0_-1px_0_#fca5a5]",
+  "bg-orange-50 shadow-[inset_3px_0_0_#c2410c,inset_0_1px_0_#c2410c,inset_0_-1px_0_#c2410c] dark:bg-orange-400/10 dark:shadow-[inset_3px_0_0_#fdba74,inset_0_1px_0_#fdba74,inset_0_-1px_0_#fdba74]",
+  "bg-amber-50 shadow-[inset_3px_0_0_#a16207,inset_0_1px_0_#a16207,inset_0_-1px_0_#a16207] dark:bg-amber-400/10 dark:shadow-[inset_3px_0_0_#fcd34d,inset_0_1px_0_#fcd34d,inset_0_-1px_0_#fcd34d]",
+  "bg-muted/70 shadow-[inset_3px_0_0_#525252,inset_0_1px_0_#525252,inset_0_-1px_0_#525252] dark:bg-muted/40 dark:shadow-[inset_3px_0_0_#a3a3a3,inset_0_1px_0_#a3a3a3,inset_0_-1px_0_#a3a3a3]",
 ] as const;
 
 const COUNT_TONE: Record<string, string> = {
@@ -44,10 +59,13 @@ const COUNT_TONE: Record<string, string> = {
   P3: "text-muted-foreground",
 };
 
+const DIFF_STYLE_KEY = "dureview-diff-style";
+const TREE_WIDTH_KEY = "dureview-tree-width";
+const SUMMARY_WIDTH_KEY = "dureview-summary-width";
+
 export function ReviewDetailView({
   model,
   presentation,
-  taskId,
   status = null,
 }: {
   model: ReviewDetailModel;
@@ -55,6 +73,10 @@ export function ReviewDetailView({
   taskId?: string;
   status?: ShellStatus | null;
 }) {
+  const [diffStyle, setDiffStyle] = useDiffStyle();
+  const [treeWidth, setTreeWidth] = useStoredWidth(TREE_WIDTH_KEY, 240, 180, 420);
+  const [summaryWidth, setSummaryWidth] = useStoredWidth(SUMMARY_WIDTH_KEY, 320, 240, 520);
+  const files = orderCommentedFirst(model.files, reviewFindingCount);
   return (
     <AppShell
       current="reviews"
@@ -66,49 +88,57 @@ export function ReviewDetailView({
           Reviews
         </a>
       }
-      filters={
-        <>
-          {model.pullHref ? (
-            <a className="max-w-48 truncate text-sm font-medium underline-offset-4 hover:underline" href={model.pullHref} rel="noreferrer">
-              {model.pullLabel}
-            </a>
-          ) : (
-            <span className="max-w-48 truncate text-sm font-medium">{model.pullLabel}</span>
-          )}
-          <Badge variant={model.resultKind}>{model.resultText}</Badge>
-          <span className="text-xs text-muted-foreground">{model.triggerLabel}</span>
-          <span className="text-xs text-muted-foreground">{model.duration}</span>
-          {model.whenLabel ? (
-            <span className="text-xs text-muted-foreground">
-              <LocalTime iso={model.whenIso} label={model.whenLabel} />
-            </span>
-          ) : null}
-        </>
-      }
     >
-      <div className="grid h-full min-h-0 grid-cols-1 min-[960px]:grid-cols-[220px_minmax(0,1fr)_380px]">
-        <aside className="flex min-h-0 flex-col overflow-hidden border-b min-[960px]:border-r min-[960px]:border-b-0">
-          <p className="px-3 pt-3 pb-1 text-sm font-medium">Files</p>
-          <div className="min-h-48 flex-1">
-            {model.files.length === 0 ? (
-              <p className="px-3 py-2 text-sm text-muted-foreground">No changed files.</p>
+      <div className="flex h-full min-h-0 flex-col">
+        <ReviewMeta model={model} />
+        <div
+          className="review-columns min-h-0 flex-1"
+          style={{ ["--tree-width" as string]: `${treeWidth}px`, ["--summary-width" as string]: `${summaryWidth}px` }}
+        >
+          <aside className="flex max-h-72 min-h-0 flex-col overflow-hidden border-b min-[960px]:max-h-none min-[960px]:border-r min-[960px]:border-b-0">
+            {files.length === 0 ? (
+              <p className="px-3 py-3 text-sm text-muted-foreground">No changed files.</p>
             ) : (
-              <ReviewTree files={model.files} preloaded={presentation?.tree ?? null} />
+              <ReviewTree files={files} preloaded={presentation?.tree ?? null} />
             )}
+            {model.hiddenFiles > 0 ? (
+              <p className="px-3 py-2 text-sm text-muted-foreground">{model.hiddenFiles} more files are not shown.</p>
+            ) : null}
+          </aside>
+          <PanelHandle label="Resize file tree" width={treeWidth} min={180} max={420} onWidth={setTreeWidth} />
+          <div className="min-h-0 min-w-0 overflow-auto border-b min-[960px]:border-r min-[960px]:border-b-0">
+            <DiffColumn files={files} model={model} presentation={presentation} diffStyle={diffStyle} />
           </div>
-          {model.hiddenFiles > 0 ? (
-            <p className="px-3 py-2 text-sm text-muted-foreground">{model.hiddenFiles} more files are not shown.</p>
-          ) : null}
-        </aside>
-        <main className="min-h-0 overflow-auto border-b min-[960px]:border-r min-[960px]:border-b-0">
-          <DiffColumn model={model} presentation={presentation} taskId={taskId} />
-        </main>
-        <aside className="min-h-0 overflow-x-hidden overflow-y-auto">
-          <SummaryRail summary={model.summary} />
-          <SettingsRail settings={model.settings} />
-        </aside>
+          <PanelHandle label="Resize summary" width={summaryWidth} min={240} max={520} invert onWidth={setSummaryWidth} />
+          <aside className="min-h-0 overflow-x-hidden overflow-y-auto">
+            <SummaryRail summary={model.summary} />
+            <SettingsRail settings={model.settings} diffStyle={diffStyle} onDiffStyle={setDiffStyle} />
+          </aside>
+        </div>
       </div>
     </AppShell>
+  );
+}
+
+function ReviewMeta({ model }: { model: ReviewDetailModel }) {
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2">
+      {model.pullHref ? (
+        <a className="max-w-full truncate text-sm font-medium underline-offset-4 hover:underline" href={model.pullHref} rel="noreferrer">
+          {model.pullLabel}
+        </a>
+      ) : (
+        <span className="max-w-full truncate text-sm font-medium">{model.pullLabel}</span>
+      )}
+      <Badge variant={model.resultKind}>{model.resultText}</Badge>
+      <span className="text-xs text-muted-foreground">{model.triggerLabel}</span>
+      <span className="text-xs text-muted-foreground">{model.duration}</span>
+      {model.whenLabel ? (
+        <span className="text-xs text-muted-foreground">
+          <LocalTime iso={model.whenIso} label={model.whenLabel} />
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -129,6 +159,9 @@ function ReviewTree({
       window.location.hash = file.anchor;
     }),
   );
+  useLayoutEffect(() => {
+    model.openSearch("");
+  }, [model]);
   return (
     <FileTree
       model={model}
@@ -140,18 +173,41 @@ function ReviewTree({
 }
 
 function DiffColumn({
+  files,
   model,
   presentation,
-  taskId,
+  diffStyle,
 }: {
+  files: DetailFileView[];
   model: ReviewDetailModel;
   presentation?: ReviewPresentation;
-  taskId?: string;
+  diffStyle: "unified" | "split";
 }) {
-  const [diffStyle, setDiffStyle] = useState<"unified" | "split">("unified");
   const diffTheme = useDiffTheme();
-  const loadDiffFiles = useLoadDiffFiles(taskId);
-  const highlighted = model.files.some((file) => file.diffText != null && parseReviewPatch(file.diffText) != null);
+  const [openFiles, setOpenFiles] = useState<Record<string, boolean>>({});
+  const [expandedGaps, setExpandedGaps] = useState<Record<string, true>>({});
+  const isOpen = (file: DetailFileView) => {
+    const stored = openFiles[file.anchor];
+    if (stored !== undefined) return stored;
+    return reviewFindingCount(file) > 0;
+  };
+  useEffect(() => {
+    const reveal = () => {
+      const id = window.location.hash.slice(1);
+      if (!id) return;
+      const file = files.find(
+        (item) =>
+          item.anchor === id ||
+          item.lines.some((line) => line.comments.some((comment) => comment.anchor === id)) ||
+          item.unanchored.some((comment) => comment.anchor === id),
+      );
+      if (!file) return;
+      setOpenFiles((current) => ({ ...current, [file.anchor]: true }));
+    };
+    reveal();
+    window.addEventListener("hashchange", reveal);
+    return () => window.removeEventListener("hashchange", reveal);
+  }, [files]);
   return (
     <div>
       {model.diffUnavailable ? (
@@ -162,39 +218,25 @@ function DiffColumn({
       {model.hiddenFiles > 0 ? (
         <p className="border-b px-3 py-2 text-sm text-muted-foreground">{model.hiddenFiles} files are hidden on this page.</p>
       ) : null}
-      {highlighted ? (
-        <div className="sticky top-0 z-10 flex items-center justify-end gap-1 border-b bg-background px-3 py-2">
-          <Button
-            type="button"
-            size="sm"
-            variant={diffStyle === "unified" ? "default" : "outline"}
-            aria-pressed={diffStyle === "unified"}
-            onClick={() => setDiffStyle("unified")}
-          >
-            Unified
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={diffStyle === "split" ? "default" : "outline"}
-            aria-pressed={diffStyle === "split"}
-            onClick={() => setDiffStyle("split")}
-          >
-            Split
-          </Button>
-        </div>
-      ) : null}
-      {model.noChangedFiles ? (
-        <p className="px-3 py-4 text-sm text-muted-foreground">GitHub returned no changed files.</p>
-      ) : null}
-      {model.files.map((file) => (
-        <FileSection
+      {model.noChangedFiles ? <p className="px-3 py-4 text-sm text-muted-foreground">GitHub returned no changed files.</p> : null}
+      {files.map((file) => (
+        <FileBlock
           key={file.anchor}
           file={file}
+          open={isOpen(file)}
+          onToggle={() => setOpenFiles((current) => ({ ...current, [file.anchor]: !isOpen(file) }))}
+          expandedGaps={expandedGaps}
+          onExpand={(key) => setExpandedGaps((current) => ({ ...current, [key]: true }))}
+          onCollapse={(key) =>
+            setExpandedGaps((current) => {
+              const next = { ...current };
+              delete next[key];
+              return next;
+            })
+          }
           diffStyle={diffStyle}
           diffTheme={diffTheme}
-          loadDiffFiles={taskId ? loadDiffFiles : undefined}
-          prerenderedHTML={diffStyle === "unified" && diffTheme === "light" ? presentation?.diffs[file.anchor] : undefined}
+          presentation={presentation}
         />
       ))}
       <CommentGroup title={model.outsideTitle} comments={model.outside} />
@@ -202,20 +244,139 @@ function DiffColumn({
   );
 }
 
-function useLoadDiffFiles(taskId: string | undefined) {
-  return useCallback(
-    async (fileDiff: FileDiffMetadata): Promise<FileDiffLoadedFiles> => {
-      if (!taskId) throw new Error("file contents unavailable");
-      const { getReviewFileContents } = await import("../ui/file-fn.js");
-      const result = await getReviewFileContents({
-        data: { taskId, path: fileDiff.name, previousPath: fileDiff.prevName ?? null },
-      });
-      if (result.kind !== "files") throw new Error("file contents unavailable");
-      const files = toDiffFiles(fileDiff, result);
-      if (!files) throw new Error("file contents unavailable");
-      return files;
-    },
-    [taskId],
+function FileBlock({
+  file,
+  open,
+  onToggle,
+  expandedGaps,
+  onExpand,
+  onCollapse,
+  diffStyle,
+  diffTheme,
+  presentation,
+}: {
+  file: DetailFileView;
+  open: boolean;
+  onToggle: () => void;
+  expandedGaps: Record<string, true>;
+  onExpand: (key: string) => void;
+  onCollapse: (key: string) => void;
+  diffStyle: "unified" | "split";
+  diffTheme: "light" | "dark";
+  presentation?: ReviewPresentation;
+}) {
+  const findings = reviewFindingCount(file);
+  const anchors = commentAnchorIndexes(file.lines);
+  const prefix = `${file.anchor}:`;
+  const expanded = new Set(
+    Object.keys(expandedGaps)
+      .filter((key) => key.startsWith(prefix))
+      .map((key) => key.slice(prefix.length)),
+  );
+  const segments = open ? focusSegments(file.lines, anchors, expanded) : [];
+  return (
+    <section id={file.anchor} className="scroll-mt-12 border-b target:bg-muted/40">
+      <header className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-3 py-2">
+        <button
+          type="button"
+          className="shrink-0 rounded-md border px-2 py-0.5 text-xs font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-expanded={open}
+          aria-label={`${open ? "Collapse" : "Expand"} ${file.filename}`}
+          onClick={onToggle}
+        >
+          {open ? "Collapse" : "Expand"}
+        </button>
+        <span className="min-w-0 truncate font-mono text-xs">{file.filename}</span>
+        <Badge variant="outline">{file.status}</Badge>
+        {file.stats ? <span className="text-xs text-muted-foreground">{file.stats}</span> : null}
+        {findings === 0 ? <span className="text-xs text-muted-foreground">No comments</span> : null}
+      </header>
+      {open ? (
+        file.patchMissing || !file.diffText ? (
+          <p className="px-3 py-2 text-sm text-muted-foreground">GitHub did not include a patch for this file.</p>
+        ) : (
+          segments.map((segment) => (
+            <FocusSegmentView
+              key={`${segment.kind}:${segment.start}:${segment.end}`}
+              file={file}
+              segment={segment}
+              diffStyle={diffStyle}
+              diffTheme={diffTheme}
+              presentation={presentation}
+              wholeFile={anchors.length === 0}
+              onExpand={() => onExpand(`${file.anchor}:${gapKey(segment.start, segment.end)}`)}
+              onCollapse={() => onCollapse(`${file.anchor}:${gapKey(segment.start, segment.end)}`)}
+            />
+          ))
+        )
+      ) : null}
+      {open && file.patchTruncated ? <p className="px-3 py-2 text-sm text-muted-foreground">Patch truncated.</p> : null}
+      {open ? <CommentGroup title="Not on a line in this diff" comments={file.unanchored} /> : null}
+    </section>
+  );
+}
+
+function FocusSegmentView({
+  file,
+  segment,
+  diffStyle,
+  diffTheme,
+  presentation,
+  wholeFile,
+  onExpand,
+  onCollapse,
+}: {
+  file: DetailFileView;
+  segment: FocusSegment;
+  diffStyle: "unified" | "split";
+  diffTheme: "light" | "dark";
+  presentation?: ReviewPresentation;
+  wholeFile: boolean;
+  onExpand: () => void;
+  onCollapse: () => void;
+}) {
+  if (segment.kind === "hidden") {
+    const label = segment.lines === 1 ? "1 hidden line" : `${segment.lines} hidden lines`;
+    return (
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 border-b bg-muted/50 px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={onExpand}
+      >
+        {label}
+      </button>
+    );
+  }
+  const lines = sliceLines(file.lines, segment.start, segment.end);
+  const patch = wholeFile ? file.diffText : windowDiffText(file, lines);
+  const parsed = patch ? parseReviewPatch(patch) : null;
+  const preloadKey = wholeFile ? `${file.anchor}:full` : `${file.anchor}:${segment.start}-${segment.end}`;
+  return (
+    <div>
+      {segment.collapsible ? (
+        <button
+          type="button"
+          className="flex w-full items-center border-b px-3 py-1.5 text-left text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onCollapse}
+        >
+          Collapse
+        </button>
+      ) : null}
+      {parsed ? (
+        <FileDiff
+          fileDiff={parsed}
+          options={reviewDiffOptions({ diffStyle, themeType: diffTheme, lines })}
+          lineAnnotations={reviewAnnotations({ ...file, lines })}
+          prerenderedHTML={
+            diffStyle === "unified" && diffTheme === "light" ? presentation?.diffs[preloadKey] : undefined
+          }
+          disableWorkerPool
+          renderAnnotation={renderFinding}
+        />
+      ) : (
+        <PlainLines lines={lines} />
+      )}
+    </div>
   );
 }
 
@@ -231,71 +392,119 @@ function useDiffTheme(): "light" | "dark" {
   return theme;
 }
 
-function FileSection({
-  file,
-  diffStyle,
-  diffTheme,
-  loadDiffFiles,
-  prerenderedHTML,
+function useDiffStyle(): ["unified" | "split", (value: "unified" | "split") => void] {
+  const [style, setStyle] = useState<"unified" | "split">("unified");
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(DIFF_STYLE_KEY);
+      if (stored === "split" || stored === "unified") setStyle(stored);
+    } catch {
+      // Storage can be blocked. The diff stays unified.
+    }
+  }, []);
+  return [
+    style,
+    (value) => {
+      setStyle(value);
+      try {
+        localStorage.setItem(DIFF_STYLE_KEY, value);
+      } catch {
+        // The choice still applies until reload.
+      }
+    },
+  ];
+}
+
+function useStoredWidth(key: string, fallback: number, min: number, max: number): [number, (value: number) => void] {
+  const [width, setWidth] = useState(fallback);
+  useEffect(() => {
+    try {
+      const parsed = Number(localStorage.getItem(key));
+      if (Number.isFinite(parsed)) setWidth(clamp(parsed, min, max));
+    } catch {
+      // Keep the default width.
+    }
+  }, [key, min, max]);
+  return [
+    width,
+    (value) => {
+      const next = clamp(value, min, max);
+      setWidth(next);
+      try {
+        localStorage.setItem(key, String(Math.round(next)));
+      } catch {
+        // The width still applies until reload.
+      }
+    },
+  ];
+}
+
+function PanelHandle({
+  label,
+  width,
+  min,
+  max,
+  invert = false,
+  onWidth,
 }: {
-  file: DetailFileView;
-  diffStyle: "unified" | "split";
-  diffTheme: "light" | "dark";
-  loadDiffFiles?: (fileDiff: FileDiffMetadata) => Promise<FileDiffLoadedFiles>;
-  prerenderedHTML?: string;
+  label: string;
+  width: number;
+  min: number;
+  max: number;
+  invert?: boolean;
+  onWidth: (value: number) => void;
 }) {
-  const parsed = file.diffText ? parseReviewPatch(file.diffText) : null;
-  const annotations = reviewAnnotations(file);
   return (
-    <section id={file.anchor} className="scroll-mt-12 border-b target:bg-muted/40">
-      {parsed && file.diffText ? (
-        <FileDiff
-          fileDiff={parsed}
-          options={{ diffStyle, themeType: diffTheme, unsafeCSS: REVIEW_EXPAND_CSS, loadDiffFiles }}
-          lineAnnotations={annotations}
-          prerenderedHTML={prerenderedHTML}
-          disableWorkerPool
-          renderAnnotation={renderFinding}
-          renderHeaderFilenameSuffix={() => (
-            <Badge variant="outline" className="ml-2">
-              {file.status}
-            </Badge>
-          )}
-          renderHeaderMetadata={() =>
-            file.stats ? <span className="text-sm text-muted-foreground">{file.stats}</span> : null
-          }
-        />
-      ) : (
-        <PlainFile file={file} />
-      )}
-      {file.patchTruncated ? <p className="px-3 py-2 text-sm text-muted-foreground">Patch truncated.</p> : null}
-      <CommentGroup title="Not on a line in this diff" comments={file.unanchored} />
-    </section>
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={Math.round(width)}
+      tabIndex={0}
+      className="panel-handle cursor-col-resize bg-transparent hover:bg-foreground/15 focus-visible:bg-foreground/20 focus-visible:outline-none"
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        const startX = event.clientX;
+        const start = width;
+        const move = (pointer: PointerEvent) => {
+          const delta = pointer.clientX - startX;
+          onWidth(start + (invert ? -delta : delta));
+        };
+        const up = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      }}
+      onKeyDown={(event) => {
+        const step = event.key === "ArrowRight" ? 16 : event.key === "ArrowLeft" ? -16 : 0;
+        if (step === 0) return;
+        event.preventDefault();
+        onWidth(width + (invert ? -step : step));
+      }}
+    />
   );
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)));
 }
 
 function renderFinding(annotation: DiffLineAnnotation<DetailCommentView>): ReactNode {
   return <CommentCard comment={annotation.metadata} inset />;
 }
 
-function PlainFile({ file }: { file: DetailFileView }) {
+function PlainLines({ lines }: { lines: DetailLineView[] }) {
   return (
-    <>
-      <header className="sticky top-0 flex items-center gap-2 border-b bg-background px-3 py-2">
-        <span className="font-semibold">{file.filename}</span>
-        <Badge variant="outline">{file.status}</Badge>
-        {file.stats ? <span className="text-sm text-muted-foreground">{file.stats}</span> : null}
-      </header>
-      {file.patchMissing ? (
-        <p className="px-3 py-2 text-sm text-muted-foreground">GitHub did not include a patch for this file.</p>
-      ) : (
-        <div className="font-mono text-xs leading-5">
-          {file.lines.map((line, index) => (
-            <DiffLine key={`${file.anchor}-${index}`} line={line} />
-          ))}
-        </div>
-      )}
-    </>
+    <div className="font-mono text-xs leading-5">
+      {lines.map((line, index) => (
+        <DiffLine key={`${line.kind}-${line.newLabel}-${line.oldLabel}-${index}`} line={line} />
+      ))}
+    </div>
   );
 }
 
@@ -303,7 +512,7 @@ function DiffLine({ line }: { line: DetailLineView }) {
   if (line.kind === "hunk") {
     return <div className="bg-muted px-3 py-0.5 text-muted-foreground">{line.text}</div>;
   }
-  const tone = line.severity === null ? "" : (SEVERITY[line.severity] ?? "");
+  const tone = line.severity === null ? "" : (LINE_BOX[line.severity] ?? "");
   return (
     <>
       <div className={`grid grid-cols-[3rem_3rem_1rem_minmax(0,1fr)] gap-1 pr-3 ${tone}`}>
@@ -332,8 +541,12 @@ function CommentGroup({ title, comments }: { title: string; comments: DetailComm
 }
 
 function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: boolean }) {
+  const accent = COMMENT_ACCENT[comment.priority] ?? COMMENT_ACCENT[3];
   return (
-    <article id={comment.anchor} className={`border-b py-3 ${inset ? "pr-3 pl-16" : "px-3"}`}>
+    <article
+      id={comment.anchor}
+      className={`my-2 rounded-md border border-border border-l-[3px] px-3 py-2.5 ${accent} ${inset ? "mr-3 ml-10" : "mx-3"}`}
+    >
       <header className="mb-1 flex flex-wrap items-baseline gap-2">
         <Badge className={PRIORITY_BADGE[comment.priority] ?? PRIORITY_BADGE[3]}>P{comment.priority}</Badge>
         {comment.tags.map((tag) => (
@@ -354,7 +567,7 @@ function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: b
       {comment.evidence.length > 0 ? (
         <p className="mt-1 text-sm">
           {comment.evidence.map((item) => (
-            <span key={item} className="block">
+            <span key={item} className="block font-mono text-xs">
               {item}
             </span>
           ))}
@@ -406,7 +619,7 @@ function CompleteSummary({ summary }: { summary: Extract<DetailSummary, { mode: 
               <a className="flex flex-wrap items-baseline gap-1.5 px-3 py-1.5 text-sm hover:bg-muted/50" href={`#${finding.anchor}`}>
                 <Badge className={PRIORITY_BADGE[finding.priority] ?? PRIORITY_BADGE[3]}>P{finding.priority}</Badge>
                 <span>{finding.title}</span>
-                <span className="text-xs text-muted-foreground">{finding.where}</span>
+                <span className="font-mono text-xs text-muted-foreground">{finding.where}</span>
               </a>
             </li>
           ))}
@@ -423,10 +636,30 @@ function CompleteSummary({ summary }: { summary: Extract<DetailSummary, { mode: 
   );
 }
 
-function SettingsRail({ settings }: { settings: DetailSettings }) {
+function SettingsRail({
+  settings,
+  diffStyle,
+  onDiffStyle,
+}: {
+  settings: DetailSettings;
+  diffStyle: "unified" | "split";
+  onDiffStyle: (value: "unified" | "split") => void;
+}) {
   return (
     <section className="px-3 py-3">
       <h2 className="mb-2 text-sm font-medium">Settings</h2>
+      <div className="mb-4 flex flex-col gap-2">
+        <p className="text-sm">Diff view</p>
+        <p className="text-xs leading-5 text-muted-foreground">Unified or split. Saved in this browser.</p>
+        <div className="flex gap-1">
+          <Button type="button" size="sm" variant={diffStyle === "unified" ? "default" : "outline"} aria-pressed={diffStyle === "unified"} onClick={() => onDiffStyle("unified")}>
+            Unified
+          </Button>
+          <Button type="button" size="sm" variant={diffStyle === "split" ? "default" : "outline"} aria-pressed={diffStyle === "split"} onClick={() => onDiffStyle("split")}>
+            Split
+          </Button>
+        </div>
+      </div>
       {settings.recorded ? (
         <dl className="grid grid-cols-[9.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-sm">
           {settings.rows.map((row) => (

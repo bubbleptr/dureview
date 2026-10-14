@@ -1,31 +1,16 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { LoginForm } from "../../components/login-form.js";
-import { StatsPage } from "../../components/stats-page.js";
-import { getShellStatus } from "../../ui/shell-fn.js";
-import { getStats } from "../../ui/stats-fn.js";
+import { createFileRoute, redirect } from "@tanstack/react-router";
+import { redirectResponse } from "../../http/headers.js";
 
 export const Route = createFileRoute("/ui/stats")({
   server: {
     handlers: {
-      GET: async ({ request, next }) => {
-        const { guardListGet } = await import("../../http/page-guard.js");
-        const blocked = await guardListGet(request);
-        if (blocked) return blocked;
-        return next();
+      GET: ({ request }) => {
+        const url = new URL(request.url);
+        return redirectResponse(`/ui${url.search}`);
       },
     },
   },
-  loader: async ({ location }) => {
-    const data = await getStats({ data: { search: location.searchStr, next: location.pathname } });
-    if (data.kind !== "stats") return { ...data, status: null };
-    return { ...data, status: await getShellStatus() };
+  beforeLoad: ({ location }) => {
+    throw redirect({ href: `/ui${location.searchStr}` });
   },
-  head: () => ({ meta: [{ title: "Statistics · dureview" }] }),
-  component: StatsRoute,
 });
-
-function StatsRoute() {
-  const data = Route.useLoaderData();
-  if (data.kind === "login") return <LoginForm next={data.next} />;
-  return <StatsPage model={data.model} status={data.status} />;
-}
