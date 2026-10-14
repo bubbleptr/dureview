@@ -191,6 +191,7 @@ describe("review detail loader", () => {
     expect(safeNextPath("/")).toBe("/ui");
     expect(safeNextPath("/?q=pay")).toBe("/ui");
     expect(safeNextPath("/ui")).toBe("/ui");
+    expect(safeNextPath("/ui/stats")).toBe("/ui/stats");
     expect(safeNextPath("/ui/reviews/task_1")).toBe("/ui/reviews/task_1");
     expect(safeNextPath("https://evil.example/phish")).toBe("/ui");
   });
