@@ -87,6 +87,7 @@ function reviewRow(review: ReviewSummary, now: number): ReviewRowView {
     p2On: review.countsKnown && review.p2 > 0,
     p3On: review.countsKnown && review.p3 > 0,
     duration: durationText(review, now),
+    durationMs: review.outcome === "running" ? null : reviewDurationMs(review.startedAt, review.finishedAt, now),
     whenIso,
     whenLabel: formatTime(whenIso),
     modelLine: reviewModelLine(review),

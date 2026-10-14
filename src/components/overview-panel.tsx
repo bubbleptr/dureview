@@ -1,4 +1,5 @@
 import type { ReviewListModel, ReviewRowView } from "../ui/list-model.js";
+import { omittedUsageNote, overviewTokenStat, tokenTrendMessage } from "../ui/overview-tokens.js";
 import type { StatsPageModel } from "../ui/stats-model.js";
 import { ClientChart } from "./client-chart.js";
 import { FigureBlock, StatStrip, TrendDataTable } from "./stat-strip.js";
@@ -14,6 +15,9 @@ export function OverviewPanel({
 }) {
   const cards = overviewCards(model.reviews, week ?? null, day ?? null);
   const trend = week?.trend;
+  const usage = week?.tokenUsage ?? null;
+  const empty = tokenTrendMessage(usage, (trend?.points.length ?? 0) > 0);
+  const omitted = omittedUsageNote(usage);
   return (
     <>
       <StatStrip stats={cards} />
@@ -21,14 +25,15 @@ export function OverviewPanel({
         title="Tokens over 7 days"
         caption="Each line is one model. Days use this browser's time zone. The chart shows token volume, not cost or review quality."
       >
-        {!trend || trend.points.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No token usage in the last 7 days.</p>
-        ) : (
+        {empty ? (
+          <p className="text-sm text-muted-foreground">{empty}</p>
+        ) : trend ? (
           <>
             <ClientChart className="h-72" render={(charts) => <charts.TokenTrendChart trend={trend} />} />
             <TrendDataTable trend={trend} />
+            {omitted ? <p className="text-sm text-muted-foreground">{omitted}</p> : null}
           </>
-        )}
+        ) : null}
       </FigureBlock>
     </>
   );
@@ -44,8 +49,8 @@ function overviewCards(
   const weekCounts = weekCard ? parseRunDetail(weekCard.detail) : null;
   const p0 = week?.priorities.find((row) => row.name === "P0")?.count;
   const p1 = week?.priorities.find((row) => row.name === "P1")?.count;
-  const tokens = week ? sumTokens(week.trend) : null;
-  if (todayCard && weekCounts && p0 !== undefined && p1 !== undefined && tokens !== null) {
+  const tokens = overviewTokenStat(week?.tokenUsage ?? null);
+  if (todayCard && weekCounts && p0 !== undefined && p1 !== undefined && week) {
     const finished = weekCounts.completed + weekCounts.failed;
     const rate = finished === 0 ? "—" : `${Math.round((weekCounts.completed / finished) * 100)}%`;
     return [
@@ -56,7 +61,7 @@ function overviewCards(
         detail: finished === 0 ? "No finished reviews" : `${weekCounts.completed} of ${finished} finished · 7 days`,
       },
       { label: "P0 / P1", value: `${formatCount(p0)} / ${formatCount(p1)}`, detail: "Last 7 days" },
-      { label: "Token usage", value: formatTokens(tokens), detail: "Last 7 days" },
+      { label: "Token usage", value: tokens.value, detail: tokens.detail },
     ];
   }
   return fallbackCards(rows);
@@ -88,17 +93,6 @@ function parseRunDetail(detail: string): { completed: number; failed: number; ru
   };
 }
 
-function sumTokens(trend: StatsPageModel["trend"]): number {
-  let sum = 0;
-  for (const point of trend.points) {
-    for (const model of trend.models) {
-      const value = point[model];
-      if (typeof value === "number") sum += value;
-    }
-  }
-  return sum;
-}
-
 function numeric(value: string): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -108,14 +102,3 @@ function formatCount(value: number): string {
   return new Intl.NumberFormat("en-US").format(Math.max(0, Math.round(value)));
 }
 
-function formatTokens(value: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000) return `${trim(value / 1_000_000)}M`;
-  if (abs >= 1_000) return `${trim(value / 1_000)}k`;
-  return formatCount(value);
-}
-
-function trim(value: number): string {
-  const digits = Math.abs(value) >= 10 ? 1 : 2;
-  return value.toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d)0$/, "$1");
-}

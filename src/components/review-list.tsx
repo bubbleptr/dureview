@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import type { ReviewListModel, ReviewRowView } from "../ui/list-model.js";
+import { compareReviewRows } from "../ui/list-sort.js";
 import type { StatsPageModel } from "../ui/stats-model.js";
+import { timezoneOffsetMinutes } from "../ui/stats-query.js";
 import { AppShell, type ShellStatus } from "./app-shell.js";
+import { TimezoneField } from "./timezone-field.js";
 import { LocalTime } from "./local-time.js";
 import { OverviewPanel } from "./overview-panel.js";
 import { Badge } from "./ui/badge.js";
@@ -63,6 +66,7 @@ export function ReviewListView({
       form={{ method: "get", action: "/ui" }}
       filters={
         <>
+          <TimezoneField tz={timezoneOffsetMinutes(new URLSearchParams(search.startsWith("?") ? search.slice(1) : search).get("tz"))} />
           <Filter label="Repository">
             <NativeSelect name="repo" defaultValue={model.form.repo} className="h-8 w-44 text-xs" onChange={submitForm}>
               <option value="">All repositories</option>
@@ -280,26 +284,7 @@ function pageRows(rows: ReviewRowView[], search: string): { rows: ReviewRowView[
 }
 
 function compareRows(left: ReviewRowView, right: ReviewRowView, sort: string, dir: "asc" | "desc"): number {
-  const factor = dir === "asc" ? 1 : -1;
-  const a = sortValue(left, sort);
-  const b = sortValue(right, sort);
-  if (typeof a === "number" && typeof b === "number") return (a - b) * factor;
-  return String(a).localeCompare(String(b)) * factor;
-}
-
-function sortValue(row: ReviewRowView, sort: string): string | number {
-  if (sort === "repo") return row.repoLabel;
-  if (sort === "title") return row.title;
-  if (sort === "trigger") return row.triggerLabel;
-  if (sort === "result") return row.resultText;
-  if (sort === "p0" || sort === "p1" || sort === "p2" || sort === "p3") return numericSort(row[sort]);
-  if (sort === "when") return row.whenIso;
-  return row.duration;
-}
-
-function numericSort(value: string): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : -1;
+  return compareReviewRows(left, right, sort, dir);
 }
 
 function sortHref(search: string, key: SortKey, active: string, dir: "asc" | "desc"): string {

@@ -1,3 +1,4 @@
+import { homeStatsSearches } from "./home-query.js";
 import { getReviewList, type ListPayload } from "./list-fn.js";
 import { getStats } from "./stats-fn.js";
 import type { StatsPageModel } from "./stats-model.js";
@@ -12,12 +13,10 @@ export type HomePayload = {
 export async function loadHome(search: string, next: string): Promise<HomePayload> {
   const list = await getReviewList({ data: { search, next } });
   if (list.kind !== "list") return { list, week: null, day: null };
-  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
-  const repo = params.get("repo")?.trim() ?? "";
-  const repoQuery = repo ? `&repo=${encodeURIComponent(repo)}` : "";
+  const stats = homeStatsSearches(search);
   const [week, day] = await Promise.all([
-    getStats({ data: { search: `range=7d${repoQuery}`, next } }),
-    getStats({ data: { search: `range=24h${repoQuery}`, next } }),
+    getStats({ data: { search: stats.week, next } }),
+    getStats({ data: { search: stats.day, next } }),
   ]);
   return {
     list,

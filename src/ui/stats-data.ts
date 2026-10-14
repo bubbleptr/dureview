@@ -35,6 +35,7 @@ export async function buildStatsPage(
       rank(`${row.repo} #${row.number}`, row.title, row.reviews, row.findings, null, null),
     ),
     usageNote: usageNote(snapshot),
+    tokenUsage: tokenUsage(snapshot),
   };
 }
 
@@ -147,6 +148,17 @@ function rank(
     findings: findings === null ? "" : formatCount(findings),
     tokens: tokens === null ? "" : formatTokens(tokens),
     cost: cost === null ? (tokens === null ? "" : "—") : formatCost(cost),
+  };
+}
+
+function tokenUsage(snapshot: StatsSnapshot): StatsPageModel["tokenUsage"] {
+  const knownReviews = snapshot.tokens.knownReviews;
+  const unknownReviews = snapshot.tokens.unknownReviews;
+  if (knownReviews === 0) return { total: null, knownReviews, unknownReviews };
+  return {
+    total: snapshot.tokens.totalInput + snapshot.tokens.totalOutput + (snapshot.tokens.totalCacheRead ?? 0),
+    knownReviews,
+    unknownReviews,
   };
 }
 

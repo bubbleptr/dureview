@@ -1,6 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChartColumn, GitPullRequest, LayoutDashboard, PanelLeft, Settings } from "lucide-react";
 import type { CodexView } from "../ui/list-model.js";
+import { mobileSidebarConcealed } from "../ui/sidebar-state.js";
 import { LocalTime } from "./local-time.js";
 import { ThemeToggle } from "./theme.js";
 
@@ -44,15 +45,19 @@ export function AppShell({
   children: ReactNode;
 }) {
   const hash = useHash();
+  const sidebarRef = useRef<HTMLElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  useMobileSidebar(sidebarRef);
   const active = current === "overview" && hash === "#reviews" ? "reviews" : current;
   const column = (
     <>
       <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b bg-background px-3 py-2">
         <button
+          ref={toggleRef}
           type="button"
           className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label="Toggle sidebar"
-          onClick={toggleNav}
+          onClick={() => toggleNav(sidebarRef.current, toggleRef.current)}
         >
           <PanelLeft className="size-4" />
         </button>
@@ -83,7 +88,12 @@ export function AppShell({
         Skip to content
       </a>
       <button type="button" className="mobile-backdrop fixed inset-0 z-30 bg-black/40" aria-label="Close menu" onClick={closeMobile} />
-      <aside className="app-sidebar flex h-full shrink-0 flex-col border-r bg-background" aria-label="Sidebar">
+      <aside
+        ref={sidebarRef}
+        tabIndex={-1}
+        className="app-sidebar flex h-full shrink-0 flex-col border-r bg-background focus:outline-none"
+        aria-label="Sidebar"
+      >
         <div className="flex h-12 items-center px-3">
           <a href="/ui" className="flex min-w-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={closeMobile}>
             <span className="brand-mark size-6 place-items-center text-sm font-medium">d</span>
@@ -170,11 +180,49 @@ function useHash(): string {
   return hash;
 }
 
-function toggleNav(): void {
+function useMobileSidebar(sidebarRef: { current: HTMLElement | null }): void {
+  useEffect(() => {
+    const root = document.documentElement;
+    const sidebar = sidebarRef.current;
+    if (!sidebar) return;
+    const mobileQuery = window.matchMedia("(max-width: 767px)");
+    const sync = () => {
+      const concealed = mobileSidebarConcealed(mobileQuery.matches, root.dataset.mobileNav);
+      sidebar.inert = concealed;
+      if (concealed) sidebar.setAttribute("aria-hidden", "true");
+      else sidebar.removeAttribute("aria-hidden");
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { attributes: true, attributeFilter: ["data-mobile-nav"] });
+    mobileQuery.addEventListener("change", sync);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || root.dataset.mobileNav !== "open" || !mobileQuery.matches) return;
+      closeMobile();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      observer.disconnect();
+      mobileQuery.removeEventListener("change", sync);
+      window.removeEventListener("keydown", onKey);
+      sidebar.inert = false;
+      sidebar.removeAttribute("aria-hidden");
+    };
+  }, [sidebarRef]);
+}
+
+function toggleNav(sidebar: HTMLElement | null, toggle: HTMLButtonElement | null): void {
   const root = document.documentElement;
   if (!window.matchMedia("(min-width: 768px)").matches) {
-    if (root.dataset.mobileNav === "open") delete root.dataset.mobileNav;
-    else root.dataset.mobileNav = "open";
+    if (root.dataset.mobileNav === "open") {
+      delete root.dataset.mobileNav;
+      toggle?.focus();
+      return;
+    }
+    root.dataset.mobileNav = "open";
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => sidebar?.focus());
+    });
     return;
   }
   if (root.dataset.sidebar === "collapsed") {
@@ -187,5 +235,8 @@ function toggleNav(): void {
 }
 
 function closeMobile(): void {
-  delete document.documentElement.dataset.mobileNav;
+  const root = document.documentElement;
+  if (root.dataset.mobileNav !== "open") return;
+  delete root.dataset.mobileNav;
+  document.querySelector<HTMLButtonElement>('[aria-label="Toggle sidebar"]')?.focus();
 }

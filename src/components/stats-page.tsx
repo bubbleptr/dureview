@@ -1,5 +1,6 @@
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { ShellStatus } from "./app-shell.js";
+import { TimezoneField } from "./timezone-field.js";
 import type { StatsPageModel, StatsRankRow } from "../ui/stats-model.js";
 import { AppShell } from "./app-shell.js";
 import { ClientChart } from "./client-chart.js";
@@ -144,17 +145,6 @@ export function StatsPage({ model, status = null }: { model: StatsPageModel; sta
 
 function submitForm(event: { currentTarget: { form: HTMLFormElement | null } }): void {
   event.currentTarget.form?.requestSubmit();
-}
-
-function TimezoneField({ tz }: { tz: number }) {
-  useEffect(() => {
-    const local = -new Date().getTimezoneOffset();
-    if (local === tz) return;
-    const url = new URL(window.location.href);
-    url.searchParams.set("tz", String(local));
-    window.location.replace(url.toString());
-  }, [tz]);
-  return <input type="hidden" name="tz" defaultValue={tz} />;
 }
 
 function RankBlock({ title, description, children }: { title: string; description: string; children: ReactNode }) {
