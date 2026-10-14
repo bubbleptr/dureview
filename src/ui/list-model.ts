@@ -22,6 +22,8 @@ export type ReviewRowView = {
   p2On: boolean;
   p3On: boolean;
   duration: string;
+  /** Elapsed milliseconds. Null while running or when the timestamps cannot be measured. */
+  durationMs: number | null;
   whenIso: string;
   whenLabel: string;
   /** `provider/model · thinking` for the run, when the archive recorded it. */

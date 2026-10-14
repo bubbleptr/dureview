@@ -1,4 +1,6 @@
+import { useLayoutEffect } from "react";
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+import { applySavedAppearance, THEME_BOOT } from "../components/theme.js";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -16,12 +18,16 @@ export const Route = createRootRoute({
 });
 
 function RootComponent() {
+  useLayoutEffect(() => {
+    applySavedAppearance();
+  }, []);
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
         <HeadContent />
       </head>
-      <body className="min-h-screen bg-background text-foreground antialiased">
+      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
         <Outlet />
         <Scripts />
       </body>

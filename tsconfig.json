@@ -25,6 +25,8 @@
     "src/ui/file-fn.ts",
     "src/ui/settings-fn.ts",
     "src/ui/stats-fn.ts",
+    "src/ui/shell-fn.ts",
+    "src/ui/home-data.ts",
     "src/routeTree.gen.ts",
     "src/styles.css",
     "src/nitro"

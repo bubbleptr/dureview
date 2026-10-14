@@ -276,6 +276,7 @@ describe("pull request diff placement", () => {
           p2On: false,
           p3On: false,
           duration: runningLabel(startedAt, now),
+          durationMs: null,
           whenIso: startedAt,
           whenLabel: formatTime(startedAt),
           modelLine: null,

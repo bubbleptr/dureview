@@ -42,4 +42,10 @@ export type StatsPageModel = {
   topRepos: StatsRankRow[];
   topPulls: StatsRankRow[];
   usageNote: string;
+  /** Sum of known input + output + cache-read tokens. Null when none of the reviews recorded usage. */
+  tokenUsage: {
+    total: number | null;
+    knownReviews: number;
+    unknownReviews: number;
+  };
 };

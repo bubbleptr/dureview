@@ -73,7 +73,7 @@ export function ChartTooltipContent({
           <div key={key} className="flex items-center gap-2">
             <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: color }} />
             <span className="text-muted-foreground">{name}</span>
-            <span className="ml-auto font-mono tabular-nums">{formatTooltipValue(item.value)}</span>
+            <span className="ml-auto tabular-nums">{formatTooltipValue(item.value)}</span>
           </div>
         );
       })}

@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { LoginForm } from "../../components/login-form.js";
 import { StatsPage } from "../../components/stats-page.js";
+import { getShellStatus } from "../../ui/shell-fn.js";
 import { getStats } from "../../ui/stats-fn.js";
 
 export const Route = createFileRoute("/ui/stats")({
@@ -14,12 +15,17 @@ export const Route = createFileRoute("/ui/stats")({
       },
     },
   },
-  loader: ({ location }) => getStats({ data: { search: location.searchStr, next: location.pathname } }),
+  loader: async ({ location }) => {
+    const data = await getStats({ data: { search: location.searchStr, next: location.pathname } });
+    if (data.kind !== "stats") return { ...data, status: null };
+    return { ...data, status: await getShellStatus() };
+  },
+  head: () => ({ meta: [{ title: "Statistics · dureview" }] }),
   component: StatsRoute,
 });
 
 function StatsRoute() {
   const data = Route.useLoaderData();
   if (data.kind === "login") return <LoginForm next={data.next} />;
-  return <StatsPage model={data.model} />;
+  return <StatsPage model={data.model} status={data.status} />;
 }

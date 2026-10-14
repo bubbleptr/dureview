@@ -310,6 +310,7 @@ describe("review list rendering", () => {
           p2On: false,
           p3On: false,
           duration: formatDuration(reviewDurationMs(review.startedAt, review.finishedAt, now)),
+          durationMs: reviewDurationMs(review.startedAt, review.finishedAt, now),
           whenIso,
           whenLabel: formatTime(whenIso),
           modelLine: null,

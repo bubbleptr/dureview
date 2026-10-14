@@ -18,10 +18,8 @@ export function statsQueryFromSearch(
 ): { query: StatsQuery; form: StatsForm } {
   const rangeRaw = params.get("range")?.trim() ?? "";
   const range: StatsRange = RANGES.has(rangeRaw) ? (rangeRaw as StatsRange) : "7d";
-  const repoRaw = params.get("repo")?.trim() ?? "";
-  const repo = REPO.test(repoRaw) ? repoRaw : "";
-  const tzRaw = Number(params.get("tz"));
-  const tz = Number.isFinite(tzRaw) ? Math.max(-14 * 60, Math.min(14 * 60, Math.trunc(tzRaw))) : 0;
+  const repo = statsRepo(params.get("repo"));
+  const tz = timezoneOffsetMinutes(params.get("tz"));
   return {
     form: { range, repo, tz },
     query: { repo, since: sinceFor(range, now), tzOffsetMinutes: tz },
@@ -30,6 +28,19 @@ export function statsQueryFromSearch(
 
 export function statsFormIsFiltered(form: StatsForm): boolean {
   return form.range !== "7d" || form.repo !== "";
+}
+
+export function statsRepo(raw: string | null | undefined): string {
+  const repo = raw?.trim() ?? "";
+  return REPO.test(repo) ? repo : "";
+}
+
+/** Minutes east of UTC, clamped to ±14 hours. Missing or invalid values stay at UTC. */
+export function timezoneOffsetMinutes(raw: string | null | undefined): number {
+  if (raw == null || raw.trim() === "") return 0;
+  const tz = Number(raw);
+  if (!Number.isFinite(tz)) return 0;
+  return Math.max(-14 * 60, Math.min(14 * 60, Math.trunc(tz)));
 }
 
 function sinceFor(range: StatsRange, now: number): string | null {

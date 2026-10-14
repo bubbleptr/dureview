@@ -60,7 +60,7 @@ export function DistributionChart({
 }
 
 export function FailureChart({ rows }: { rows: StatsPageModel["failures"] }) {
-  const config: ChartConfig = { count: { label: "Failures", color: "var(--chart-5)" } };
+  const config: ChartConfig = { count: { label: "Failures", color: "var(--chart-1)" } };
   return (
     <ChartContainer config={config} className="h-56">
       <BarChart data={rows} layout="vertical" margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
@@ -68,7 +68,7 @@ export function FailureChart({ rows }: { rows: StatsPageModel["failures"] }) {
         <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
         <YAxis type="category" dataKey="name" width={160} tickLine={false} axisLine={false} />
         <ChartTooltip content={<ChartTooltipContent />} />
-        <Bar dataKey="count" fill="var(--chart-5)" radius={4} />
+        <Bar dataKey="count" fill="var(--chart-1)" radius={4} />
       </BarChart>
     </ChartContainer>
   );

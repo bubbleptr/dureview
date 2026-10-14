@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 import type { FileDiffLoadedFiles, FileDiffMetadata } from "@pierre/diffs";
 import { FileDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { FileTree, useFileTree } from "@pierre/trees/react";
@@ -12,32 +12,23 @@ import type {
 } from "../ui/detail-model.js";
 import { toDiffFiles } from "../ui/diff-files.js";
 import {
-  REVIEW_DIFF_THEME,
   REVIEW_EXPAND_CSS,
   parseReviewPatch,
   reviewAnnotations,
   reviewTreeOptions,
   type ReviewPresentation,
 } from "../ui/review-presentation.js";
+import { AppShell, type ShellStatus } from "./app-shell.js";
 import { LocalTime } from "./local-time.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
 
 const PRIORITY_BADGE = [
-  "border-transparent bg-red-50 text-red-700",
-  "border-transparent bg-orange-50 text-orange-800",
-  "border-transparent bg-amber-50 text-amber-800",
+  "border-transparent bg-red-50 text-red-700 dark:bg-red-400/10 dark:text-red-300",
+  "border-transparent bg-orange-50 text-orange-800 dark:bg-orange-400/10 dark:text-orange-300",
+  "border-transparent bg-amber-50 text-amber-800 dark:bg-amber-400/10 dark:text-amber-300",
   "border-transparent bg-muted text-muted-foreground",
 ] as const;
-
-const PRIORITY_BORDER = [
-  "border-l-red-600",
-  "border-l-orange-700",
-  "border-l-amber-600",
-  "border-l-muted-foreground",
-] as const;
-
-const PRIORITY_SURFACE = ["bg-red-50/80", "bg-orange-50/70", "bg-amber-50/70", "bg-muted/50"] as const;
 
 const SEVERITY = [
   "shadow-[inset_2px_0_0_#cf222e]",
@@ -47,9 +38,9 @@ const SEVERITY = [
 ] as const;
 
 const COUNT_TONE: Record<string, string> = {
-  P0: "text-red-700",
-  P1: "text-orange-800",
-  P2: "text-amber-700",
+  P0: "text-red-700 dark:text-red-300",
+  P1: "text-orange-800 dark:text-orange-300",
+  P2: "text-amber-700 dark:text-amber-300",
   P3: "text-muted-foreground",
 };
 
@@ -57,45 +48,47 @@ export function ReviewDetailView({
   model,
   presentation,
   taskId,
+  status = null,
 }: {
   model: ReviewDetailModel;
   presentation?: ReviewPresentation;
   taskId?: string;
+  status?: ShellStatus | null;
 }) {
   return (
-    <div className="flex h-screen flex-col bg-background">
-      <header className="flex min-h-12 flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2">
-        <Button variant="outline" size="sm" asChild>
-          <a href={model.backHref}>Reviews</a>
-        </Button>
-        <a className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui/stats">
-          Statistics
+    <AppShell
+      current="reviews"
+      title={model.heading}
+      status={status}
+      fill
+      crumbs={
+        <a className="shrink-0 text-sm text-muted-foreground hover:text-foreground" href={model.backHref}>
+          Reviews
         </a>
-        <a className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui/settings">
-          Settings
-        </a>
-        {model.pullHref ? (
-          <a className="font-semibold underline-offset-4 hover:underline" href={model.pullHref} rel="noreferrer">
-            {model.pullLabel}
-          </a>
-        ) : (
-          <span className="font-semibold">{model.pullLabel}</span>
-        )}
-        <h1 className="order-last w-full min-w-0 truncate text-sm font-medium min-[960px]:order-none min-[960px]:flex-1">
-          {model.heading}
-        </h1>
-        <Badge variant={model.resultKind}>{model.resultText}</Badge>
-        <Badge variant="outline">{model.triggerLabel}</Badge>
-        <span className="text-sm text-muted-foreground">{model.duration}</span>
-        {model.whenLabel ? (
-          <span className="text-sm text-muted-foreground">
-            <LocalTime iso={model.whenIso} label={model.whenLabel} />
-          </span>
-        ) : null}
-      </header>
-      <div className="grid min-h-0 flex-1 grid-cols-1 min-[960px]:grid-cols-[220px_minmax(0,1fr)_380px]">
+      }
+      filters={
+        <>
+          {model.pullHref ? (
+            <a className="max-w-48 truncate text-sm font-medium underline-offset-4 hover:underline" href={model.pullHref} rel="noreferrer">
+              {model.pullLabel}
+            </a>
+          ) : (
+            <span className="max-w-48 truncate text-sm font-medium">{model.pullLabel}</span>
+          )}
+          <Badge variant={model.resultKind}>{model.resultText}</Badge>
+          <span className="text-xs text-muted-foreground">{model.triggerLabel}</span>
+          <span className="text-xs text-muted-foreground">{model.duration}</span>
+          {model.whenLabel ? (
+            <span className="text-xs text-muted-foreground">
+              <LocalTime iso={model.whenIso} label={model.whenLabel} />
+            </span>
+          ) : null}
+        </>
+      }
+    >
+      <div className="grid h-full min-h-0 grid-cols-1 min-[960px]:grid-cols-[220px_minmax(0,1fr)_380px]">
         <aside className="flex min-h-0 flex-col overflow-hidden border-b min-[960px]:border-r min-[960px]:border-b-0">
-          <p className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Files</p>
+          <p className="px-3 pt-3 pb-1 text-sm font-medium">Files</p>
           <div className="min-h-48 flex-1">
             {model.files.length === 0 ? (
               <p className="px-3 py-2 text-sm text-muted-foreground">No changed files.</p>
@@ -115,7 +108,7 @@ export function ReviewDetailView({
           <SettingsRail settings={model.settings} />
         </aside>
       </div>
-    </div>
+    </AppShell>
   );
 }
 
@@ -156,6 +149,7 @@ function DiffColumn({
   taskId?: string;
 }) {
   const [diffStyle, setDiffStyle] = useState<"unified" | "split">("unified");
+  const diffTheme = useDiffTheme();
   const loadDiffFiles = useLoadDiffFiles(taskId);
   const highlighted = model.files.some((file) => file.diffText != null && parseReviewPatch(file.diffText) != null);
   return (
@@ -198,8 +192,9 @@ function DiffColumn({
           key={file.anchor}
           file={file}
           diffStyle={diffStyle}
+          diffTheme={diffTheme}
           loadDiffFiles={taskId ? loadDiffFiles : undefined}
-          prerenderedHTML={diffStyle === "unified" ? presentation?.diffs[file.anchor] : undefined}
+          prerenderedHTML={diffStyle === "unified" && diffTheme === "light" ? presentation?.diffs[file.anchor] : undefined}
         />
       ))}
       <CommentGroup title={model.outsideTitle} comments={model.outside} />
@@ -224,14 +219,28 @@ function useLoadDiffFiles(taskId: string | undefined) {
   );
 }
 
+function useDiffTheme(): "light" | "dark" {
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  useEffect(() => {
+    const sync = () => setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+  return theme;
+}
+
 function FileSection({
   file,
   diffStyle,
+  diffTheme,
   loadDiffFiles,
   prerenderedHTML,
 }: {
   file: DetailFileView;
   diffStyle: "unified" | "split";
+  diffTheme: "light" | "dark";
   loadDiffFiles?: (fileDiff: FileDiffMetadata) => Promise<FileDiffLoadedFiles>;
   prerenderedHTML?: string;
 }) {
@@ -242,7 +251,7 @@ function FileSection({
       {parsed && file.diffText ? (
         <FileDiff
           fileDiff={parsed}
-          options={{ diffStyle, themeType: REVIEW_DIFF_THEME, unsafeCSS: REVIEW_EXPAND_CSS, loadDiffFiles }}
+          options={{ diffStyle, themeType: diffTheme, unsafeCSS: REVIEW_EXPAND_CSS, loadDiffFiles }}
           lineAnnotations={annotations}
           prerenderedHTML={prerenderedHTML}
           disableWorkerPool
@@ -314,7 +323,7 @@ function CommentGroup({ title, comments }: { title: string; comments: DetailComm
   if (comments.length === 0) return null;
   return (
     <div className="py-2">
-      <p className="px-3 pt-2 pb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{title}</p>
+      <p className="px-3 pt-2 pb-1 text-sm font-medium">{title}</p>
       {comments.map((comment) => (
         <CommentCard key={comment.ordinal} comment={comment} />
       ))}
@@ -323,18 +332,14 @@ function CommentGroup({ title, comments }: { title: string; comments: DetailComm
 }
 
 function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: boolean }) {
-  const surface = inset ? (PRIORITY_SURFACE[comment.priority] ?? PRIORITY_SURFACE[3]) : "";
   return (
-    <article
-      id={comment.anchor}
-      className={`my-2 rounded-lg border border-l-2 p-3 ${inset ? "mr-3 ml-16" : "mx-3"} ${PRIORITY_BORDER[comment.priority] ?? PRIORITY_BORDER[3]} ${surface}`}
-    >
-      <header className="mb-1 flex flex-wrap items-center gap-1.5">
+    <article id={comment.anchor} className={`border-b py-3 ${inset ? "pr-3 pl-16" : "px-3"}`}>
+      <header className="mb-1 flex flex-wrap items-baseline gap-2">
         <Badge className={PRIORITY_BADGE[comment.priority] ?? PRIORITY_BADGE[3]}>P{comment.priority}</Badge>
         {comment.tags.map((tag) => (
-          <Badge key={tag} variant="outline">
+          <span key={tag} className="text-xs text-muted-foreground">
             {tag}
-          </Badge>
+          </span>
         ))}
         <span className="text-xs text-muted-foreground">{comment.confidence}</span>
       </header>
@@ -367,7 +372,7 @@ function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: b
 function SummaryRail({ summary }: { summary: DetailSummary }) {
   return (
     <section className="border-b px-3 py-3">
-      <h2 className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Summary</h2>
+      <h2 className="mb-2 text-sm font-medium">Summary</h2>
       <Badge variant={summary.resultKind}>{summary.resultText}</Badge>
       {summary.mode === "incomplete" ? (
         <p className="mt-2 text-sm break-words whitespace-pre-wrap">{summary.note}</p>
@@ -421,7 +426,7 @@ function CompleteSummary({ summary }: { summary: Extract<DetailSummary, { mode: 
 function SettingsRail({ settings }: { settings: DetailSettings }) {
   return (
     <section className="px-3 py-3">
-      <h2 className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Settings</h2>
+      <h2 className="mb-2 text-sm font-medium">Settings</h2>
       {settings.recorded ? (
         <dl className="grid grid-cols-[9.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-sm">
           {settings.rows.map((row) => (
@@ -441,8 +446,8 @@ function SettingsRail({ settings }: { settings: DetailSettings }) {
 }
 
 function verdictTone(kind: "pass" | "suggest" | "blocker" | null): string {
-  if (kind === "blocker") return "text-red-700";
-  if (kind === "suggest") return "text-amber-800";
-  if (kind === "pass") return "text-green-800";
+  if (kind === "blocker") return "text-red-700 dark:text-red-300";
+  if (kind === "suggest") return "text-amber-800 dark:text-amber-300";
+  if (kind === "pass") return "text-emerald-800 dark:text-emerald-300";
   return "";
 }
