@@ -313,6 +313,12 @@ describe("DUREVIEW_DEFAULT_TRIGGER", () => {
     expect(configFromEnv({ DUREVIEW_DEFAULT_TRIGGER: "once" }).defaultTrigger).toBe("once");
     expect(configFromEnv({ DUREVIEW_DEFAULT_TRIGGER: "manual" }).defaultTrigger).toBe("manual");
     expect(() => configFromEnv({ DUREVIEW_DEFAULT_TRIGGER: "sometimes" })).toThrow(/DUREVIEW_DEFAULT_TRIGGER/);
+    expect(configFromEnv({}).checkoutTtlDays).toBe(30);
+    expect(configFromEnv({ DUREVIEW_CHECKOUT_TTL_DAYS: "  " }).checkoutTtlDays).toBe(30);
+    expect(configFromEnv({ DUREVIEW_CHECKOUT_TTL_DAYS: "0" }).checkoutTtlDays).toBe(0);
+    expect(configFromEnv({ DUREVIEW_CHECKOUT_TTL_DAYS: " 14 " }).checkoutTtlDays).toBe(14);
+    expect(() => configFromEnv({ DUREVIEW_CHECKOUT_TTL_DAYS: "-1" })).toThrow(/DUREVIEW_CHECKOUT_TTL_DAYS/);
+    expect(() => configFromEnv({ DUREVIEW_CHECKOUT_TTL_DAYS: "30.5" })).toThrow(/DUREVIEW_CHECKOUT_TTL_DAYS/);
   });
 });
 

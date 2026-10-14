@@ -97,6 +97,7 @@ describe("status page", () => {
     const loginHtml = await missing.text();
     expect(loginHtml).toContain('action="/ui/login"');
     expect(loginHtml).toContain("登录");
+    expect(loginHtml).toContain('name="next" value="/ui"');
     expect(loginHtml).not.toContain(UI_TOKEN);
     expect(JSON.stringify(missing.headers)).not.toContain(UI_TOKEN);
 
@@ -176,10 +177,12 @@ describe("status page", () => {
     expect(detailHtml).toContain("https://github.com/acme/demo/pull/7");
     expect(detailHtml).toContain("Reviews");
     expect(detailHtml).toContain("src/pay.ts");
-    expect(detailHtml).toContain("if (amount &gt; 0) return { ok: true };");
-    expect(detailHtml).toContain("never billed");
-    expect(detailHtml.indexOf("never billed")).toBeGreaterThan(detailHtml.indexOf("if (amount &gt; 0) return { ok: true };"));
-    expect(detailHtml).toContain("<dt>trigger</dt><dd title=\"manual\">manual</dd>");
+    const detailText = detailHtml.replace(/<[^>]+>/g, "");
+    const lineAt = detailText.indexOf("if (amount > 0) return { ok: true };");
+    expect(lineAt).toBeGreaterThanOrEqual(0);
+    expect(detailText.indexOf("never billed")).toBeGreaterThan(lineAt);
+    expect(detailHtml).toContain(">trigger<");
+    expect(detailHtml).toContain('title="manual"');
     expect(detailHtml).toContain("P1");
     expect(github.pullFileRequests).toEqual([{ installationId: 99, number: 7 }]);
     expect(detailHtml).not.toContain(SHA_A);
@@ -301,6 +304,15 @@ describe("status page", () => {
       body: new URLSearchParams({ token: UI_TOKEN, next: "/ui/reviews/task_1" }),
     });
     expect(detailNext.headers.get("location")).toBe("/ui/reviews/task_1");
+
+    const fromRoot = await fetch(`${http.url}/ui/login`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: UI_TOKEN, next: "/" }),
+    });
+    expect(fromRoot.status).toBe(303);
+    expect(fromRoot.headers.get("location")).toBe("/ui");
   });
 
   it("filters the list and hides unknown reviews", async () => {

@@ -37,6 +37,8 @@ export type Config = {
    * `auto` and `once` opt the whole server in. `manual` waits for `/dureview`.
    */
   defaultTrigger: ReviewTrigger;
+  /** Checkouts older than this are deleted. `0` deletes every checkout that no review is using. */
+  checkoutTtlDays: number;
 };
 
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
@@ -58,6 +60,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     skipDrafts: env.DUREVIEW_SKIP_DRAFTS === "1" || env.DUREVIEW_SKIP_DRAFTS === "true",
     uiToken: emptyToUndefined(env.DUREVIEW_UI_TOKEN)?.trim(),
     defaultTrigger: parseDefaultTrigger(env.DUREVIEW_DEFAULT_TRIGGER),
+    checkoutTtlDays: parseCheckoutTtlDays(env.DUREVIEW_CHECKOUT_TTL_DAYS),
   };
 }
 
@@ -79,6 +82,19 @@ function parseDefaultTrigger(value: string | undefined): ReviewTrigger {
   if (trimmed === "") return BUILTIN_DEFAULT_TRIGGER;
   if (trimmed === "auto" || trimmed === "once" || trimmed === "manual") return trimmed;
   throw new Error(`DUREVIEW_DEFAULT_TRIGGER must be auto, once, or manual, got ${value}.`);
+}
+
+function parseCheckoutTtlDays(value: string | undefined): number {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "") return 30;
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`DUREVIEW_CHECKOUT_TTL_DAYS must be a non-negative integer, got ${value}.`);
+  }
+  const days = Number(trimmed);
+  if (!Number.isSafeInteger(days)) {
+    throw new Error(`DUREVIEW_CHECKOUT_TTL_DAYS must be a non-negative integer, got ${value}.`);
+  }
+  return days;
 }
 
 function parseProvider(value: string | undefined): ProviderName | undefined {

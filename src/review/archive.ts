@@ -420,6 +420,32 @@ export class ReviewArchive {
     });
   }
 
+  /** Checkouts a review is still using. Cleanup skips these directories. */
+  runningCheckouts(): Promise<Array<{ owner: string; repo: string; sha: string }>> {
+    return this.#exclusive(() => {
+      const rows = this.#database().prepare("SELECT owner, repo, sha FROM reviews WHERE outcome = 'running'").all();
+      const keys: Array<{ owner: string; repo: string; sha: string }> = [];
+      for (const row of rows) {
+        if (!row || typeof row !== "object") continue;
+        const record = row as Record<string, SQLOutputValue>;
+        const owner = str(record, "owner");
+        const repo = str(record, "repo");
+        const sha = str(record, "sha");
+        if (!owner || !repo || !sha) continue;
+        keys.push({ owner, repo, sha });
+      }
+      return keys;
+    });
+  }
+
+  exists(taskId: string): Promise<boolean> {
+    if (!TASK_ID.test(taskId)) return Promise.resolve(false);
+    return this.#exclusive(() => {
+      const row = this.#database().prepare("SELECT 1 AS ok FROM reviews WHERE task_id = ?").get(taskId);
+      return row !== undefined;
+    });
+  }
+
   get(taskId: string): Promise<ReviewDetail | null> {
     if (!TASK_ID.test(taskId)) return Promise.resolve(null);
     return this.#exclusive(() => {

@@ -4,7 +4,19 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MAX_REVIEWS, ReviewLog } from "../src/review/history.js";
 import { readCodexLogin } from "../src/ui/status.js";
-import { formatUptime, pullRequestUrl, renderReviewList } from "../src/ui/page.js";
+import { reviewResult } from "../src/review/archive.js";
+import type { ReviewListModel } from "../src/ui/list-model.js";
+import {
+  codexPhrase,
+  displayTrigger,
+  formatDuration,
+  formatTime,
+  formatUptime,
+  pullRequestUrl,
+  resultLabel,
+  reviewDurationMs,
+} from "../src/ui/page.js";
+import { renderListHtml } from "../src/ui/render-react.js";
 import type { DashboardStatus } from "../src/ui/status.js";
 import type { ReviewSummary } from "../src/review/archive.js";
 import { sampleFinding } from "./support.js";
@@ -265,14 +277,47 @@ describe("review list rendering", () => {
       findingCount: 1,
       countsKnown: true,
     };
-    const html = renderReviewList({
-      status,
-      reviews: [review],
+    const now = Date.parse("2026-10-13T15:05:00.000Z");
+    const kind = reviewResult(review);
+    const whenIso = review.finishedAt ?? review.startedAt;
+    const model: ReviewListModel = {
+      version: status.version,
+      uptime: formatUptime(status.uptimeSeconds * 1000),
+      provider: status.provider,
+      model: status.model,
+      codex: codexPhrase(status.codex, now),
+      githubApp: status.githubApp,
+      githubToken: status.githubToken,
+      reviews: [
+        {
+          taskId: review.taskId,
+          href: `/ui/reviews/${review.taskId}`,
+          repoLabel: `${review.owner}/${review.repo} #${review.number}`,
+          title: review.title || "—",
+          triggerLabel: displayTrigger(review.trigger),
+          resultKind: kind,
+          resultText: resultLabel(kind),
+          p0: "0",
+          p1: "1",
+          p2: "0",
+          p3: "0",
+          p0On: false,
+          p1On: true,
+          p2On: false,
+          p3On: false,
+          duration: formatDuration(reviewDurationMs(review.startedAt, review.finishedAt, now)),
+          whenIso,
+          whenLabel: formatTime(whenIso),
+        },
+      ],
       repos: ["acme/demo"],
       total: 1,
+      shown: 1,
       form: { repo: "", result: "", since: "", from: "", to: "", q: "" },
-      now: Date.parse("2026-10-13T15:05:00.000Z"),
-    });
+      filtered: false,
+      empty: null,
+    };
+    const html = renderListHtml(model);
     expect(html).toContain("0.1.0");
     expect(html).toContain("1m 5s");
     expect(html).toContain("access token expires ");

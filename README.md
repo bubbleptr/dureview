@@ -73,15 +73,15 @@ Migrated onto TanStack Start routes:
 - `GET /health`
 - `POST /webhook`, including `X-Hub-Signature-256` verification, then the existing pi-durable review enqueue
 - `GET /` and `GET /ui` review list, React + shadcn, reading `$DUREVIEW_DATA_DIR/reviews.sqlite`
-- `GET` and `POST /ui/login`. The cookie is still `dureview_ui`: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, 30 days. The value is `DUREVIEW_UI_TOKEN`.
+- `GET /ui/reviews/:taskId` review detail, React + shadcn, three columns (files, diff with inline findings, summary and settings). The file list is `@pierre/trees` and the diff is `@pierre/diffs` (Shiki, unified or split, findings as line annotations). Unchanged regions expand from the full base and head files in the local checkout, loaded when a file is expanded. If that checkout is gone, the page asks GitHub for those two SHAs. If that also fails, the hunk patch stays as it is. Placement still uses `src/ui/diff.ts`. The patch is still loaded live from GitHub when the page opens. A GitHub error leaves the saved comments on the page.
+- `GET` and `POST /ui/login`. The cookie is still `dureview_ui`: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, 30 days. The value is `DUREVIEW_UI_TOKEN`. A successful login from `/` continues at `/ui`.
 
 Not migrated yet:
 
-- `GET /ui/reviews/:taskId` still returns the previous HTML detail page (diff parsing in `src/ui/diff.ts` is unchanged and still used there)
 - Codex `login` / `logout`, review execution, GitHub publishing, and the archive format
 - Tests still boot an in-process `node:http` listener (`startHttp`) so they can call the same helpers without Vite. That listener is not the production server.
 
-`npm run typecheck` and `npm test` (106 tests) pass on this branch.
+`npm run typecheck` and `npm test` pass on this branch. Production is still one Node process. On Fly, keep a single machine and the SQLite file at `/data`.
 
 ## Login
 
@@ -281,8 +281,9 @@ Metadata, those comments, and the failure reason are stored in `$DUREVIEW_DATA_D
 | `GITHUB_TOKEN` | | PAT used when App id is unset |
 | `GITHUB_API_URL` | `https://api.github.com` | API root for GitHub Enterprise |
 | `DUREVIEW_UI_TOKEN` | | Enables the review pages at `GET /`, `GET /ui`, and `GET /ui/reviews/<id>`. Login-form token, Basic-auth password, or bearer token. Unset leaves the pages disabled. |
+| `DUREVIEW_CHECKOUT_TTL_DAYS` | `30` | Delete `checkouts/<owner>/<repo>/<sha>` directories older than this many days. `0` deletes every checkout no review is still running. The sweep runs at startup and every six hours, and it skips a directory whose review is still running. |
 
-`auth.json`, `session.sqlite`, `reviews.sqlite`, and `reviews.json` live in the data directory. Checkouts live in `checkouts/<owner>/<repo>/<sha>`.
+`auth.json`, `session.sqlite`, `reviews.sqlite`, and `reviews.json` live in the data directory. Checkouts live in `checkouts/<owner>/<repo>/<sha>`. The pull request head is `HEAD`. The base commit is `refs/dureview/base`, so either side can be read with `git show <sha>:<path>`.
 
 ## Development
 

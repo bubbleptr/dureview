@@ -27,6 +27,8 @@ export type PlacedFile = {
   unanchored: StoredComment[];
   patchMissing: boolean;
   patchTruncated: boolean;
+  /** Git diff Pierre can parse. Null when GitHub sent no patch. */
+  diffText: string | null;
 };
 
 export type PlacedReview = {
@@ -130,7 +132,91 @@ function placeFile(file: PullFile, comments: StoredComment[], anchor: string): P
     unanchored: comments.filter((comment) => !attached.has(comment.ordinal)),
     patchMissing: patch === null,
     patchTruncated: truncated,
+    diffText:
+      patch === null
+        ? null
+        : gitDiffText({
+            filename: file.filename,
+            previousFilename: file.previousFilename,
+            status: file.status,
+            patch,
+          }),
   };
+}
+
+/**
+ * Wrap a GitHub file patch (hunks only) as a one-file git diff.
+ * Hunk counts are rewritten to the lines actually present so a short or
+ * truncated patch still parses, while the hunk's start line stays put.
+ */
+export function gitDiffText(file: {
+  filename: string;
+  previousFilename: string | null;
+  status: string;
+  patch: string;
+}): string {
+  const added = file.status === "added";
+  const removed = file.status === "removed";
+  const from = file.previousFilename ?? file.filename;
+  const to = file.filename;
+  const header = [`diff --git ${quoteGitPath("a", from)} ${quoteGitPath("b", to)}`];
+  // Pierre expands `change` and rename diffs. `new file` / `deleted file` mode
+  // marks a type it will not hydrate, so an added or deleted file stays a
+  // change with `/dev/null` on the empty side.
+  if ((file.status === "renamed" || file.status === "copied") && file.previousFilename && file.previousFilename !== file.filename) {
+    const verb = file.status === "copied" ? "copy" : "rename";
+    header.push(`${verb} from ${file.previousFilename}`);
+    header.push(`${verb} to ${file.filename}`);
+  }
+  header.push(`--- ${added ? "/dev/null" : quoteGitPath("a", from)}`);
+  header.push(`+++ ${removed ? "/dev/null" : quoteGitPath("b", to)}`);
+  return `${header.join("\n")}\n${normalizeHunkCounts(file.patch)}`;
+}
+
+function quoteGitPath(prefix: "a" | "b", name: string): string {
+  const path = `${prefix}/${name}`;
+  if (!/[\t "\\]/.test(name)) return path;
+  return `"${path.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function normalizeHunkCounts(patch: string): string {
+  const source = patch.endsWith("\n") ? patch.slice(0, -1) : patch;
+  const lines = source.split("\n");
+  const out: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(line);
+    if (!hunk?.[1] || !hunk[2]) {
+      out.push(line);
+      index += 1;
+      continue;
+    }
+    const rest = hunk[3] ?? "";
+    index += 1;
+    const body: string[] = [];
+    let oldCount = 0;
+    let newCount = 0;
+    while (index < lines.length && !lines[index]?.startsWith("@@ ")) {
+      const bodyLine = lines[index] ?? "";
+      if (bodyLine.startsWith("\\")) body.push(bodyLine);
+      else if (bodyLine.startsWith("+")) {
+        newCount += 1;
+        body.push(bodyLine);
+      } else if (bodyLine.startsWith("-")) {
+        oldCount += 1;
+        body.push(bodyLine);
+      } else {
+        oldCount += 1;
+        newCount += 1;
+        body.push(bodyLine);
+      }
+      index += 1;
+    }
+    out.push(`@@ -${hunk[1]},${oldCount} +${hunk[2]},${newCount} @@${rest}`);
+    out.push(...body);
+  }
+  return out.join("\n");
 }
 
 function anchorIndex(lines: PatchLine[], comment: StoredComment): number | null {

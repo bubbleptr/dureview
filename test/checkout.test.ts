@@ -66,6 +66,40 @@ describe("base branch .dureview.md", () => {
     expect(prepared.policy.language).toBe("zh");
     expect(prepared.rules).toContain("Rules without a trigger.");
   });
+
+  it("shallow-fetches the base commit into the head checkout", async () => {
+    const parent = await tempDataDir();
+    const remote = join(parent, "remote.git");
+    const work = join(parent, "work");
+    await git(parent, ["init", "--bare", "-b", "main", remote]);
+    await git(remote, ["config", "uploadpack.allowReachableSHA1InWant", "true"]);
+    await git(remote, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
+    await mkdir(join(work, "src"), { recursive: true });
+    await git(work, ["init", "-b", "main"]);
+    await writeFile(join(work, "src", "pay.ts"), "export const price = 1;\n");
+    await git(work, ["add", "src/pay.ts"]);
+    await git(work, ["commit", "-m", "base"]);
+    const baseSha = (await git(work, ["rev-parse", "HEAD"])).trim();
+    await writeFile(join(work, "src", "pay.ts"), "export const price = 2;\n");
+    await git(work, ["add", "src/pay.ts"]);
+    await git(work, ["commit", "-m", "head"]);
+    const headSha = (await git(work, ["rev-parse", "HEAD"])).trim();
+    await git(work, ["remote", "add", "origin", remote]);
+    await git(work, ["push", "origin", "HEAD:refs/heads/main"]);
+    await git(work, ["push", "origin", `HEAD:refs/pull/7/head`]);
+
+    const root = await tempDataDir();
+    const checkout = new GitCheckout(new MemoryGitHub(), root, async () => undefined);
+    const prepared = await checkout.prepare(
+      { ...reviewRequest(headSha), baseSha, cloneUrl: remote },
+      AbortSignal.timeout(20_000),
+    );
+
+    expect((await git(prepared.dir, ["rev-parse", "HEAD"])).trim()).toBe(headSha);
+    expect((await git(prepared.dir, ["rev-parse", "refs/dureview/base"])).trim()).toBe(baseSha);
+    expect(await git(prepared.dir, ["show", `${baseSha}:src/pay.ts`])).toBe("export const price = 1;\n");
+    expect(await git(prepared.dir, ["show", `${headSha}:src/pay.ts`])).toBe("export const price = 2;\n");
+  });
 });
 
 async function commitCheckout(): Promise<{ dir: string; sha: string }> {

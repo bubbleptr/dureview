@@ -284,9 +284,13 @@ export class MemoryGitHub implements GitHub {
     return { ...reply };
   }
 
+  /** Paths passed to `getRepoFile`, in call order. */
+  filePaths: string[] = [];
+
   async getRepoFile(_request: GitHubRepo, path: string, ref: string): Promise<string | null> {
     this.calls.push("getRepoFile");
     this.fileRefs.push(ref);
+    this.filePaths.push(path);
     return this.files.get(`${ref}\0${path}`) ?? null;
   }
 
@@ -427,6 +431,7 @@ export function testConfig(dataDir: string): Config {
     skipDrafts: false,
     uiToken: undefined,
     defaultTrigger: "manual",
+    checkoutTtlDays: 30,
   };
 }
 
