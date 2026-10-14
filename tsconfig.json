@@ -21,6 +21,7 @@
     "src/router.tsx",
     "src/server-entry.ts",
     "src/ui/list-fn.ts",
+    "src/ui/detail-fn.ts",
     "src/routeTree.gen.ts",
     "src/styles.css"
   ]

@@ -26,7 +26,7 @@ export async function serveCommand(config: Config): Promise<void> {
 /**
  * In-process listener for tests. Production listens through the TanStack Start
  * server (`npm start` / `node .output/server/index.mjs`), which calls the same
- * webhook, login, and list helpers.
+ * webhook, login, list, and detail helpers.
  */
 export async function startHttp(
   service: DureviewService,

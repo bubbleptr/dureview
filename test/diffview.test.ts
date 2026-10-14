@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { reviewResult, type ReviewDetail, type StoredComment } from "../src/review/archive.js";
+import { buildReviewDetail } from "../src/ui/detail-data.js";
 import { parsePatch, placeReview } from "../src/ui/diff.js";
-import { renderReviewDetail, renderReviewList, STUCK_AFTER_MS } from "../src/ui/page.js";
-import type { ReviewDetail } from "../src/review/archive.js";
+import type { ReviewListModel } from "../src/ui/list-model.js";
+import { displayTrigger, formatTime, resultLabel, runningLabel, STUCK_AFTER_MS } from "../src/ui/page.js";
+import { renderDetailHtml, renderListHtml } from "../src/ui/render-react.js";
 import { sampleFinding } from "./support.js";
-import type { StoredComment } from "../src/review/archive.js";
 
 const PATCH = [
   "@@ -1,5 +1,6 @@",
@@ -85,35 +87,37 @@ describe("pull request diff placement", () => {
         }),
       ),
     ]);
-    const html = renderReviewDetail({
-      review,
-      files: [
-        {
-          filename: "src/pay.ts",
-          status: "modified",
-          additions: 1,
-          deletions: 1,
-          patch: PATCH,
-          previousFilename: null,
-        },
-      ],
-      diffUnavailable: false,
-      githubApiUrl: "https://api.github.com",
-      now: Date.parse("2026-10-13T15:05:00.000Z"),
-    });
-    expect(html).toContain("href=\"/ui\"");
+    const html = renderDetailHtml(
+      buildReviewDetail({
+        review,
+        files: [
+          {
+            filename: "src/pay.ts",
+            status: "modified",
+            additions: 1,
+            deletions: 1,
+            patch: PATCH,
+            previousFilename: null,
+          },
+        ],
+        diffUnavailable: false,
+        githubApiUrl: "https://api.github.com",
+        now: Date.parse("2026-10-13T15:05:00.000Z"),
+      }),
+    );
+    expect(html).toContain('href="/ui"');
     expect(html).toContain("https://github.com/acme/demo/pull/7");
     expect(html).toContain("src/pay.ts");
     expect(html).toContain("&lt;b&gt;xss&lt;/b&gt;");
     expect(html).toContain("&lt;script&gt;");
-    expect(html.match(/<script>/g)).toHaveLength(1);
+    expect(html).not.toMatch(/<script[\s>]/);
     expect(html).not.toContain("<b>xss</b>");
     expect(html.indexOf("Positive amounts")).toBeGreaterThan(html.indexOf("if (amount &gt; 0)"));
-    expect(html).toContain("<dt>trigger</dt><dd title=\"auto\">auto</dd>");
-    expect(html).toContain("max-width: 1440px");
+    expect(html).toContain(">trigger<");
+    expect(html).toContain('title="auto"');
     expect(html).toContain('datetime="2026-10-13T15:05:00.000Z"');
-    expect(html).toContain("<dt class=\"p0\">P0</dt>");
-    expect(html).toContain("class=\"badge blocker\"");
+    expect(html).toContain(">P0<");
+    expect(html).toContain("P0/P1");
   });
 
   it("shows status instead of zero counts, and one tag when kind and category match", () => {
@@ -129,15 +133,18 @@ describe("pull request diff placement", () => {
     failed.checked = ["payment capture"];
     failed.error = "clone failed: permission denied";
     failed.finishedAt = "2026-10-13T15:10:00.000Z";
-    const failedHtml = renderReviewDetail({
-      review: failed,
-      files: [],
-      diffUnavailable: true,
-      githubApiUrl: "https://api.github.com",
-      now,
-    });
+    const failedHtml = renderDetailHtml(
+      buildReviewDetail({
+        review: failed,
+        files: [],
+        diffUnavailable: true,
+        githubApiUrl: "https://api.github.com",
+        now,
+      }),
+    );
     expect(failedHtml).toContain("clone failed: permission denied");
-    expect(failedHtml).not.toContain("<dt class=\"p0\">");
+    expect(failedHtml).toContain("The diff could not be loaded from GitHub. Saved comments are still listed.");
+    expect(failedHtml).not.toContain(">P0<");
     expect(failedHtml).not.toContain("payment capture");
 
     const running = detail([]);
@@ -147,83 +154,111 @@ describe("pull request diff placement", () => {
     running.p1 = 0;
     running.checked = ["payment capture"];
     running.startedAt = new Date(now - 5 * 60 * 1000).toISOString();
-    const runningHtml = renderReviewDetail({
-      review: running,
-      files: [],
-      diffUnavailable: false,
-      githubApiUrl: "https://api.github.com",
-      now,
-    });
+    const runningHtml = renderDetailHtml(
+      buildReviewDetail({
+        review: running,
+        files: [],
+        diffUnavailable: false,
+        githubApiUrl: "https://api.github.com",
+        now,
+      }),
+    );
     expect(runningHtml).toContain("进行中");
-    expect(runningHtml).not.toContain("<dt class=\"p0\">");
+    expect(runningHtml).not.toContain(">P0<");
     expect(runningHtml).not.toContain("5m");
 
     running.startedAt = new Date(now - STUCK_AFTER_MS).toISOString();
-    const stuckHtml = renderReviewDetail({
-      review: running,
-      files: [],
-      diffUnavailable: false,
-      githubApiUrl: "https://api.github.com",
-      now,
-    });
+    const stuckHtml = renderDetailHtml(
+      buildReviewDetail({
+        review: running,
+        files: [],
+        diffUnavailable: false,
+        githubApiUrl: "https://api.github.com",
+        now,
+      }),
+    );
     expect(stuckHtml).toContain("疑似卡住");
     expect(stuckHtml).not.toContain("30m");
 
     const same = stored(sampleFinding());
     same.kind = "correctness";
     same.category = "Correctness";
-    const tagged = renderReviewDetail({
-      review: detail([same]),
-      files: [],
-      diffUnavailable: false,
-      githubApiUrl: "https://api.github.com",
-      now,
-    });
+    const tagged = renderDetailHtml(
+      buildReviewDetail({
+        review: detail([same]),
+        files: [],
+        diffUnavailable: false,
+        githubApiUrl: "https://api.github.com",
+        now,
+      }),
+    );
     expect(tagged).toContain(">correctness<");
     expect(tagged).not.toContain(">Correctness<");
-    expect(tagged).toContain("text-overflow: ellipsis");
-    expect(tagged).toContain("padding: 1rem 1.15rem");
+    expect(tagged).toContain("truncate");
   });
 
   it("labels in-progress rows instead of a growing duration", () => {
     const now = Date.parse("2026-10-13T16:00:00.000Z");
-    const html = renderReviewList({
-      status: {
-        version: "0.1.0",
-        uptimeSeconds: 1,
-        provider: "faux",
-        model: "faux-1",
-        codex: { present: false, expiresAt: null, unreadable: false },
-        githubApp: false,
-        githubToken: true,
-      },
+    const startedAt = new Date(now - STUCK_AFTER_MS - 1000).toISOString();
+    const review = {
+      taskId: "run",
+      owner: "acme",
+      repo: "demo",
+      number: 9,
+      title: "Still going",
+      trigger: "opened",
+      startedAt,
+      finishedAt: null,
+      outcome: "running" as const,
+      verdict: null,
+      p0: 0,
+      p1: 0,
+      p2: 0,
+      p3: 0,
+      findingCount: null,
+      countsKnown: true,
+    };
+    const kind = reviewResult(review);
+    const model: ReviewListModel = {
+      version: "0.1.0",
+      uptime: "1s",
+      provider: "faux",
+      model: "faux-1",
+      codex: { kind: "plain", text: "Codex not signed in" },
+      githubApp: false,
+      githubToken: true,
       reviews: [
         {
-          taskId: "run",
-          owner: "acme",
-          repo: "demo",
-          number: 9,
-          title: "Still going",
-          trigger: "opened",
-          startedAt: new Date(now - STUCK_AFTER_MS - 1000).toISOString(),
-          finishedAt: null,
-          outcome: "running",
-          verdict: null,
-          p0: 0,
-          p1: 0,
-          p2: 0,
-          p3: 0,
-          findingCount: null,
-          countsKnown: true,
+          taskId: review.taskId,
+          href: "/ui/reviews/run",
+          repoLabel: "acme/demo #9",
+          title: review.title,
+          triggerLabel: displayTrigger(review.trigger),
+          resultKind: kind,
+          resultText: resultLabel(kind),
+          p0: "0",
+          p1: "0",
+          p2: "0",
+          p3: "0",
+          p0On: false,
+          p1On: false,
+          p2On: false,
+          p3On: false,
+          duration: runningLabel(startedAt, now),
+          whenIso: startedAt,
+          whenLabel: formatTime(startedAt),
         },
       ],
       repos: ["acme/demo"],
       total: 1,
+      shown: 1,
       form: { repo: "", result: "", since: "", from: "", to: "", q: "" },
-      now,
-    });
+      filtered: false,
+      empty: null,
+    };
+    const html = renderListHtml(model);
     expect(html).toContain("疑似卡住");
-    expect(html).toContain("max-width: 1440px");
+    expect(html).not.toContain("30m");
     expect(html).toContain("<time ");
   });
 });

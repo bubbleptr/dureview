@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { LoginForm } from "../components/login-form.js";
+import { ReviewDetailView } from "../components/review-detail.js";
 import { ReviewListView } from "../components/review-list.js";
+import type { ReviewDetailModel } from "./detail-model.js";
 import type { ReviewListModel } from "./list-model.js";
 
 export function renderLoginHtml(input: { next: string; error?: string }): string {
@@ -9,6 +11,10 @@ export function renderLoginHtml(input: { next: string; error?: string }): string
 
 export function renderListHtml(model: ReviewListModel): string {
   return documentShell("dureview", renderToStaticMarkup(<ReviewListView model={model} />));
+}
+
+export function renderDetailHtml(model: ReviewDetailModel): string {
+  return documentShell(model.pageTitle, renderToStaticMarkup(<ReviewDetailView model={model} />));
 }
 
 function documentShell(title: string, body: string): string {

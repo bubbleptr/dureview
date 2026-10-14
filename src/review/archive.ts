@@ -420,6 +420,14 @@ export class ReviewArchive {
     });
   }
 
+  exists(taskId: string): Promise<boolean> {
+    if (!TASK_ID.test(taskId)) return Promise.resolve(false);
+    return this.#exclusive(() => {
+      const row = this.#database().prepare("SELECT 1 AS ok FROM reviews WHERE task_id = ?").get(taskId);
+      return row !== undefined;
+    });
+  }
+
   get(taskId: string): Promise<ReviewDetail | null> {
     if (!TASK_ID.test(taskId)) return Promise.resolve(null);
     return this.#exclusive(() => {

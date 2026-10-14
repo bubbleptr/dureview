@@ -154,6 +154,11 @@ export class DureviewService {
     return this.archive.list(filter);
   }
 
+  /** True when this task is in the archive. Does not call GitHub. */
+  reviewExists(taskId: string): Promise<boolean> {
+    return this.archive.exists(taskId);
+  }
+
   /**
    * One saved review plus the pull request files fetched now.
    * The diff is not read from disk. A GitHub error leaves the saved comments in place.

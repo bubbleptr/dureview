@@ -73,15 +73,15 @@ Migrated onto TanStack Start routes:
 - `GET /health`
 - `POST /webhook`, including `X-Hub-Signature-256` verification, then the existing pi-durable review enqueue
 - `GET /` and `GET /ui` review list, React + shadcn, reading `$DUREVIEW_DATA_DIR/reviews.sqlite`
-- `GET` and `POST /ui/login`. The cookie is still `dureview_ui`: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, 30 days. The value is `DUREVIEW_UI_TOKEN`.
+- `GET /ui/reviews/:taskId` review detail, React + shadcn, three columns (files, diff with inline findings, summary and settings). The diff is still parsed by `src/ui/diff.ts` and still loaded live from GitHub when the page opens. A GitHub error leaves the saved comments on the page.
+- `GET` and `POST /ui/login`. The cookie is still `dureview_ui`: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, 30 days. The value is `DUREVIEW_UI_TOKEN`. A successful login from `/` continues at `/ui`.
 
 Not migrated yet:
 
-- `GET /ui/reviews/:taskId` still returns the previous HTML detail page (diff parsing in `src/ui/diff.ts` is unchanged and still used there)
 - Codex `login` / `logout`, review execution, GitHub publishing, and the archive format
 - Tests still boot an in-process `node:http` listener (`startHttp`) so they can call the same helpers without Vite. That listener is not the production server.
 
-`npm run typecheck` and `npm test` (106 tests) pass on this branch.
+`npm run typecheck` and `npm test` pass on this branch. Production is still one Node process. On Fly, keep a single machine and the SQLite file at `/data`.
 
 ## Login
 
