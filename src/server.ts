@@ -6,8 +6,8 @@ import { GithubRest } from "./github/client.js";
 import { log } from "./log.js";
 import { GitCheckout } from "./review/checkout.js";
 import { DureviewService, type ServiceOptions } from "./service.js";
-import { authorizeUi } from "./ui/auth.js";
-import { renderReviewDetail, renderReviewList } from "./ui/page.js";
+import { authorizeUi, safeNextPath, uiSessionCookie, uiTokenMatches } from "./ui/auth.js";
+import { renderLogin, renderReviewDetail, renderReviewList } from "./ui/page.js";
 import { reviewFilterFromSearch } from "./ui/query.js";
 import { loadDashboard } from "./ui/status.js";
 
@@ -31,7 +31,7 @@ const UI_HEADERS = {
   "referrer-policy": "no-referrer",
   "x-frame-options": "DENY",
   "content-security-policy":
-    "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 };
 
 export async function serveCommand(config: Config): Promise<void> {
@@ -138,6 +138,10 @@ async function handle(
       return;
     }
     // The review pages are off unless DUREVIEW_UI_TOKEN is set. Health and webhook are unchanged.
+    if (config.uiToken && (url === "/ui/login" || url === "/ui/login/")) {
+      await serveLogin(config.uiToken, req, res);
+      return;
+    }
     const route = req.method === "GET" ? uiRoute(url) : null;
     if (config.uiToken && route) {
       await serveUi(service, config, req, res, config.uiToken, route);
@@ -168,8 +172,16 @@ async function serveUi(
   token: string,
   route: UiRoute,
 ): Promise<void> {
-  if (!authorizeUi(header(req, "authorization"), token)) {
-    sendUnauthorized(res);
+  if (!authorizeUi(header(req, "authorization"), token, header(req, "cookie"))) {
+    // A presented Authorization header keeps the JSON challenge so curl -u still works.
+    // A browser visit has no Authorization header: show the login form, and do not send
+    // WWW-Authenticate or the browser replaces that form with its own dialog.
+    if (header(req, "authorization")) {
+      sendUnauthorized(res);
+      return;
+    }
+    const path = (req.url ?? "/").split("?")[0] ?? "/";
+    sendHtml(res, renderLogin({ next: safeNextPath(path) }), 401);
     return;
   }
   if (route.kind === "detail") {
@@ -241,13 +253,50 @@ function send(res: ServerResponse, status: number, body: Record<string, unknown>
   res.end(payload);
 }
 
-function sendHtml(res: ServerResponse, html: string): void {
-  res.writeHead(200, {
+async function serveLogin(token: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method === "GET") {
+    if (authorizeUi(header(req, "authorization"), token, header(req, "cookie"))) {
+      sendRedirect(res, "/ui");
+      return;
+    }
+    sendHtml(res, renderLogin({ next: "/ui" }), 401);
+    return;
+  }
+  if (req.method !== "POST") {
+    send(res, 404, { error: "not found" });
+    return;
+  }
+  const raw = await readBody(req, 8_192);
+  const form = new URLSearchParams(raw.toString("utf8"));
+  const next = safeNextPath(form.get("next"));
+  const presented = form.get("token") ?? "";
+  if (!uiTokenMatches(presented, token)) {
+    sendHtml(res, renderLogin({ next, error: "token 不正确" }), 401);
+    return;
+  }
+  sendRedirect(res, next, uiSessionCookie(token));
+}
+
+function sendHtml(res: ServerResponse, html: string, status = 200): void {
+  res.writeHead(status, {
     "content-type": "text/html; charset=utf-8",
     "content-length": Buffer.byteLength(html),
     ...UI_HEADERS,
   });
   res.end(html);
+}
+
+function sendRedirect(res: ServerResponse, location: string, setCookie?: string): void {
+  const headers: Record<string, string | number> = {
+    location,
+    "content-length": 0,
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+  };
+  if (setCookie) headers["set-cookie"] = setCookie;
+  res.writeHead(303, headers);
+  res.end();
 }
 
 function sendUnauthorized(res: ServerResponse): void {

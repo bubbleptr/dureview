@@ -91,6 +91,8 @@ export type ReviewDetail = ReviewSummary & {
   model: string | null;
   policy: StoredPolicy | null;
   comments: StoredComment[];
+  /** Failure reason when `outcome` is `failed`. Null for other rows and for legacy archives. */
+  error: string | null;
 };
 
 export type ReviewList = {
@@ -148,7 +150,8 @@ export class ReviewArchive {
         p2 INTEGER NOT NULL DEFAULT 0,
         p3 INTEGER NOT NULL DEFAULT 0,
         finding_count INTEGER,
-        counts_known INTEGER NOT NULL DEFAULT 1
+        counts_known INTEGER NOT NULL DEFAULT 1,
+        error TEXT
       ) STRICT;
       CREATE TABLE IF NOT EXISTS comments (
         task_id TEXT NOT NULL,
@@ -171,6 +174,7 @@ export class ReviewArchive {
       ) STRICT;
       CREATE INDEX IF NOT EXISTS reviews_started ON reviews(started_at DESC);
     `);
+    migrateReviews(db);
     this.#db = db;
     await chmod(this.file, 0o600);
     await this.#importLegacy();
@@ -255,6 +259,7 @@ export class ReviewArchive {
     const baseSha = clip(event.baseSha ?? "", 64);
     const baseRef = clip(event.baseRef ?? "", 200);
     const installationId = cleanInstallation(event.installationId);
+    const errorText = failed ? cleanError(event.error) : null;
     return this.#exclusive(() => {
       const db = this.#database();
       db.exec("BEGIN");
@@ -271,7 +276,8 @@ export class ReviewArchive {
               base_sha = CASE WHEN ? != '' THEN ? ELSE base_sha END,
               base_ref = CASE WHEN ? != '' THEN ? ELSE base_ref END,
               installation_id = COALESCE(?, installation_id),
-              p0 = ?, p1 = ?, p2 = ?, p3 = ?, finding_count = ?, counts_known = ?
+              p0 = ?, p1 = ?, p2 = ?, p3 = ?, finding_count = ?, counts_known = ?,
+              error = ?
             WHERE task_id = ?`,
           ).run(
             finishedAt,
@@ -298,6 +304,7 @@ export class ReviewArchive {
             counts.p3,
             findingCount,
             countsKnown,
+            errorText,
             identity.taskId,
           );
         } else {
@@ -305,8 +312,8 @@ export class ReviewArchive {
             `INSERT INTO reviews (
               task_id, owner, repo, number, title, sha, base_sha, base_ref, installation_id,
               trigger, started_at, finished_at, outcome, verdict, verdict_reason, overall_confidence,
-              checked_json, policy_json, provider, model, p0, p1, p2, p3, finding_count, counts_known
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              checked_json, policy_json, provider, model, p0, p1, p2, p3, finding_count, counts_known, error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
             identity.taskId,
             identity.owner,
@@ -333,6 +340,7 @@ export class ReviewArchive {
             counts.p3,
             findingCount,
             countsKnown,
+            errorText,
           );
         }
         db.prepare("DELETE FROM comments WHERE task_id = ?").run(identity.taskId);
@@ -437,6 +445,7 @@ export class ReviewArchive {
         model: str(row, "model") || null,
         policy: parsePolicy(str(row, "policy_json")),
         comments,
+        error: str(row, "error") || null,
       };
     });
   }
@@ -520,6 +529,19 @@ function resultPredicate(result: ReviewFilter["result"]): string | undefined {
       AND (counts_known = 1 OR COALESCE(finding_count, 0) = 0)`;
   }
   return undefined;
+}
+
+/** Existing archives created before the error column keep their rows. */
+function migrateReviews(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(reviews)").all();
+  const names = new Set(columns.map((row) => str(row, "name")));
+  if (!names.has("error")) db.exec("ALTER TABLE reviews ADD COLUMN error TEXT");
+}
+
+function cleanError(value: string | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const text = clip(value, 2000).trim();
+  return text.length > 0 ? text : null;
 }
 
 function summaryFromRow(row: Record<string, SQLOutputValue>): ReviewSummary | undefined {

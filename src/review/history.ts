@@ -13,7 +13,8 @@ const TRIGGERS = new Set(["opened", "synchronize", "reopened", "ready_for_review
 
 /**
  * Outcome written when a review task finishes.
- * Finding text, diffs, and credentials are intentionally absent.
+ * Finding text, diffs, credentials, and failure reasons are intentionally absent
+ * from `reviews.json`. The archive may store `error` separately.
  */
 export type ReviewFinished = {
   taskId: string;
@@ -25,7 +26,7 @@ export type ReviewFinished = {
   findingCount: number | null;
   /**
    * Optional context for the review archive. `reviews.json` does not store these.
-   * Finding text stays out of the short log.
+   * Finding text and the failure reason stay out of the short log.
    */
   title?: string;
   sha?: string;
@@ -39,6 +40,8 @@ export type ReviewFinished = {
   findings?: Finding[];
   provider?: string;
   modelId?: string;
+  /** Failure reason for the archive only. Not written to `reviews.json`. */
+  error?: string;
 };
 
 export type ReviewLogEntry = {

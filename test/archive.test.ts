@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { ReviewArchive, reviewResult } from "../src/review/archive.js";
 import { reviewFilterFromSearch } from "../src/ui/query.js";
@@ -100,6 +101,9 @@ describe("review archive", () => {
     ]);
     expect(detail?.comments[0]?.body).toContain("never billed");
     expect(detail?.provider).toBe("faux");
+    expect(detail?.error).toBeNull();
+    const failed = await archive.get("3");
+    expect(failed?.error).toBeNull();
 
     const again = new ReviewArchive(file);
     await again.open();
@@ -154,6 +158,67 @@ describe("review archive", () => {
     const listed = await second.list({ repo: "", result: "", since: null, until: null, q: "" });
     expect(listed.reviews.map((review) => review.taskId)).toEqual(["1"]);
     second.close();
+  });
+
+  it("migrates an archive that has no error column and stores the failure reason", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dureview-archive-"));
+    const file = join(dir, "reviews.sqlite");
+    const db = new DatabaseSync(file);
+    db.exec(`
+      CREATE TABLE reviews (
+        task_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        sha TEXT NOT NULL,
+        base_sha TEXT NOT NULL,
+        base_ref TEXT NOT NULL,
+        installation_id INTEGER,
+        trigger TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        outcome TEXT NOT NULL,
+        verdict TEXT,
+        verdict_reason TEXT,
+        overall_confidence REAL,
+        checked_json TEXT NOT NULL DEFAULT '[]',
+        policy_json TEXT,
+        provider TEXT,
+        model TEXT,
+        p0 INTEGER NOT NULL DEFAULT 0,
+        p1 INTEGER NOT NULL DEFAULT 0,
+        p2 INTEGER NOT NULL DEFAULT 0,
+        p3 INTEGER NOT NULL DEFAULT 0,
+        finding_count INTEGER,
+        counts_known INTEGER NOT NULL DEFAULT 1
+      ) STRICT;
+    `);
+    db.prepare(
+      `INSERT INTO reviews (
+        task_id, owner, repo, number, title, sha, base_sha, base_ref, trigger, started_at, outcome
+      ) VALUES ('4', 'acme', 'demo', 11, 'Old row', '', '', '', 'opened', '2026-10-13T00:00:00.000Z', 'running')`,
+    ).run();
+    db.close();
+
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    await archive.finish({
+      taskId: "4",
+      owner: "acme",
+      repo: "demo",
+      number: 11,
+      outcome: "failed",
+      verdict: null,
+      findingCount: null,
+      error: `clone failed\0${"x".repeat(2100)}`,
+    });
+    const detail = await archive.get("4");
+    expect(detail?.outcome).toBe("failed");
+    expect(detail?.error?.startsWith("clone failed")).toBe(true);
+    expect(detail?.error).not.toContain("\0");
+    expect(detail?.error?.length).toBe(2000);
+    archive.close();
   });
 });
 

@@ -36,7 +36,9 @@ describe("status page", () => {
     const root = await fetch(`${http.url}/`);
     const ui = await fetch(`${http.url}/ui`);
     const detail = await fetch(`${http.url}/ui/reviews/1`);
+    const login = await fetch(`${http.url}/ui/login`, { method: "POST" });
     expect(root.status).toBe(404);
+    expect(login.status).toBe(404);
     expect(detail.status).toBe(404);
     expect(await root.json()).toEqual({ error: "not found" });
     expect(root.headers.get("www-authenticate")).toBeNull();
@@ -90,12 +92,18 @@ describe("status page", () => {
 
     const missing = await fetch(`${http.url}/`);
     expect(missing.status).toBe(401);
-    expect(await missing.json()).toEqual({ error: "unauthorized" });
-    expect(missing.headers.get("www-authenticate")).toContain("Basic");
+    expect(missing.headers.get("content-type")).toContain("text/html");
+    expect(missing.headers.get("www-authenticate")).toBeNull();
+    const loginHtml = await missing.text();
+    expect(loginHtml).toContain('action="/ui/login"');
+    expect(loginHtml).toContain("登录");
+    expect(loginHtml).not.toContain(UI_TOKEN);
     expect(JSON.stringify(missing.headers)).not.toContain(UI_TOKEN);
 
     const wrong = await fetch(`${http.url}/ui`, { headers: { authorization: "Bearer nope" } });
     expect(wrong.status).toBe(401);
+    expect(await wrong.json()).toEqual({ error: "unauthorized" });
+    expect(wrong.headers.get("www-authenticate")).toContain("Basic");
 
     const query = await fetch(`${http.url}/?token=${UI_TOKEN}`);
     expect(query.status).toBe(401);
@@ -125,7 +133,9 @@ describe("status page", () => {
     expect(html).toContain("Charge positive amounts");
     expect(html).toContain(">auto<");
     expect(html).toContain("P0/P1");
-    expect(html).toContain("access token expires 2030-01-02 03:04 UTC");
+    expect(html).toContain("access token expires ");
+    expect(html).toContain('datetime="2030-01-02T03:04:05.000Z"');
+    expect(html).toContain("2030-01-02 03:04 UTC");
     expect(html).toContain("GitHub App <b>no</b>");
     expect(html).toContain("GitHub token <b>yes</b>");
     expect(html).not.toContain("ACCESS_TOKEN_CANARY_9f3a");
@@ -169,7 +179,7 @@ describe("status page", () => {
     expect(detailHtml).toContain("if (amount &gt; 0) return { ok: true };");
     expect(detailHtml).toContain("never billed");
     expect(detailHtml.indexOf("never billed")).toBeGreaterThan(detailHtml.indexOf("if (amount &gt; 0) return { ok: true };"));
-    expect(detailHtml).toContain("<dt>trigger</dt><dd>manual</dd>");
+    expect(detailHtml).toContain("<dt>trigger</dt><dd title=\"manual\">manual</dd>");
     expect(detailHtml).toContain("P1");
     expect(github.pullFileRequests).toEqual([{ installationId: 99, number: 7 }]);
     expect(detailHtml).not.toContain(SHA_A);
@@ -189,7 +199,7 @@ describe("status page", () => {
     expect(posted.status).toBe(404);
   });
 
-  it("records a failed review without the failure text", async () => {
+  it("stores a failed review's error in the archive but not the short log", async () => {
     const dataDir = await tempDataDir();
     const github = new MemoryGitHub();
     const checkout: RepoCheckout = {
@@ -229,9 +239,68 @@ describe("status page", () => {
       findingCount: null,
     });
     expect(JSON.stringify(reviews)).not.toContain("CANARY_SHOULD_NOT_BE_STORED");
+    const log = await readFile(join(dataDir, "reviews.json"), "utf8");
+    expect(log).not.toContain("CANARY_SHOULD_NOT_BE_STORED");
     const stored = await readFile(join(dataDir, "reviews.sqlite"));
-    expect(stored.toString("utf8")).not.toContain("CANARY_SHOULD_NOT_BE_STORED");
+    expect(stored.toString("utf8")).toContain("CANARY_SHOULD_NOT_BE_STORED");
     expect(stored.toString("utf8")).toContain("Charge positive amounts");
+    const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
+    await archive.open();
+    const detail = await archive.get(String(queued.taskId));
+    expect(detail?.error).toContain("clone failed CANARY_SHOULD_NOT_BE_STORED");
+    archive.close();
+  });
+
+  it("sets an HttpOnly cookie from the login form and keeps bearer auth", async () => {
+    const dataDir = await tempDataDir();
+    const github = new MemoryGitHub();
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const http = await startHttp(service, { host: "127.0.0.1", port: 0, uiToken: UI_TOKEN, dataDir });
+    closers.push(async () => {
+      await http.close();
+      await service.close();
+    });
+
+    const rejected = await fetch(`${http.url}/ui/login`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: "wrong-token-canary", next: "/ui/reviews/1" }),
+    });
+    expect(rejected.status).toBe(401);
+    expect(rejected.headers.get("set-cookie")).toBeNull();
+    expect(rejected.headers.get("www-authenticate")).toBeNull();
+    const rejectedHtml = await rejected.text();
+    expect(rejectedHtml).toContain("token 不正确");
+    expect(rejectedHtml).not.toContain("wrong-token-canary");
+    expect(rejectedHtml).not.toContain(UI_TOKEN);
+
+    const evil = await fetch(`${http.url}/ui/login`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: UI_TOKEN, next: "https://evil.example/phish" }),
+    });
+    expect(evil.status).toBe(303);
+    expect(evil.headers.get("location")).toBe("/ui");
+    const setCookie = evil.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain("HttpOnly");
+    expect(setCookie).toContain("Secure");
+    expect(setCookie).toContain("SameSite=Lax");
+    expect(setCookie).toContain("Path=/");
+    expect(setCookie.startsWith("dureview_ui=")).toBe(true);
+
+    const cookie = setCookie.split(";")[0] ?? "";
+    const page = await fetch(`${http.url}/ui`, { headers: { cookie } });
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("dureview");
+
+    const detailNext = await fetch(`${http.url}/ui/login`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: UI_TOKEN, next: "/ui/reviews/task_1" }),
+    });
+    expect(detailNext.headers.get("location")).toBe("/ui/reviews/task_1");
   });
 
   it("filters the list and hides unknown reviews", async () => {

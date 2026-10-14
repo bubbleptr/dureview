@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parsePatch, placeReview } from "../src/ui/diff.js";
-import { renderReviewDetail } from "../src/ui/page.js";
+import { renderReviewDetail, renderReviewList, STUCK_AFTER_MS } from "../src/ui/page.js";
 import type { ReviewDetail } from "../src/review/archive.js";
 import { sampleFinding } from "./support.js";
 import type { StoredComment } from "../src/review/archive.js";
@@ -106,11 +106,125 @@ describe("pull request diff placement", () => {
     expect(html).toContain("src/pay.ts");
     expect(html).toContain("&lt;b&gt;xss&lt;/b&gt;");
     expect(html).toContain("&lt;script&gt;");
-    expect(html).not.toContain("<script>");
+    expect(html.match(/<script>/g)).toHaveLength(1);
     expect(html).not.toContain("<b>xss</b>");
     expect(html.indexOf("Positive amounts")).toBeGreaterThan(html.indexOf("if (amount &gt; 0)"));
-    expect(html).toContain("<dt>trigger</dt><dd>auto</dd>");
+    expect(html).toContain("<dt>trigger</dt><dd title=\"auto\">auto</dd>");
+    expect(html).toContain("max-width: 1440px");
+    expect(html).toContain('datetime="2026-10-13T15:05:00.000Z"');
+    expect(html).toContain("<dt class=\"p0\">P0</dt>");
     expect(html).toContain("class=\"badge blocker\"");
+  });
+
+  it("shows status instead of zero counts, and one tag when kind and category match", () => {
+    const now = Date.parse("2026-10-13T16:00:00.000Z");
+    const failed = detail([]);
+    failed.outcome = "failed";
+    failed.verdict = null;
+    failed.p0 = 0;
+    failed.p1 = 0;
+    failed.p2 = 0;
+    failed.p3 = 0;
+    failed.findingCount = null;
+    failed.checked = ["payment capture"];
+    failed.error = "clone failed: permission denied";
+    failed.finishedAt = "2026-10-13T15:10:00.000Z";
+    const failedHtml = renderReviewDetail({
+      review: failed,
+      files: [],
+      diffUnavailable: true,
+      githubApiUrl: "https://api.github.com",
+      now,
+    });
+    expect(failedHtml).toContain("clone failed: permission denied");
+    expect(failedHtml).not.toContain("<dt class=\"p0\">");
+    expect(failedHtml).not.toContain("payment capture");
+
+    const running = detail([]);
+    running.outcome = "running";
+    running.verdict = null;
+    running.finishedAt = null;
+    running.p1 = 0;
+    running.checked = ["payment capture"];
+    running.startedAt = new Date(now - 5 * 60 * 1000).toISOString();
+    const runningHtml = renderReviewDetail({
+      review: running,
+      files: [],
+      diffUnavailable: false,
+      githubApiUrl: "https://api.github.com",
+      now,
+    });
+    expect(runningHtml).toContain("进行中");
+    expect(runningHtml).not.toContain("<dt class=\"p0\">");
+    expect(runningHtml).not.toContain("5m");
+
+    running.startedAt = new Date(now - STUCK_AFTER_MS).toISOString();
+    const stuckHtml = renderReviewDetail({
+      review: running,
+      files: [],
+      diffUnavailable: false,
+      githubApiUrl: "https://api.github.com",
+      now,
+    });
+    expect(stuckHtml).toContain("疑似卡住");
+    expect(stuckHtml).not.toContain("30m");
+
+    const same = stored(sampleFinding());
+    same.kind = "correctness";
+    same.category = "Correctness";
+    const tagged = renderReviewDetail({
+      review: detail([same]),
+      files: [],
+      diffUnavailable: false,
+      githubApiUrl: "https://api.github.com",
+      now,
+    });
+    expect(tagged).toContain(">correctness<");
+    expect(tagged).not.toContain(">Correctness<");
+    expect(tagged).toContain("text-overflow: ellipsis");
+    expect(tagged).toContain("padding: 1rem 1.15rem");
+  });
+
+  it("labels in-progress rows instead of a growing duration", () => {
+    const now = Date.parse("2026-10-13T16:00:00.000Z");
+    const html = renderReviewList({
+      status: {
+        version: "0.1.0",
+        uptimeSeconds: 1,
+        provider: "faux",
+        model: "faux-1",
+        codex: { present: false, expiresAt: null, unreadable: false },
+        githubApp: false,
+        githubToken: true,
+      },
+      reviews: [
+        {
+          taskId: "run",
+          owner: "acme",
+          repo: "demo",
+          number: 9,
+          title: "Still going",
+          trigger: "opened",
+          startedAt: new Date(now - STUCK_AFTER_MS - 1000).toISOString(),
+          finishedAt: null,
+          outcome: "running",
+          verdict: null,
+          p0: 0,
+          p1: 0,
+          p2: 0,
+          p3: 0,
+          findingCount: null,
+          countsKnown: true,
+        },
+      ],
+      repos: ["acme/demo"],
+      total: 1,
+      form: { repo: "", result: "", since: "", from: "", to: "", q: "" },
+      now,
+    });
+    expect(html).toContain("疑似卡住");
+    expect(html).toContain("max-width: 1440px");
+    expect(html).toContain("<time ");
   });
 });
 
@@ -172,5 +286,6 @@ function detail(comments: StoredComment[]): ReviewDetail {
       maxInline: 10,
     },
     comments,
+    error: null,
   };
 }

@@ -55,6 +55,26 @@ export function formatTime(iso: string): string {
   return `${y}-${m}-${d} ${hh}:${mm} UTC`;
 }
 
+/** A review still marked running after this long is shown as stuck, not as a growing duration. */
+export const STUCK_AFTER_MS = 30 * 60 * 1000;
+
+export function runningLabel(startedAt: string, now: number): "进行中" | "疑似卡住" {
+  const start = Date.parse(startedAt);
+  if (Number.isNaN(start)) return "进行中";
+  if (now - start >= STUCK_AFTER_MS) return "疑似卡住";
+  return "进行中";
+}
+
+function durationText(
+  startedAt: string,
+  finishedAt: string | null,
+  outcome: string,
+  now: number,
+): string {
+  if (outcome === "running") return runningLabel(startedAt, now);
+  return formatDuration(reviewDurationMs(startedAt, finishedAt, now));
+}
+
 export function formatDuration(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return "—";
   const seconds = Math.floor(ms / 1000);
@@ -158,8 +178,8 @@ export function renderReviewDetail(input: {
   const label = `${escapeHtml(review.owner)}/${escapeHtml(review.repo)} #${review.number}`;
   const pull = href ? `<a class="pr" href="${escapeHtml(href)}" rel="noreferrer">${label}</a>` : `<span class="pr">${label}</span>`;
   const placed = placeReview(input.files, review.comments);
-  const duration = formatDuration(reviewDurationMs(review.startedAt, review.finishedAt, now));
-  const when = formatTime(review.finishedAt ?? review.startedAt);
+  const duration = durationText(review.startedAt, review.finishedAt, review.outcome, now);
+  const when = timeElement(review.finishedAt ?? review.startedAt);
   return document(
     `${review.owner}/${review.repo} #${review.number}`,
     "detail",
@@ -170,7 +190,7 @@ export function renderReviewDetail(input: {
   ${badge(kind)}
   <span class="tag">${escapeHtml(displayTrigger(review.trigger))}</span>
   <span class="muted">${escapeHtml(duration)}</span>
-  <span class="muted">${escapeHtml(when)}</span>
+  <span class="muted">${when}</span>
 </header>
 <div class="columns">
   <aside class="col tree">
@@ -182,7 +202,7 @@ export function renderReviewDetail(input: {
     ${diffColumn(placed.files, placed.outside, input.diffUnavailable, placed.hiddenFiles)}
   </main>
   <aside class="col rail">
-    ${summaryRail(review)}
+    ${summaryRail(review, now)}
     ${settingsRail(review)}
   </aside>
 </div>`,
@@ -193,7 +213,7 @@ function reviewRow(review: ReviewSummary, now: number): string {
   const kind = reviewResult(review);
   const href = `/ui/reviews/${encodeURIComponent(review.taskId)}`;
   const repo = `${escapeHtml(review.owner)}/${escapeHtml(review.repo)} #${review.number}`;
-  const duration = formatDuration(reviewDurationMs(review.startedAt, review.finishedAt, now));
+  const duration = durationText(review.startedAt, review.finishedAt, review.outcome, now);
   return `<tr>
 <td><a class="rowlink" href="${href}">${repo}</a></td>
 <td>${escapeHtml(review.title || "—")}</td>
@@ -204,7 +224,7 @@ ${priorityCell("p1", review.p1, review.countsKnown)}
 ${priorityCell("p2", review.p2, review.countsKnown)}
 ${priorityCell("p3", review.p3, review.countsKnown)}
 <td class="num">${escapeHtml(duration)}</td>
-<td class="when">${escapeHtml(formatTime(review.startedAt))}</td>
+<td class="when">${timeElement(review.startedAt)}</td>
 </tr>`;
 }
 
@@ -311,8 +331,7 @@ function renderComment(comment: StoredComment): string {
   return `<article class="comment p${comment.priority}" id="c-${comment.ordinal}">
 <header>
   <span class="tag p${comment.priority}">P${comment.priority}</span>
-  <span class="tag">${escapeHtml(comment.kind)}</span>
-  <span class="tag">${escapeHtml(comment.category)}</span>
+  ${kindTags(comment.kind, comment.category)}
   <span class="muted">${Math.round(comment.confidence * 100)}%</span>
 </header>
 <h3>${escapeHtml(comment.title)}</h3>
@@ -323,8 +342,30 @@ ${suggestion}
 </article>`;
 }
 
-function summaryRail(review: ReviewDetail): string {
+function kindTags(kind: string, category: string): string {
+  const left = kind.trim();
+  const right = category.trim();
+  if (left.length > 0 && left.toLowerCase() === right.toLowerCase()) {
+    return `<span class="tag">${escapeHtml(left)}</span>`;
+  }
+  const tags = [`<span class="tag">${escapeHtml(left)}</span>`];
+  if (right.length > 0) tags.push(`<span class="tag">${escapeHtml(right)}</span>`);
+  return tags.join("");
+}
+
+function summaryRail(review: ReviewDetail, now: number): string {
   const kind = reviewResult(review);
+  if (review.outcome !== "completed") {
+    const status =
+      review.outcome === "failed"
+        ? review.error || "审查失败，没有记录原因。"
+        : runningLabel(review.startedAt, now);
+    return `<section>
+<h2>Summary</h2>
+${badge(kind)}
+<p class="status-note">${escapeHtml(status)}</p>
+</section>`;
+  }
   const reason = review.verdictReason ? `<p class="reason">${escapeHtml(review.verdictReason)}</p>` : "";
   const verdict = review.verdict ? `<p class="verdict ${verdictClass(review.verdict)}">${escapeHtml(verdictLabel(review.verdict))}</p>` : "";
   const checked =
@@ -380,7 +421,9 @@ function settingRows(policy: StoredPolicy, review: ReviewDetail): string {
   if (model) pairs.push(["model", model]);
   if (review.baseRef) pairs.push(["base", review.baseRef]);
   if (review.sha) pairs.push(["head", review.sha.slice(0, 7)]);
-  return `<dl class="settings">${pairs.map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}</dl>`;
+  return `<dl class="settings">${pairs
+    .map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd title="${escapeHtml(value)}">${escapeHtml(value)}</dd>`)
+    .join("")}</dl>`;
 }
 
 function countOrDash(count: number, known: boolean): string {
@@ -406,7 +449,7 @@ function statusLine(status: DashboardStatus): string {
     escapeHtml(status.version),
     `up ${escapeHtml(formatUptime(status.uptimeSeconds * 1000))}`,
     `${escapeHtml(status.provider)}/${escapeHtml(status.model)}`,
-    escapeHtml(codexLabel(status.codex)),
+    codexLabel(status.codex),
     `GitHub App <b>${status.githubApp ? "yes" : "no"}</b>`,
     `GitHub token <b>${status.githubToken ? "yes" : "no"}</b>`,
   ].join(" · ");
@@ -419,8 +462,8 @@ function codexLabel(codex: DashboardStatus["codex"]): string {
   const when = formatTime(codex.expiresAt);
   const expiry = Date.parse(codex.expiresAt);
   if (Number.isNaN(expiry) || when === "") return "Codex signed in";
-  if (expiry <= Date.now()) return `Codex signed in, access token expired ${when}`;
-  return `Codex signed in, access token expires ${when}`;
+  if (expiry <= Date.now()) return `Codex signed in, access token expired ${timeElement(codex.expiresAt)}`;
+  return `Codex signed in, access token expires ${timeElement(codex.expiresAt)}`;
 }
 
 function repoOptions(repos: string[], selected: string): string {
@@ -476,10 +519,52 @@ function document(title: string, bodyClass: string, body: string): string {
 </head>
 <body class="${bodyClass}">
 ${body}
+${LOCAL_TIME_SCRIPT}
 </body>
 </html>
 `;
 }
+
+export function renderLogin(input: { next: string; error?: string }): string {
+  const error = input.error ? `<p class="login-error">${escapeHtml(input.error)}</p>` : "";
+  return document(
+    "登录 · dureview",
+    "login",
+    `<div class="login-wrap">
+<form class="login" method="post" action="/ui/login">
+  <h1>dureview</h1>
+  <p class="muted">输入 UI token 后继续。</p>
+  ${error}
+  <input type="hidden" name="next" value="${escapeHtml(input.next)}">
+  <label>UI token
+    <input type="password" name="token" autocomplete="current-password" required autofocus>
+  </label>
+  <button type="submit">登录</button>
+</form>
+</div>`,
+  );
+}
+
+function timeElement(iso: string): string {
+  const shown = formatTime(iso);
+  if (!shown) return "";
+  return `<time datetime="${escapeHtml(iso)}" title="${escapeHtml(iso)}">${escapeHtml(shown)}</time>`;
+}
+
+const LOCAL_TIME_SCRIPT = `<script>
+document.querySelectorAll("time[datetime]").forEach(function (el) {
+  var raw = el.getAttribute("datetime");
+  if (!raw) return;
+  var date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return;
+  el.textContent = new Intl.DateTimeFormat(undefined, {
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+  }).format(date);
+  el.title = new Intl.DateTimeFormat(undefined, {
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short"
+  }).format(date);
+});
+</script>`;
 
 function escapeHtml(value: string): string {
   return value
@@ -519,7 +604,7 @@ const CSS = `
   th.p1 { color: #bc4c00; }
   th.p2 { color: #9a6700; }
   th.p3 { color: #57606a; }
-  .list-wrap { max-width: 72rem; margin: 0 auto; padding: 1.25rem 1.25rem 3rem; }
+  .list-wrap { max-width: 1440px; margin: 0 auto; padding: 1.25rem 1.25rem 3rem; }
   .list-head h1 { font-size: 16px; font-weight: 650; }
   .statusline { margin-top: 0.35rem; color: #656d76; font-size: 12px; }
   .statusline b { font-weight: 600; color: #1f2328; }
@@ -540,14 +625,17 @@ const CSS = `
   a.rowlink::after { content: ""; position: absolute; inset: 0; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .when { color: #656d76; }
-  .empty, .note-line, .banner { color: #656d76; padding: 0.75rem 0; }
+  .empty { color: #656d76; padding: 1rem 1.15rem; }
+  .note-line { color: #656d76; padding: 0.75rem 1.15rem; }
+  .banner { color: #656d76; padding: 0.75rem 0; }
   .banner { padding: 0.6rem 0.9rem; border-bottom: 1px solid #e6e6e6; }
   .topbar { display: flex; align-items: center; gap: 0.75rem; min-height: 48px; padding: 0.4rem 0.9rem; border-bottom: 1px solid #e6e6e6; }
   .back { border: 1px solid #e6e6e6; border-radius: 999px; padding: 0.1rem 0.6rem; font-size: 12px; }
   .pr { font-weight: 600; }
   .topbar h1 { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
-  .columns { display: grid; grid-template-columns: 220px minmax(0, 1fr) 280px; height: calc(100vh - 48px); }
-  .col { min-height: 0; overflow: auto; }
+  .columns { display: grid; grid-template-columns: 220px minmax(0, 1fr) 380px; width: 100%; height: calc(100vh - 48px); }
+  .col { min-height: 0; min-width: 0; overflow: auto; }
+  .rail { overflow-x: hidden; overflow-y: auto; }
   .tree, .diff { border-right: 1px solid #e6e6e6; }
   .col-label, h2 { font-size: 11px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; color: #656d76; padding: 0.75rem 0.85rem 0.35rem; }
   .nodes { list-style: none; margin: 0; padding: 0 0 0.25rem; }
@@ -582,16 +670,24 @@ const CSS = `
   .unanchored .comment { margin-left: 0.9rem; }
   .rail section + section { border-top: 1px solid #e6e6e6; }
   .rail .badge, .rail .verdict, .rail .reason { margin: 0 0.85rem 0.45rem; }
-  .counts, .settings { display: grid; grid-template-columns: 9.5rem 1fr; gap: 0.28rem 0.6rem; margin: 0.6rem 0.85rem 0.8rem; }
+  .rail .status-note { margin: 0 0.85rem 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .counts, .settings { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 0.28rem 0.6rem; margin: 0.6rem 0.85rem 0.8rem; }
   .counts dt, .settings dt { color: #656d76; }
+  .settings dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .findings, .checked { list-style: none; margin: 0.4rem 0 0.8rem; padding: 0; }
   .findings a { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; padding: 0.35rem 0.85rem; border-top: 1px solid #f0f0f0; }
   .where { color: #656d76; font-size: 11px; }
   .checked li { padding: 0.15rem 0.85rem; color: #656d76; }
-  @media (max-width: 900px) {
+  .login-wrap { min-height: 100vh; width: 100%; display: grid; place-items: center; padding: 1.5rem; }
+  form.login { width: min(100%, 22rem); display: flex; flex-direction: column; gap: 0.75rem; border: 1px solid #e6e6e6; border-radius: 8px; padding: 1.25rem; }
+  form.login h1 { font-size: 16px; font-weight: 650; }
+  form.login label { display: flex; flex-direction: column; gap: 0.3rem; color: #656d76; font-size: 11px; }
+  form.login input { width: 100%; }
+  .login-error { color: #cf222e; }
+  @media (max-width: 960px) {
     .columns { grid-template-columns: 1fr; height: auto; }
     .tree, .diff { border-right: 0; border-bottom: 1px solid #e6e6e6; }
-    .tree, .rail { max-height: 280px; }
+    .tree, .rail { max-height: none; }
     .topbar { flex-wrap: wrap; height: auto; }
     .topbar h1 { flex-basis: 100%; order: 5; }
   }

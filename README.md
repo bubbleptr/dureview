@@ -190,20 +190,20 @@ Built-in skip globs cover lockfiles (`package-lock.json`, `yarn.lock`, `pnpm-loc
 
 `GET /` and `GET /ui` serve the review list from the webhook process, on the same port. `GET /ui/reviews/<task id>` opens one review. Nothing else listens. The pages are off unless `DUREVIEW_UI_TOKEN` is set to a long random string. With that variable unset, these paths return the same `404` as any other unknown path. `GET /health` and `POST /webhook` do not look at this token, and webhook signature checks are unchanged.
 
-The token is the HTTP Basic password. The username is ignored, so a browser prompt accepts any username. `curl` can send the same value as a bearer token:
+A browser that opens the page without a credential sees a login form. Submitting the token sets an `HttpOnly`, `Secure`, `SameSite=Lax` cookie. `curl` can still send the same value as a bearer token or as the HTTP Basic password (the username is ignored):
 
 ```bash
 curl -u dureview:"$DUREVIEW_UI_TOKEN" http://127.0.0.1:8787/
 curl -H "Authorization: Bearer $DUREVIEW_UI_TOKEN" http://127.0.0.1:8787/ui
 ```
 
-A missing or wrong token is `401`. The token is not accepted from the query string.
+A request that presents a wrong `Authorization` header is `401` with `WWW-Authenticate`. A browser visit with no `Authorization` header is the login page and does not send `WWW-Authenticate`, so the browser shows the form instead of its own dialog. The token is not accepted from the query string.
 
-The list is one row per review: repository and pull request number, title, trigger (`auto` for a pull request event, `/dureview` for a comment), a result badge, P0–P3 counts, duration, and time. Green is a pass, yellow is suggestions, red is at least one P0 or P1, and gray is an error. The page can filter by repository, result, and time, and it can search the title, repository, and pull request number. A line under the title still shows the version, uptime, model, whether `auth.json` has a Codex login and when that access token expires, and whether a GitHub App or `GITHUB_TOKEN` is configured. Those last two are yes or no.
+The list is one row per review: repository and pull request number, title, trigger (`auto` for a pull request event, `/dureview` for a comment), a result badge, P0–P3 counts, duration, and time. Green is a pass, yellow is suggestions, red is at least one P0 or P1, and gray is an error. Times are rendered in the browser's local timezone; hovering a time shows the full timestamp. A review that is still running shows 进行中, or 疑似卡住 once it has been running for 30 minutes, instead of a duration that keeps growing. The page can filter by repository, result, and time, and it can search the title, repository, and pull request number. A line under the title still shows the version, uptime, model, whether `auth.json` has a Codex login and when that access token expires, and whether a GitHub App or `GITHUB_TOKEN` is configured. Those last two are yes or no.
 
-Opening a row shows three columns: the pull request's changed files, the diff with saved comments on the lines they refer to, and a summary of P0–P3 counts plus the `.dureview.md` settings used for that run (`trigger`, drafts, profile, and the rest). The diff is not stored. The page loads the current pull request files from the GitHub API with the App installation token, or with the PAT when the server is not using an App. Comments keep the path and line range from the model output. A comment whose line is not in the current diff is listed on that file without a line highlight.
+Opening a row shows three columns: the pull request's changed files, the diff with saved comments on the lines they refer to, and a summary plus the `.dureview.md` settings used for that run (`trigger`, drafts, profile, and the rest). A finished review's summary lists P0–P3 counts. A failed review shows the error recorded for that run, and a review that is still running shows 进行中 or 疑似卡住, without a row of zero counts. The diff is not stored. The page loads the current pull request files from the GitHub API with the App installation token, or with the PAT when the server is not using an App. Comments keep the path and line range from the model output. A comment whose line is not in the current diff is listed on that file without a line highlight.
 
-Metadata and those comments are stored in `$DUREVIEW_DATA_DIR/reviews.sqlite` (mode `0600`). `$DUREVIEW_DATA_DIR/reviews.json` is still the short log of the last 50 reviews and does not contain finding text. The pages do not include the webhook secret, GitHub tokens, the App private key, or the contents of `auth.json`. An expired access token is not a missing login. pi-ai refreshes it on the next review and writes the new token back to `auth.json`.
+Metadata, those comments, and the failure reason are stored in `$DUREVIEW_DATA_DIR/reviews.sqlite` (mode `0600`). An archive created before the error column gains that column on the next open. `$DUREVIEW_DATA_DIR/reviews.json` is still the short log of the last 50 reviews and does not contain finding text or the failure reason. The pages do not include the webhook secret, GitHub tokens, the App private key, or the contents of `auth.json`. An expired access token is not a missing login. pi-ai refreshes it on the next review and writes the new token back to `auth.json`.
 
 ## Configuration
 
@@ -225,7 +225,7 @@ Metadata and those comments are stored in `$DUREVIEW_DATA_DIR/reviews.sqlite` (m
 | `GITHUB_APP_PRIVATE_KEY_PATH` | | Path to the App private key |
 | `GITHUB_TOKEN` | | PAT used when App id is unset |
 | `GITHUB_API_URL` | `https://api.github.com` | API root for GitHub Enterprise |
-| `DUREVIEW_UI_TOKEN` | | Enables the review pages at `GET /`, `GET /ui`, and `GET /ui/reviews/<id>`. Basic-auth password or bearer token. Unset leaves the pages disabled. |
+| `DUREVIEW_UI_TOKEN` | | Enables the review pages at `GET /`, `GET /ui`, and `GET /ui/reviews/<id>`. Login-form token, Basic-auth password, or bearer token. Unset leaves the pages disabled. |
 
 `auth.json`, `session.sqlite`, `reviews.sqlite`, and `reviews.json` live in the data directory. Checkouts live in `checkouts/<owner>/<repo>/<sha>`.
 

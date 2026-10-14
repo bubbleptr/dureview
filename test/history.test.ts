@@ -131,6 +131,18 @@ describe("review log", () => {
     const withFinding = await readFile(file, "utf8");
     expect(withFinding).not.toContain("CANARY_FINDING_BODY");
     expect(withFinding).not.toContain("CANARY_TITLE");
+
+    await log.finish({
+      taskId: "12",
+      owner: "acme",
+      repo: "demo",
+      number: 10,
+      outcome: "failed",
+      verdict: null,
+      findingCount: null,
+      error: "CANARY_ERROR_TEXT",
+    });
+    expect(await readFile(file, "utf8")).not.toContain("CANARY_ERROR_TEXT");
   });
 
   it("drops invalid rows and refuses to overwrite a corrupt file", async () => {
@@ -263,7 +275,9 @@ describe("review list rendering", () => {
     });
     expect(html).toContain("0.1.0");
     expect(html).toContain("1m 5s");
-    expect(html).toContain("access token expires 2030-01-02 03:04 UTC");
+    expect(html).toContain("access token expires ");
+    expect(html).toContain('datetime="2030-01-02T03:04:05.000Z"');
+    expect(html).toContain("2030-01-02 03:04 UTC");
     expect(html).toContain("GitHub App <b>yes</b>");
     expect(html).toContain("GitHub token <b>no</b>");
     expect(html).toContain("/ui/reviews/4");

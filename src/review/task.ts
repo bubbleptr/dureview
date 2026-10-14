@@ -90,6 +90,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
         outcome: "failed",
         verdict: null,
         findingCount: null,
+        error: message,
         title: current.input.title,
         sha: current.input.sha,
         baseSha: current.input.baseSha,
