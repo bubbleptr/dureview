@@ -212,6 +212,30 @@ describe("summary off", () => {
     expect(github.reviews[1]?.comments[0]?.body).not.toContain(p2.title);
   });
 
+  it("does not post informational flags or request changes for them unless posting is enabled", async () => {
+    const github = new MemoryGitHub();
+    const note = sampleFinding({
+      title: "The early return is the intended happy path",
+      type: "flag",
+      subtype: "informational",
+      priority: 0,
+      confidence: 0.99,
+      trigger: "",
+    });
+    const held = await publishReview(base(github, "41", "A note.", [note], { summary: false }));
+    expect(held.reviewAction).toBe("skipped");
+    expect(github.reviews).toEqual([]);
+    expect(held.postings).toEqual([
+      expect.objectContaining({ fingerprint: note.fingerprint, posted: false, skipReason: "informational" }),
+    ]);
+
+    const allowed = new MemoryGitHub();
+    await publishReview(base(allowed, "42", "A note.", [note], { summary: false, postInformational: true }));
+    expect(allowed.reviews[0]?.event).toBe("COMMENT");
+    expect(allowed.reviewComments[0]?.body).toContain("P0 · Flag (informational)");
+    expect(allowed.reviewComments[0]?.body).not.toContain("REQUEST_CHANGES");
+  });
+
   it("falls back to COMMENT when GitHub rejects REQUEST_CHANGES on the author's own pull request", async () => {
     const github = new MemoryGitHub();
     github.rejectOwnRequestChanges = true;

@@ -310,6 +310,7 @@ describe("review statistics aggregation", () => {
     expect(all.p95DurationMs).toBeCloseTo(120_000, 0);
     expect(all.failures).toEqual([{ reason: "Review run did not finish: error", count: 2 }]);
     expect(all.priorities).toMatchObject({ p0: 1, p1: 1, p2: 0, p3: 1, unknownReviews: 0 });
+    expect(all.types).toEqual([{ type: "unknown", count: 4 }]);
     expect(all.categories).toEqual([
       { category: "correctness", count: 1 },
       { category: "error_handling", count: 1 },

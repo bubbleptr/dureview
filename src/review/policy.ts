@@ -1,5 +1,5 @@
 import { commentableLines } from "./diff.js";
-import type { Finding, Priority } from "./schema.js";
+import { isInformational, type Finding, type Priority } from "./schema.js";
 
 /**
  * `.dureview.md` or the configured model is something the operator has to fix.
@@ -64,6 +64,11 @@ export type ReviewPolicy = {
    * When false (default), post one inline comment per finding and nothing else.
    */
   summary: boolean;
+  /**
+   * When true, informational flags may be posted. They still never request changes.
+   * When false (default), they are stored and left off GitHub.
+   */
+  postInformational: boolean;
 };
 
 export const DEFAULT_IGNORE = [
@@ -148,6 +153,7 @@ export function defaultPolicy(defaults: PolicyDefaults = {}): ReviewPolicy {
     ignore: [],
     language: "en",
     summary: false,
+    postInformational: false,
   };
 }
 
@@ -176,6 +182,11 @@ export type ClassifiedReview = {
   outOfRange: Finding[];
   /** Findings still open after this run. The next push treats missing fingerprints as fixed. */
   open: Finding[];
+  /**
+   * Informational flags kept for the database and omitted from GitHub.
+   * They are not open, so a later push does not mark a comment that was never posted as fixed.
+   */
+  withheld: Finding[];
 };
 
 /**
@@ -216,6 +227,7 @@ export function classifyFindings(input: {
   const dropped: ClassifiedReview["dropped"] = [];
   const folded: Finding[] = [];
   const outOfRange: Finding[] = [];
+  const withheld: Finding[] = [];
   const candidates: Array<{ finding: Finding; anchor: AnchoredFinding }> = [];
 
   for (const finding of dedupeFindings(input.findings)) {
@@ -225,6 +237,10 @@ export function classifyFindings(input: {
     }
     if (isIgnoredPath(finding.path, input.policy)) {
       dropped.push({ finding, reason: "ignored" });
+      continue;
+    }
+    if (isInformational(finding) && !input.policy.postInformational) {
+      withheld.push(finding);
       continue;
     }
     const anchor = anchorFinding(finding, lines);
@@ -249,7 +265,7 @@ export function classifyFindings(input: {
   const overflow = fresh.slice(input.policy.maxInline).map((item) => item.finding);
   const table = candidates.map((item) => item.finding);
   const open = [...table, ...folded, ...outOfRange];
-  return { dropped, inline, table, overflow, folded, outOfRange, open };
+  return { dropped, inline, table, overflow, folded, outOfRange, open, withheld };
 }
 
 export function matchGlob(glob: string, filePath: string): boolean {
@@ -260,7 +276,12 @@ export function matchGlob(glob: string, filePath: string): boolean {
 }
 
 function foldFinding(finding: Finding, policy: ReviewPolicy): boolean {
-  if (finding.kind === "investigate" || finding.trigger.trim().length === 0) return true;
+  if (isInformational(finding)) {
+    if (finding.priority > policy.minInlinePriority) return true;
+    if (finding.priority === 2 && finding.confidence < policy.p2InlineMinConfidence) return true;
+    return false;
+  }
+  if (finding.type === "flag" || finding.kind === "investigate" || finding.trigger.trim().length === 0) return true;
   if (finding.priority > policy.minInlinePriority) return true;
   if (finding.priority === 2 && finding.confidence < policy.p2InlineMinConfidence) return true;
   return false;
@@ -328,6 +349,7 @@ type ExplicitPolicy = {
   ignoreDefaults?: boolean;
   language?: ReviewLanguage;
   summary?: boolean;
+  postInformational?: boolean;
 };
 
 function parseFrontMatter(body: string, defaults: PolicyDefaults): ReviewPolicy {
@@ -376,6 +398,7 @@ const KNOWN_KEYS = new Set([
   "max_inline",
   "ignore_defaults",
   "ignore",
+  "post_informational",
 ]);
 
 function parseIgnore(
@@ -437,6 +460,10 @@ function assignScalar(explicit: ExplicitPolicy, key: string, value: string): voi
     explicit.summary = parseBoolean(value, key);
     return;
   }
+  if (key === "post_informational") {
+    explicit.postInformational = parseBoolean(value, key);
+    return;
+  }
   if (key === "language") {
     if (value !== "en" && value !== "zh") {
       throw new ReviewConfigError(`.dureview.md language must be en or zh, got ${value}.`);
@@ -483,6 +510,7 @@ function materializePolicy(explicit: ExplicitPolicy, ignore: string[], defaults:
     ignore,
     language: explicit.language ?? "en",
     summary: explicit.summary ?? false,
+    postInformational: explicit.postInformational ?? false,
   };
 }
 
@@ -545,8 +573,9 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(source);
 }
 
-export function foldedBucket(finding: Finding): "investigate" | "p3" {
-  if (finding.kind === "investigate" || finding.trigger.trim().length === 0 || finding.priority !== 3) {
+export function foldedBucket(finding: Finding): "investigate" | "informational" | "p3" {
+  if (isInformational(finding)) return "informational";
+  if (finding.kind === "investigate" || finding.type === "flag" || finding.trigger.trim().length === 0 || finding.priority !== 3) {
     return "investigate";
   }
   return "p3";

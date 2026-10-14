@@ -7,7 +7,13 @@ import { fileFacts, isSkipReason, type RecordedFinding } from "./findings.js";
 import type { ReviewFinished } from "./history.js";
 import { ReviewLog } from "./history.js";
 import type { ReviewPolicy } from "./policy.js";
-import { findingFingerprint, normalizeRepoPath, type Finding, type Priority } from "./schema.js";
+import {
+  findingFingerprint,
+  normalizeRepoPath,
+  resolveFindingClassification,
+  type Finding,
+  type Priority,
+} from "./schema.js";
 import { queryReviewStats, type StatsQuery, type StatsSnapshot } from "./stats.js";
 import type { ReviewUsage } from "./usage.js";
 
@@ -43,6 +49,8 @@ export type StoredPolicy = {
   minInlinePriority: number;
   p2InlineMinConfidence: number;
   maxInline: number;
+  /** Absent on rows recorded before informational flags could be posted. Treated as false. */
+  postInformational?: boolean;
 };
 
 export type StoredComment = {
@@ -52,6 +60,9 @@ export type StoredComment = {
   endLine: number;
   priority: Priority;
   kind: string;
+  /** Null on comments stored before finding types existed. */
+  findingType: string | null;
+  subtype: string | null;
   category: string;
   title: string;
   body: string;
@@ -174,6 +185,8 @@ export class ReviewArchive {
         end_line INTEGER NOT NULL,
         priority INTEGER NOT NULL,
         kind TEXT NOT NULL,
+        finding_type TEXT,
+        subtype TEXT,
         category TEXT NOT NULL,
         title TEXT NOT NULL,
         body TEXT NOT NULL,
@@ -197,6 +210,8 @@ export class ReviewArchive {
         trigger_text TEXT NOT NULL,
         priority INTEGER NOT NULL,
         kind TEXT NOT NULL,
+        finding_type TEXT,
+        subtype TEXT,
         category TEXT NOT NULL,
         cwe TEXT,
         rule_ref TEXT,
@@ -223,6 +238,7 @@ export class ReviewArchive {
       CREATE INDEX IF NOT EXISTS findings_path ON findings(path);
     `);
     migrateReviews(db);
+    migrateFindingColumns(db);
     this.#db = db;
     await chmod(this.file, 0o600);
     await this.#importLegacy();
@@ -425,9 +441,9 @@ export class ReviewArchive {
         db.prepare("DELETE FROM comments WHERE task_id = ?").run(identity.taskId);
         const insert = db.prepare(
           `INSERT INTO comments (
-            task_id, ordinal, path, start_line, end_line, priority, kind, category, title, body,
+            task_id, ordinal, path, start_line, end_line, priority, kind, finding_type, subtype, category, title, body,
             trigger_text, suggestion, confidence, fingerprint, evidence_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const comment of comments) {
           insert.run(
@@ -438,6 +454,8 @@ export class ReviewArchive {
             comment.endLine,
             comment.priority,
             comment.kind,
+            comment.findingType,
+            comment.subtype,
             comment.category,
             comment.title,
             comment.body,
@@ -452,10 +470,10 @@ export class ReviewArchive {
         db.prepare("DELETE FROM findings WHERE task_id = ?").run(identity.taskId);
         const insertFinding = db.prepare(
           `INSERT INTO findings (
-            task_id, owner, repo, number, sha, title, body, trigger_text, priority, kind, category,
+            task_id, owner, repo, number, sha, title, body, trigger_text, priority, kind, finding_type, subtype, category,
             cwe, rule_ref, confidence, path, start_line, end_line, extension, language, fingerprint,
             posted, skip_reason, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const row of recorded) {
           const facts = fileFacts(row.path);
@@ -470,6 +488,8 @@ export class ReviewArchive {
             row.trigger,
             row.priority,
             row.kind,
+            row.findingType,
+            row.subtype,
             row.category,
             row.cwe,
             row.ruleRef,
@@ -697,6 +717,25 @@ function migrateReviews(db: DatabaseSync): void {
   add("thinking", "thinking TEXT");
 }
 
+/** Nullable type columns. Rows written before the column existed stay null. */
+function migrateFindingColumns(db: DatabaseSync): void {
+  const present = new Set(
+    db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all()
+      .map((row) => str(row, "name")),
+  );
+  const add = (table: "findings" | "comments") => {
+    if (!present.has(table)) return;
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+    const names = new Set(columns.map((row) => str(row, "name")));
+    if (!names.has("finding_type")) db.exec(`ALTER TABLE ${table} ADD COLUMN finding_type TEXT`);
+    if (!names.has("subtype")) db.exec(`ALTER TABLE ${table} ADD COLUMN subtype TEXT`);
+  };
+  add("findings");
+  add("comments");
+}
+
 function cleanThinking(value: string | undefined): string | null {
   if (typeof value !== "string" || !isThinkingLevel(value)) return null;
   return value;
@@ -756,6 +795,8 @@ function commentFromRow(row: Record<string, SQLOutputValue>): StoredComment | un
     endLine: int(row, "end_line"),
     priority,
     kind: str(row, "kind"),
+    findingType: optionalText(str(row, "finding_type")),
+    subtype: optionalText(str(row, "subtype")),
     category: str(row, "category"),
     title: str(row, "title"),
     body: str(row, "body"),
@@ -785,13 +826,16 @@ function cleanComments(findings: Finding[] | undefined): StoredComment[] {
     const fingerprint = FINGERPRINT.test(finding.fingerprint)
       ? finding.fingerprint
       : findingFingerprint({ path, category: finding.category, title });
+    const classification = classificationOf(finding);
     comments.push({
       ordinal: comments.length,
       path,
       startLine: finding.startLine,
       endLine: finding.endLine,
       priority: finding.priority,
-      kind: clip(finding.kind, 40),
+      kind: classification.kind,
+      findingType: classification.type,
+      subtype: classification.subtype,
       category: clip(finding.category, 40),
       title,
       body: clip(finding.body, 8_000),
@@ -817,6 +861,8 @@ type FindingRow = {
   endLine: number;
   priority: Priority;
   kind: string;
+  findingType: string | null;
+  subtype: string | null;
   category: string;
   title: string;
   body: string;
@@ -854,12 +900,15 @@ function cleanRecorded(findings: RecordedFinding[] | undefined): FindingRow[] {
     if (seen.has(fingerprint)) continue;
     seen.add(fingerprint);
     const category = clip(finding.category, 40) || "unknown";
+    const classification = classificationOf(finding);
     rows.push({
       path,
       startLine: finding.startLine,
       endLine: finding.endLine,
       priority: finding.priority,
-      kind: clip(finding.kind, 40) || "bug",
+      kind: classification.kind,
+      findingType: classification.type,
+      subtype: classification.subtype,
       category,
       title,
       body: clip(finding.body, 8_000),
@@ -960,6 +1009,7 @@ function policyJson(policy: ReviewPolicy | null | undefined): string | null {
     minInlinePriority: policy.minInlinePriority,
     p2InlineMinConfidence: policy.p2InlineMinConfidence,
     maxInline: policy.maxInline,
+    postInformational: policy.postInformational,
   };
   return JSON.stringify(stored);
 }
@@ -980,6 +1030,7 @@ function parsePolicy(value: string): StoredPolicy | null {
       minInlinePriority: typeof parsed.minInlinePriority === "number" ? parsed.minInlinePriority : 0,
       p2InlineMinConfidence: typeof parsed.p2InlineMinConfidence === "number" ? parsed.p2InlineMinConfidence : 0,
       maxInline: typeof parsed.maxInline === "number" ? parsed.maxInline : 0,
+      postInformational: parsed.postInformational === true,
     };
   } catch {
     return null;
@@ -1036,6 +1087,20 @@ function stringList(value: string): string[] {
 
 function likeContains(value: string): string {
   return `%${value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+}
+
+function classificationOf(finding: Finding): { kind: string; type: string; subtype: string } {
+  return resolveFindingClassification({
+    kind: finding.kind,
+    priority: finding.priority,
+    type: finding.type,
+    subtype: finding.subtype,
+  });
+}
+
+function optionalText(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function clip(value: string, max: number): string {

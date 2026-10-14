@@ -13,7 +13,7 @@ import {
 import { postingsFromClassified, type FindingPosting } from "../review/findings.js";
 import { classifyFindings, type ReviewLanguage, type ReviewPolicy } from "../review/policy.js";
 import { renderFixedReply, renderInlineDrafts, renderSummary } from "../review/render.js";
-import type { ReviewSubmission } from "../review/schema.js";
+import { isInformational, type Finding, type ReviewSubmission } from "../review/schema.js";
 import { inlineMarker, summaryMarker, taskMarker, type ReviewRequest } from "../types.js";
 
 export type PublishResult = {
@@ -176,7 +176,7 @@ async function publishWithoutSummary(input: {
   let reviewId: number | null = null;
   let reviewAction: PublishResult["reviewAction"] = "skipped";
   if (classified.inline.length > 0) {
-    const event = reviewEvent(classified.inline.map((item) => item.finding.priority));
+    const event = reviewEvent(classified.inline.map((item) => item.finding));
     const created = await submitReview(
       input.github,
       input.request,
@@ -216,8 +216,10 @@ async function publishWithoutSummary(input: {
   };
 }
 
-function reviewEvent(priorities: readonly number[]): ReviewEvent {
-  return priorities.some((priority) => priority === 0 || priority === 1) ? "REQUEST_CHANGES" : "COMMENT";
+function reviewEvent(findings: readonly Finding[]): ReviewEvent {
+  return findings.some((finding) => !isInformational(finding) && (finding.priority === 0 || finding.priority === 1))
+    ? "REQUEST_CHANGES"
+    : "COMMENT";
 }
 
 async function submitReview(

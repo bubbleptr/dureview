@@ -21,7 +21,7 @@ describe("comment rendering", () => {
       suggestion: "const key = req.idempotencyKey ?? randomUUID();",
       evidence: [],
     });
-    expect(renderInlineComment(finding, true, "zh")).toBe(`**[P1] 🐛 重试时会重复扣款**  · correctness · 置信度 0.85
+    expect(renderInlineComment(finding, true, "zh")).toBe(`**P1 · 缺陷 (严重)** 🐛 **重试时会重复扣款**  · correctness · 置信度 0.85
 
 \`charge()\` 失败后外层又调用了一次，但 \`idempotencyKey\` 每次都重新生成（见 \`src/pay.ts:88\`），网关会把它当成新请求。
 **触发条件**：网关超时但实际已经成功扣款时。
@@ -44,7 +44,7 @@ const key = req.idempotencyKey ?? randomUUID();
       ruleRef: "payments",
     });
     const text = renderInlineComment(finding);
-    expect(text).toContain("**[P0] 🔒 Trust the client total**  · security · confidence 0.9 · CWE-20");
+    expect(text).toContain("**P0 · Security · Critical · CWE-20** 🔒 **Trust the client total**  · security · confidence 0.9");
     expect(text).toContain("**Evidence**: `src/pay.ts:3`");
     expect(text).toContain(`<sub>dureview · fp:${finding.fingerprint} · payments</sub>`);
     expect(text).not.toContain("```suggestion");
@@ -83,8 +83,8 @@ const key = req.idempotencyKey ?? randomUUID();
     });
 
     expect(summary.startsWith("## dureview：⛔ 建议阻断\n合并前会重复扣款。（整体置信度 0.8 · head aaaaaaa）")).toBe(true);
-    expect(summary).toContain("| P0 | 重复扣款 |");
-    expect(summary.indexOf("| P0 |")).toBeLessThan(summary.indexOf("| P2 |"));
+    expect(summary).toContain("| P0 · 缺陷 (严重) | 重复扣款 |");
+    expect(summary.indexOf("| P0 ·")).toBeLessThan(summary.indexOf("| P2 ·"));
     expect(summary).toContain("🔎 待核实（1） / P3（1）");
     expect(summary).toContain("payment capture on the happy path");
     expect(summary).toContain("✔ 上一轮已修复：");
@@ -119,7 +119,7 @@ const key = req.idempotencyKey ?? randomUUID();
       suggestion: null,
     });
     const inline = renderInlineComment(finding);
-    expect(inline).toContain("**[P1] 🐛 Retry charges twice**  · correctness · confidence 0.9");
+    expect(inline).toContain("**P1 · Bug (severe)** 🐛 **Retry charges twice**  · correctness · confidence 0.9");
     expect(inline).toContain("**Trigger**: The gateway times out after a successful capture.");
     expect(inline).not.toContain("置信度");
     expect(inline).not.toContain("触发条件");

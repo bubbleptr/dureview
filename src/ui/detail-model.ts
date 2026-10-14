@@ -4,6 +4,8 @@ export type DetailCommentView = {
   ordinal: number;
   anchor: string;
   priority: number;
+  /** Null when the comment was stored before finding types existed. */
+  typeLabel: string | null;
   tags: string[];
   confidence: string;
   title: string;
@@ -43,6 +45,7 @@ export type DetailFileView = {
 export type DetailFindingLink = {
   anchor: string;
   priority: number;
+  typeLabel: string | null;
   title: string;
   where: string;
 };

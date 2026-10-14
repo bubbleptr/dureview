@@ -2,7 +2,7 @@ import { githubStatus, type CheckRun, type GitHub } from "../github/client.js";
 import { log } from "../log.js";
 import type { ReviewRequest } from "../types.js";
 import { classifyFindings, ReviewConfigError, type ReviewLanguage, type ReviewPolicy } from "./policy.js";
-import type { Finding, Priority } from "./schema.js";
+import { isInformational, type Finding, type Priority } from "./schema.js";
 
 /** Check run name. Branch protection can require this exact name. */
 export const REVIEW_CHECK_NAME = "dureview";
@@ -52,7 +52,7 @@ export function reviewCheckOutcome(input: {
 }): ReviewCheckOutput {
   const language = input.policy.language === "zh" ? "zh" : "en";
   const classified = classifyFindings({ findings: [...input.findings], diff: input.diff, policy: input.policy });
-  const counts = countFindings(classified.open);
+  const counts = countFindings(classified.open.filter((finding) => !isInformational(finding)));
   const blocking = counts[0] + counts[1];
   const suggestions = counts[2] + counts[3];
   const summary = withUnposted(countSummary(counts, language), unpostedLines(classified, input.policy, language), language);
@@ -302,7 +302,7 @@ function unpostedLines(
   for (const finding of classified.overflow) reason.set(finding.fingerprint, capped);
   for (const finding of classified.folded) reason.set(finding.fingerprint, folded);
   return classified.open
-    .filter((finding) => !inline.has(finding.fingerprint))
+    .filter((finding) => !inline.has(finding.fingerprint) && !isInformational(finding))
     .map((finding) => `- P${finding.priority} ${finding.path} ${finding.title} (${reason.get(finding.fingerprint) ?? folded})`);
 }
 

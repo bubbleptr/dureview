@@ -2,7 +2,7 @@ import type { ReviewCommentDraft } from "../github/client.js";
 import type { ReviewRequest } from "../types.js";
 import { findingMarker, fixedMarker, ledgerMarker, type LedgerEntry } from "./ledger.js";
 import { foldedBucket, type AnchoredFinding, type ClassifiedReview, type ReviewLanguage } from "./policy.js";
-import type { Finding, FindingKind, ReviewSubmission, Verdict } from "./schema.js";
+import { formatFindingType, type Finding, type FindingKind, type ReviewSubmission, type Verdict } from "./schema.js";
 
 const KIND_EMOJI: Record<FindingKind, string> = {
   bug: "🐛",
@@ -21,6 +21,7 @@ type Copy = {
   location: string;
   overflow: (count: number, max: number) => string;
   investigate: (count: number) => string;
+  informational: (count: number) => string;
   p3: (count: number) => string;
   outOfRange: (count: number) => string;
   checked: string;
@@ -50,6 +51,7 @@ const EN: Copy = {
   location: "Location",
   overflow: (count, max) => `The other ${count} findings were not posted inline (this run's limit is ${max}).`,
   investigate: (count) => `🔎 Investigate (${count})`,
+  informational: (count) => `Flag (${count})`,
   p3: (count) => `P3 (${count})`,
   outOfRange: (count) => `Out of range (${count})`,
   checked: "Checked",
@@ -78,6 +80,7 @@ const ZH: Copy = {
   location: "位置",
   overflow: (count, max) => `其余 ${count} 条未再发行内评论（本轮上限 ${max}）。`,
   investigate: (count) => `🔎 待核实（${count}）`,
+  informational: (count) => `标注（${count}）`,
   p3: (count) => `P3（${count}）`,
   outOfRange: (count) => `范围外（${count}）`,
   checked: "已检查",
@@ -102,9 +105,9 @@ export function renderInlineComment(
 ): string {
   const copy = copyFor(language);
   const emoji = KIND_EMOJI[finding.kind];
-  const cwe = finding.cwe ? ` · ${finding.cwe}` : "";
+  const badge = findingBadge(finding, language);
   const lines = [
-    `**[P${finding.priority}] ${emoji} ${finding.title}**  · ${finding.category} · ${copy.confidence} ${formatConfidence(finding.confidence)}${cwe}`,
+    `**${badge}** ${emoji} **${finding.title}**  · ${finding.category} · ${copy.confidence} ${formatConfidence(finding.confidence)}`,
     "",
     finding.body.trim(),
     `**${copy.trigger}**${copy.colon}${finding.trigger.trim() || copy.noTrigger}`,
@@ -156,7 +159,8 @@ export function renderSummary(input: {
   maxInline: number;
   language?: ReviewLanguage;
 }): string {
-  const copy = copyFor(input.language ?? "en");
+  const language = input.language ?? "en";
+  const copy = copyFor(language);
   const lines = [
     copy.verdict[input.review.verdict],
     reasonLine(input.review, input.request.sha, copy),
@@ -166,15 +170,15 @@ export function renderSummary(input: {
     for (const finding of input.classified.table) {
       const label = locationLabel(finding);
       const href = blobUrl(input.request, finding.path, finding.startLine, finding.endLine);
-      lines.push(`| P${finding.priority} | ${cell(finding.title)} | [${cell(label)}](${href}) |`);
+      lines.push(`| ${cell(findingBadge(finding, language))} | ${cell(finding.title)} | [${cell(label)}](${href}) |`);
     }
     if (input.classified.overflow.length > 0) {
       lines.push("", copy.overflow(input.classified.overflow.length, input.maxInline));
     }
   }
-  const folded = renderFolded(input.classified.folded, copy);
+  const folded = renderFolded(input.classified.folded, copy, language);
   if (folded) lines.push("", folded);
-  const outside = renderOutside(input.classified.outOfRange, copy);
+  const outside = renderOutside(input.classified.outOfRange, copy, language);
   if (outside) lines.push("", outside);
   lines.push("", renderChecked(input.review.checked, copy));
   if (input.fixed.length > 0) {
@@ -225,23 +229,25 @@ function reasonLine(review: ReviewSubmission, sha: string, copy: Copy): string {
   return copy.reason(review.verdictReason, confidence);
 }
 
-function renderFolded(findings: readonly Finding[], copy: Copy): string | null {
+function renderFolded(findings: readonly Finding[], copy: Copy, language: ReviewLanguage): string | null {
   if (findings.length === 0) return null;
+  const informational = findings.filter((finding) => foldedBucket(finding) === "informational").length;
   const investigate = findings.filter((finding) => foldedBucket(finding) === "investigate").length;
-  const p3 = findings.length - investigate;
+  const p3 = findings.length - investigate - informational;
   const parts: string[] = [];
   if (investigate > 0) parts.push(copy.investigate(investigate));
+  if (informational > 0) parts.push(copy.informational(informational));
   if (p3 > 0) parts.push(copy.p3(p3));
   const lines = [`<details>`, `<summary>${parts.join(" / ")}</summary>`, ""];
-  for (const finding of findings) lines.push(foldedLine(finding, copy));
+  for (const finding of findings) lines.push(foldedLine(finding, copy, language));
   lines.push("", "</details>");
   return lines.join("\n");
 }
 
-function renderOutside(findings: readonly Finding[], copy: Copy): string | null {
+function renderOutside(findings: readonly Finding[], copy: Copy, language: ReviewLanguage): string | null {
   if (findings.length === 0) return null;
   const lines = [`<details>`, `<summary>${copy.outOfRange(findings.length)}</summary>`, ""];
-  for (const finding of findings) lines.push(foldedLine(finding, copy));
+  for (const finding of findings) lines.push(foldedLine(finding, copy, language));
   lines.push("", "</details>");
   return lines.join("\n");
 }
@@ -254,10 +260,22 @@ function renderChecked(checked: readonly string[], copy: Copy): string {
   return lines.join("\n");
 }
 
-function foldedLine(finding: Finding, copy: Copy): string {
+function findingBadge(finding: Finding, language: ReviewLanguage): string {
+  return (
+    formatFindingType({
+      type: finding.type,
+      subtype: finding.subtype,
+      cwe: finding.cwe,
+      priority: finding.priority,
+      language,
+    }) ?? `P${finding.priority}`
+  );
+}
+
+function foldedLine(finding: Finding, copy: Copy, language: ReviewLanguage): string {
   const emoji = KIND_EMOJI[finding.kind];
   const trigger = finding.trigger.trim() || copy.noTrigger;
-  return `- **[P${finding.priority}] ${emoji} ${oneLine(finding.title)}** · \`${locationLabel(finding)}\` — ${oneLine(finding.body)} **${copy.trigger}**${copy.colon}${oneLine(trigger)}`;
+  return `- **${findingBadge(finding, language)}** ${emoji} **${oneLine(finding.title)}** · \`${locationLabel(finding)}\` — ${oneLine(finding.body)} **${copy.trigger}**${copy.colon}${oneLine(trigger)}`;
 }
 
 function locationLabel(finding: Pick<Finding, "path" | "startLine" | "endLine">): string {

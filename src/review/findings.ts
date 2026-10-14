@@ -1,5 +1,5 @@
 import { classifyFindings, type ClassifiedReview, type ReviewPolicy } from "./policy.js";
-import type { Finding } from "./schema.js";
+import { isInformational, type Finding } from "./schema.js";
 
 /** Why a finding was not posted as a new inline comment. Null when it was. */
 export const SKIP_REASONS = [
@@ -13,6 +13,7 @@ export const SKIP_REASONS = [
   "overflow",
   "already_inlined",
   "publish_failed",
+  "informational",
 ] as const;
 
 export type SkipReason = (typeof SKIP_REASONS)[number];
@@ -141,6 +142,13 @@ export function postingsFromClassified(classified: ClassifiedReview, policy: Rev
       skipReason: "out_of_range",
     });
   }
+  for (const finding of classified.withheld) {
+    postings.push({
+      fingerprint: finding.fingerprint,
+      posted: false,
+      skipReason: "informational",
+    });
+  }
   for (const finding of classified.folded) {
     postings.push({
       fingerprint: finding.fingerprint,
@@ -199,7 +207,12 @@ export function recordedFindings(findings: Finding[], postings: readonly Finding
 }
 
 function foldSkipReason(finding: Finding, policy: ReviewPolicy): SkipReason {
-  if (finding.kind === "investigate") return "investigate";
+  if (isInformational(finding)) {
+    if (finding.priority > policy.minInlinePriority) return "priority";
+    if (finding.priority === 2 && finding.confidence < policy.p2InlineMinConfidence) return "p2_confidence";
+    return "priority";
+  }
+  if (finding.kind === "investigate" || finding.type === "flag") return "investigate";
   if (finding.trigger.trim().length === 0) return "empty_trigger";
   if (finding.priority > policy.minInlinePriority) return "priority";
   if (finding.priority === 2 && finding.confidence < policy.p2InlineMinConfidence) return "p2_confidence";

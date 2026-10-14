@@ -188,6 +188,7 @@ describe("status page", () => {
     expect(detailHtml).toContain(">trigger<");
     expect(detailHtml).toContain('title="manual"');
     expect(detailHtml).toContain("P1");
+    expect(detailHtml).toContain("Bug (severe)");
     expect(github.pullFileRequests).toEqual([{ installationId: 99, number: 7 }]);
     expect(detailHtml).not.toContain(SHA_A);
     expect(detailHtml).not.toContain(UI_TOKEN);
@@ -475,6 +476,7 @@ describe("status page", () => {
     const html = await page.text();
     expect(html).toContain("Overview");
     expect(html).toContain("Tokens by day");
+    expect(html).toContain("Findings by type");
     expect(html).toContain("Avg tokens");
     expect(html).toContain("acme/demo");
     expect(html).toContain("Charge positive amounts");

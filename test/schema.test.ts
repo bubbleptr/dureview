@@ -11,6 +11,8 @@ const valid = {
       title: "Reuse the idempotency key on retry",
       priority: 1,
       kind: "bug",
+      type: "bug",
+      subtype: "severe",
       category: "correctness",
       path: "src/pay.ts",
       start_line: 2,
@@ -39,6 +41,8 @@ describe("submit_review schema", () => {
       endLine: 3,
       priority: 1,
       kind: "bug",
+      type: "bug",
+      subtype: "severe",
       category: "correctness",
       suggestion: "const key = req.idempotencyKey ?? randomUUID();",
       confidence: 0.85,
@@ -108,5 +112,67 @@ describe("submit_review schema", () => {
     expect(left).toBe(right);
     expect(left).toHaveLength(12);
     expect(other).not.toBe(left);
+  });
+
+  it("defaults type and subtype from kind and priority when an older payload omits them", () => {
+    const finding = valid.findings[0];
+    const { type: _type, subtype: _subtype, ...older } = finding ?? {};
+    const bug = parseReviewSubmission({ ...valid, findings: [older] });
+    expect(bug.findings[0]).toMatchObject({ type: "bug", subtype: "severe", kind: "bug" });
+
+    const quiet = parseReviewSubmission({
+      ...valid,
+      findings: [{ ...older, priority: 2, kind: "bug" }],
+    });
+    expect(quiet.findings[0]).toMatchObject({ type: "bug", subtype: "non_severe", kind: "bug" });
+
+    const security = parseReviewSubmission({
+      ...valid,
+      findings: [{ ...older, kind: "security", priority: 2, cwe: "cwe-89" }],
+    });
+    expect(security.findings[0]).toMatchObject({
+      type: "security",
+      subtype: "warning",
+      kind: "security",
+      cwe: "CWE-89",
+    });
+
+    const suspected = parseReviewSubmission({
+      ...valid,
+      findings: [{ ...older, kind: "investigate", trigger: "" }],
+    });
+    expect(suspected.findings[0]).toMatchObject({ type: "flag", subtype: "investigate", kind: "investigate" });
+  });
+
+  it("repairs a malformed type or subtype instead of rejecting the finding", () => {
+    const finding = valid.findings[0];
+    const mismatched = parseReviewSubmission({
+      ...valid,
+      findings: [{ ...finding, type: "bug", subtype: "critical" }],
+    });
+    expect(mismatched.findings[0]).toMatchObject({ type: "bug", subtype: "severe", kind: "bug" });
+
+    const garbage = parseReviewSubmission({
+      ...valid,
+      findings: [{ ...finding, type: "nit", subtype: 3, cwe: 89 }],
+    });
+    expect(garbage.findings[0]).toMatchObject({ type: "bug", subtype: "severe", kind: "bug", cwe: "CWE-89" });
+
+    const fromSubtype = parseReviewSubmission({
+      ...valid,
+      findings: [{ ...finding, type: "", subtype: "informational", cwe: "not-a-cwe" }],
+    });
+    expect(fromSubtype.findings[0]).toMatchObject({
+      type: "flag",
+      subtype: "informational",
+      kind: "investigate",
+      cwe: null,
+    });
+
+    const hyphen = parseReviewSubmission({
+      ...valid,
+      findings: [{ ...finding, priority: 3, type: "bug", subtype: "non-severe" }],
+    });
+    expect(hyphen.findings[0]).toMatchObject({ type: "bug", subtype: "non_severe" });
   });
 });

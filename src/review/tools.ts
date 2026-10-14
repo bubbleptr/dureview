@@ -48,7 +48,7 @@ export const grepRepoTool = defineTool({
 export const submitReviewTool = defineTool({
   name: "submit_review",
   description:
-    "Record the finished review. Call this exactly once. verdict is block, fix_recommended, or clean. findings is empty when nothing real is wrong. Each finding needs a title, priority 0-3, kind (bug, security, or investigate), category, path, start_line, end_line, body, trigger, and confidence from 0 to 1. suggestion is replacement code for that line range, or null.",
+    "Record the finished review. Call this exactly once. verdict is block, fix_recommended, or clean. findings is empty when nothing real is wrong. Each finding needs a title, priority 0-3, type (bug, flag, or security) with a matching subtype, kind (bug, security, or investigate), category, path, start_line, end_line, body, trigger, and confidence from 0 to 1. cwe is a CWE id such as CWE-89 for a security finding, or null. suggestion is replacement code for that line range, or null.",
   parameters: ReviewSubmissionSchema,
   replay: "safe",
   async execute(args, api, context) {

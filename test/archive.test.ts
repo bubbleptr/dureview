@@ -220,6 +220,156 @@ describe("review archive", () => {
     expect(detail?.error?.length).toBe(2000);
     archive.close();
   });
+
+  it("adds nullable finding type columns and leaves existing rows unknown", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dureview-archive-"));
+    const file = join(dir, "reviews.sqlite");
+    const db = new DatabaseSync(file);
+    db.exec(`
+      CREATE TABLE reviews (
+        task_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        sha TEXT NOT NULL,
+        base_sha TEXT NOT NULL,
+        base_ref TEXT NOT NULL,
+        installation_id INTEGER,
+        trigger TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        outcome TEXT NOT NULL,
+        verdict TEXT,
+        verdict_reason TEXT,
+        overall_confidence REAL,
+        checked_json TEXT NOT NULL DEFAULT '[]',
+        policy_json TEXT,
+        provider TEXT,
+        model TEXT,
+        p0 INTEGER NOT NULL DEFAULT 0,
+        p1 INTEGER NOT NULL DEFAULT 0,
+        p2 INTEGER NOT NULL DEFAULT 0,
+        p3 INTEGER NOT NULL DEFAULT 0,
+        finding_count INTEGER,
+        counts_known INTEGER NOT NULL DEFAULT 1
+      ) STRICT;
+      CREATE TABLE comments (
+        task_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        priority INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        category TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        trigger_text TEXT NOT NULL,
+        suggestion TEXT,
+        confidence REAL NOT NULL,
+        fingerprint TEXT NOT NULL,
+        evidence_json TEXT NOT NULL,
+        PRIMARY KEY (task_id, ordinal)
+      ) STRICT;
+      CREATE TABLE findings (
+        id INTEGER PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        sha TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        trigger_text TEXT NOT NULL,
+        priority INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        category TEXT NOT NULL,
+        cwe TEXT,
+        rule_ref TEXT,
+        confidence REAL NOT NULL,
+        path TEXT NOT NULL,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        extension TEXT,
+        language TEXT,
+        fingerprint TEXT NOT NULL,
+        posted INTEGER,
+        skip_reason TEXT,
+        created_at TEXT NOT NULL
+      ) STRICT;
+    `);
+    db.prepare(
+      `INSERT INTO reviews (
+        task_id, owner, repo, number, title, sha, base_sha, base_ref, trigger, started_at, outcome, p0
+      ) VALUES ('old', 'acme', 'demo', 1, 'Old', 'abc', '', '', 'opened', '2026-10-01T00:00:00.000Z', 'completed', 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO findings (
+        task_id, owner, repo, number, sha, title, body, trigger_text, priority, kind, category,
+        confidence, path, start_line, end_line, fingerprint, posted, created_at
+      ) VALUES (
+        'old', 'acme', 'demo', 1, 'abc', 'Legacy', 'body', 'trigger', 1, 'bug', 'correctness',
+        0.9, 'src/pay.ts', 2, 2, 'aaaaaaaaaaaa', 1, '2026-10-01T00:00:00.000Z'
+      )`,
+    ).run();
+    db.prepare(
+      `INSERT INTO comments (
+        task_id, ordinal, path, start_line, end_line, priority, kind, category, title, body,
+        trigger_text, confidence, fingerprint, evidence_json
+      ) VALUES ( 'old', 0, 'src/pay.ts', 2, 2, 1, 'bug', 'correctness', 'Legacy', 'body', 'trigger', 0.9, 'aaaaaaaaaaaa', '[]')`,
+    ).run();
+    db.close();
+
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    const legacy = new DatabaseSync(file, { readOnly: true });
+    const columns = legacy
+      .prepare("PRAGMA table_info(findings)")
+      .all()
+      .map((row) => String(row.name));
+    expect(columns).toEqual(expect.arrayContaining(["finding_type", "subtype"]));
+    expect(legacy.prepare("SELECT finding_type, subtype FROM findings WHERE task_id = 'old'").get()).toEqual({
+      finding_type: null,
+      subtype: null,
+    });
+    expect(legacy.prepare("SELECT finding_type, subtype FROM comments WHERE task_id = 'old'").get()).toEqual({
+      finding_type: null,
+      subtype: null,
+    });
+    legacy.close();
+
+    await archive.start(row("new", "acme", "demo", 2, "opened", "Typed"));
+    await archive.finish({
+      taskId: "new",
+      owner: "acme",
+      repo: "demo",
+      number: 2,
+      outcome: "completed",
+      verdict: "fix_recommended",
+      findingCount: 1,
+      sha: "abc",
+      findings: [sampleFinding({ type: "security", subtype: "critical", kind: "security", cwe: "CWE-89", priority: 0 })],
+    });
+    const stored = new DatabaseSync(file, { readOnly: true });
+    expect(stored.prepare("SELECT finding_type, subtype, cwe FROM findings WHERE task_id = 'new'").get()).toEqual({
+      finding_type: "security",
+      subtype: "critical",
+      cwe: "CWE-89",
+    });
+    expect(stored.prepare("SELECT finding_type, subtype FROM comments WHERE task_id = 'new'").get()).toEqual({
+      finding_type: "security",
+      subtype: "critical",
+    });
+    const oldStill = stored.prepare("SELECT finding_type FROM findings WHERE task_id = 'old'").get() as {
+      finding_type: string | null;
+    };
+    expect(oldStill.finding_type).toBeNull();
+    stored.close();
+    const detail = await archive.get("old");
+    expect(detail?.comments[0]?.findingType).toBeNull();
+    archive.close();
+  });
 });
 
 describe("review list query", () => {
