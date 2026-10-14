@@ -3,8 +3,8 @@ import type { ShellStatus } from "./app-shell.js";
 import type { StatsPageModel, StatsRankRow } from "../ui/stats-model.js";
 import { AppShell } from "./app-shell.js";
 import { ClientChart } from "./client-chart.js";
+import { BarDataTable, FigureBlock, StatStrip, TrendDataTable } from "./stat-strip.js";
 import { Button } from "./ui/button.js";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card.js";
 import { Label } from "./ui/label.js";
 import { NativeSelect } from "./ui/native-select.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table.js";
@@ -58,102 +58,86 @@ export function StatsPage({ model, status = null }: { model: StatsPageModel; sta
         </>
       }
     >
-      <p className="text-sm text-muted-foreground">Review volume, duration, findings, and model tokens.</p>
+      <p className="max-w-prose text-sm leading-6 text-muted-foreground">Counts and token totals for the selected range.</p>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {model.cards.map((card) => (
-          <Card key={card.label}>
-            <CardHeader className="p-4">
-              <CardDescription>{card.label}</CardDescription>
-              <p className="font-mono text-2xl font-semibold tabular-nums">{card.value}</p>
-              <p className="text-xs text-muted-foreground">{card.detail}</p>
-            </CardHeader>
-          </Card>
-        ))}
-      </div>
+      <StatStrip stats={model.cards} columns={6} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Tokens by day</CardTitle>
-          <CardDescription>Split by model. Days are in your local timezone.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {model.trend.points.length === 0 ? (
-            <Empty>No token usage in this range.</Empty>
-          ) : (
-            <ClientChart render={(charts) => <charts.TokenTrendChart trend={model.trend} />} />
-          )}
-          <p className="mt-3 text-xs text-muted-foreground">{model.usageNote}</p>
-        </CardContent>
-      </Card>
+      <FigureBlock
+        title="Tokens by day"
+        caption="Each line is one model. Days use this browser's time zone. Length and position show token volume, not cost."
+      >
+        {model.trend.points.length === 0 ? (
+          <Empty>No token usage in this range.</Empty>
+        ) : (
+          <ClientChart className="h-72" render={(charts) => <charts.TokenTrendChart trend={model.trend} />} />
+        )}
+        <TrendDataTable trend={model.trend} />
+        <p className="text-xs leading-5 text-muted-foreground">{model.usageNote}</p>
+      </FigureBlock>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <ChartCard title="Priority" description="Share of stored findings">
-          <ClientChart render={(charts) => <charts.DistributionChart rows={model.priorities} />} />
-        </ChartCard>
-        <ChartCard title="Category" description="Includes findings that were not posted">
+      <div className="grid grid-cols-1 gap-10 lg:grid-cols-3">
+        <FigureBlock title="Priority" caption="Share of stored findings. Bar length is the count.">
+          <ClientChart render={(charts) => <charts.DistributionChart rows={model.priorities} color="var(--chart-1)" />} />
+          <BarDataTable caption="Findings by priority" rows={model.priorities} />
+        </FigureBlock>
+        <FigureBlock title="Category" caption="Includes findings that were not posted. Bar length is the count.">
           {model.categories.length === 0 ? (
             <Empty>No findings in this range.</Empty>
           ) : (
-            <ClientChart render={(charts) => <charts.DistributionChart rows={model.categories} color="var(--chart-2)" />} />
+            <ClientChart render={(charts) => <charts.DistributionChart rows={model.categories} color="var(--chart-1)" />} />
           )}
-        </ChartCard>
-        <ChartCard title="Verdict" description="Completed reviews">
+          <BarDataTable caption="Findings by category" rows={model.categories} />
+        </FigureBlock>
+        <FigureBlock title="Verdict" caption="Completed reviews only. Bar length is the count.">
           {model.verdicts.every((row) => row.count === 0) ? (
             <Empty>No completed reviews in this range.</Empty>
           ) : (
-            <ClientChart render={(charts) => <charts.DistributionChart rows={model.verdicts} color="var(--chart-3)" />} />
+            <ClientChart render={(charts) => <charts.DistributionChart rows={model.verdicts} color="var(--chart-1)" />} />
           )}
-        </ChartCard>
+          <BarDataTable caption="Completed reviews by verdict" rows={model.verdicts} />
+        </FigureBlock>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Failure reasons</CardTitle>
-          <CardDescription>Grouped by the error recorded for the run.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {model.failures.length === 0 ? (
-            <Empty>No failed reviews in this range.</Empty>
-          ) : (
-            <ClientChart render={(charts) => <charts.FailureChart rows={model.failures} />} />
-          )}
-        </CardContent>
-      </Card>
+      <FigureBlock title="Failure reasons" caption="Grouped by the error recorded for the run. Bar length is the failure count.">
+        {model.failures.length === 0 ? (
+          <Empty>No failed reviews in this range.</Empty>
+        ) : (
+          <ClientChart render={(charts) => <charts.FailureChart rows={model.failures} />} />
+        )}
+        <BarDataTable caption="Failed reviews by error" rows={model.failures} />
+      </FigureBlock>
 
-      <div className="grid gap-4 xl:grid-cols-3">
-        <RankCard title="Most expensive pull requests" description="Ranked by pi-ai cost, then by tokens.">
-          <RankTable
-            rows={model.expensive}
-            columns={[
-              ["Pull request", "label"],
-              ["Reviews", "reviews"],
-              ["Tokens", "tokens"],
-              ["Cost", "cost"],
-            ]}
-          />
-        </RankCard>
-        <RankCard title="Repositories" description="By review count, with finding totals.">
-          <RankTable
-            rows={model.topRepos}
-            columns={[
-              ["Repository", "label"],
-              ["Reviews", "reviews"],
-              ["Findings", "findings"],
-            ]}
-          />
-        </RankCard>
-        <RankCard title="Pull requests" description="By finding count.">
-          <RankTable
-            rows={model.topPulls}
-            columns={[
-              ["Pull request", "label"],
-              ["Reviews", "reviews"],
-              ["Findings", "findings"],
-            ]}
-          />
-        </RankCard>
-      </div>
+      <RankBlock title="Most expensive pull requests" description="Ranked by pi-ai cost, then by tokens.">
+        <RankTable
+          rows={model.expensive}
+          columns={[
+            ["Pull request", "label"],
+            ["Reviews", "reviews"],
+            ["Tokens", "tokens"],
+            ["Cost", "cost"],
+          ]}
+        />
+      </RankBlock>
+      <RankBlock title="Repositories" description="By review count, with finding totals.">
+        <RankTable
+          rows={model.topRepos}
+          columns={[
+            ["Repository", "label"],
+            ["Reviews", "reviews"],
+            ["Findings", "findings"],
+          ]}
+        />
+      </RankBlock>
+      <RankBlock title="Pull requests" description="By finding count.">
+        <RankTable
+          rows={model.topPulls}
+          columns={[
+            ["Pull request", "label"],
+            ["Reviews", "reviews"],
+            ["Findings", "findings"],
+          ]}
+        />
+      </RankBlock>
     </AppShell>
   );
 }
@@ -173,27 +157,15 @@ function TimezoneField({ tz }: { tz: number }) {
   return <input type="hidden" name="tz" defaultValue={tz} />;
 }
 
-function ChartCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+function RankBlock({ title, description, children }: { title: string; description: string; children: ReactNode }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent>{children}</CardContent>
-    </Card>
-  );
-}
-
-function RankCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent>{children}</CardContent>
-    </Card>
+    <section className="flex min-w-0 flex-col gap-3">
+      <div className="flex max-w-prose flex-col gap-1">
+        <h2 className="text-base font-medium">{title}</h2>
+        <p className="text-sm leading-6 text-muted-foreground">{description}</p>
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -207,10 +179,11 @@ function RankTable({
   if (rows.length === 0) return <Empty>Nothing in this range.</Empty>;
   return (
     <Table>
+      <caption className="sr-only">{columns.map(([label]) => label).join(", ")}</caption>
       <TableHeader>
         <TableRow>
           {columns.map(([label, key]) => (
-            <TableHead key={key} className={key === "label" ? "" : "text-right"}>
+            <TableHead key={key} scope="col" className={key === "label" ? "" : "text-right"}>
               {label}
             </TableHead>
           ))}

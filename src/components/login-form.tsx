@@ -12,10 +12,7 @@ export function LoginForm({ next, error }: { next: string; error?: string }) {
       </div>
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <div className="mb-2 flex items-center gap-2">
-            <span className="grid size-6 place-items-center rounded-md bg-foreground text-[11px] font-semibold text-background">d</span>
-            <span className="text-sm font-medium">dureview</span>
-          </div>
+          <p className="text-sm font-medium">dureview</p>
           <CardTitle className="text-base">登录</CardTitle>
           <CardDescription>输入 UI token 后继续。</CardDescription>
         </CardHeader>

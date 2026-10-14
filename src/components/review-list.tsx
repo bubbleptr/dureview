@@ -9,7 +9,6 @@ import { Button, buttonVariants } from "./ui/button.js";
 import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
 import { NativeSelect } from "./ui/native-select.js";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table.js";
 
 const PAGE_SIZE = 10;
@@ -87,16 +86,15 @@ export function ReviewListView({
       }
     >
       <OverviewPanel model={model} week={week} day={day} />
-      <Card id="reviews">
-        <CardHeader className="gap-3 p-4">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <CardTitle>Reviews</CardTitle>
-              <CardDescription>Latest reviews. Open a row for the diff.</CardDescription>
-            </div>
-            <p className="text-xs text-muted-foreground">{count}</p>
+      <section id="reviews" className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="flex max-w-prose flex-col gap-1">
+            <h2 className="text-base font-medium">Reviews</h2>
+            <p className="text-sm text-muted-foreground">Latest reviews. Open a row for the diff.</p>
           </div>
-          <div className="flex flex-wrap items-end gap-3">
+          <p className="text-xs text-muted-foreground">{count}</p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
             <Filter label="Result">
               <NativeSelect name="result" defaultValue={model.form.result} className="h-8 text-xs" onChange={submitForm}>
                 {RESULTS.map(([value, label]) => (
@@ -123,16 +121,14 @@ export function ReviewListView({
                 Clear
               </a>
             ) : null}
-          </div>
-        </CardHeader>
-        <CardContent className="px-4 pb-4">
-          {model.empty === "none" ? <p className="text-sm text-muted-foreground">No reviews yet.</p> : null}
-          {model.empty === "filtered" ? <p className="text-sm text-muted-foreground">No reviews match these filters.</p> : null}
-          {model.reviews.length > 0 ? (
-            <>
-              <ReviewTable rows={view.rows} search={search} sort={view.sort} dir={view.dir} />
+        </div>
+        {model.empty === "none" ? <p className="text-sm text-muted-foreground">No reviews yet.</p> : null}
+        {model.empty === "filtered" ? <p className="text-sm text-muted-foreground">No reviews match these filters.</p> : null}
+        {model.reviews.length > 0 ? (
+          <>
+            <ReviewTable rows={view.rows} search={search} sort={view.sort} dir={view.dir} count={count} />
               {view.pages > 1 ? (
-                <div className="mt-3 flex items-center justify-end gap-2 text-xs">
+                <div className="flex items-center justify-end gap-2 text-xs">
                   {view.page > 1 ? (
                     <a className={buttonVariants({ variant: "outline", size: "sm" })} href={listHref(search, { page: view.page === 2 ? null : String(view.page - 1) })}>
                       Previous
@@ -152,10 +148,9 @@ export function ReviewListView({
                   )}
                 </div>
               ) : null}
-            </>
-          ) : null}
-        </CardContent>
-      </Card>
+          </>
+        ) : null}
+      </section>
     </AppShell>
   );
 }
@@ -173,14 +168,17 @@ function ReviewTable({
   search,
   sort,
   dir,
+  count,
 }: {
   rows: ReviewRowView[];
   search: string;
   sort: string;
   dir: "asc" | "desc";
+  count: string;
 }) {
   return (
     <Table>
+      <caption className="sr-only">Reviews, {count}</caption>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
           <SortHead label="Repository" sortKey="repo" search={search} sort={sort} dir={dir} />
@@ -255,7 +253,7 @@ function SortHead({
   const active = sort === sortKey;
   const mark = active ? (dir === "asc" ? " ↑" : " ↓") : "";
   return (
-    <TableHead className={`${align === "right" ? "text-right" : ""} ${className ?? ""}`} aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : "none"}>
+    <TableHead scope="col" className={`${align === "right" ? "text-right" : ""} ${className ?? ""}`} aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : "none"}>
       <a className="inline-flex items-center gap-0.5 hover:text-foreground" href={sortHref(search, sortKey, sort, dir)}>
         {label}
         {mark ? <span aria-hidden="true">{mark}</span> : null}

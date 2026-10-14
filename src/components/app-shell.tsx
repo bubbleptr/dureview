@@ -50,7 +50,7 @@ export function AppShell({
       <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b bg-background px-3 py-2">
         <button
           type="button"
-          className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label="Toggle sidebar"
           onClick={toggleNav}
         >
@@ -65,31 +65,32 @@ export function AppShell({
               </span>
             </>
           ) : null}
-          <h1 className="truncate text-sm font-medium">{title}</h1>
+          <h1 className="truncate text-base font-medium">{title}</h1>
         </div>
         <div className="ml-auto flex w-full flex-wrap items-end justify-end gap-2 sm:w-auto">
           {filters}
           <ThemeToggle />
         </div>
       </header>
-      <div className={fill ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-auto"}>
-        {fill ? children : <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-4 p-4 md:p-6">{children}</div>}
-      </div>
+        <main id="main" className={fill ? "min-h-0 min-w-0 flex-1 overflow-hidden" : "min-h-0 min-w-0 flex-1 overflow-auto"}>
+        {fill ? children : <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-10 p-4 md:p-6">{children}</div>}
+      </main>
     </>
   );
   return (
     <div className="flex h-dvh overflow-hidden bg-background text-foreground">
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
       <button type="button" className="mobile-backdrop fixed inset-0 z-30 bg-black/40" aria-label="Close menu" onClick={closeMobile} />
-      <aside className="app-sidebar flex h-full shrink-0 flex-col border-r bg-background">
+      <aside className="app-sidebar flex h-full shrink-0 flex-col border-r bg-background" aria-label="Sidebar">
         <div className="flex h-12 items-center px-3">
-          <a href="/ui" className="flex min-w-0 items-center gap-2" onClick={closeMobile}>
-            <span className="grid size-6 shrink-0 place-items-center rounded-md bg-foreground text-[11px] font-semibold text-background">
-              d
-            </span>
+          <a href="/ui" className="flex min-w-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={closeMobile}>
+            <span className="brand-mark size-6 place-items-center text-sm font-medium">d</span>
             <span className="brand-name truncate text-sm font-medium">dureview</span>
           </a>
         </div>
-        <nav className="flex flex-1 flex-col gap-0.5 px-2" aria-label="Dashboard">
+        <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2" aria-label="Dashboard">
           {NAV.map(([id, href, label, Icon]) => {
             const on = active === id;
             return (
@@ -101,8 +102,8 @@ export function AppShell({
                 onClick={closeMobile}
                 className={
                   on
-                    ? "nav-link flex h-8 items-center gap-2 rounded-md bg-accent px-2 text-[13px] font-medium text-foreground"
-                    : "nav-link flex h-8 items-center gap-2 rounded-md px-2 text-[13px] text-muted-foreground hover:bg-accent/70 hover:text-foreground"
+                    ? "nav-link flex h-8 items-center gap-2 rounded-md bg-accent px-2 text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    : "nav-link flex h-8 items-center gap-2 rounded-md px-2 text-sm text-muted-foreground hover:bg-accent/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 }
               >
                 <Icon className="size-4 shrink-0" />
@@ -126,8 +127,8 @@ export function AppShell({
 
 function StatusLine({ status }: { status: ShellStatus }) {
   return (
-    <div className="flex flex-col gap-1 text-[11px] leading-4 break-words text-muted-foreground">
-      <p className="text-[10px] font-medium tracking-wide uppercase">ChatGPT</p>
+    <div className="flex flex-col gap-1 text-xs leading-5 break-words text-muted-foreground">
+      <p className="font-medium text-foreground">ChatGPT</p>
       <p>
         {status.version}
         {" · "}

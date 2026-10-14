@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 type ChartsModule = typeof import("./stats-charts.js");
 
-export function ClientChart({ render }: { render: (charts: ChartsModule) => ReactNode }) {
+export function ClientChart({ render, className = "h-56" }: { render: (charts: ChartsModule) => ReactNode; className?: string }) {
   const [charts, setCharts] = useState<ChartsModule | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -13,6 +13,12 @@ export function ClientChart({ render }: { render: (charts: ChartsModule) => Reac
       cancelled = true;
     };
   }, []);
-  if (!charts) return <div className="h-56 animate-pulse rounded-md bg-muted/60" />;
+  if (!charts) {
+    return (
+      <div className={`${className} animate-pulse rounded-md bg-muted/50 motion-reduce:animate-none`} role="status">
+        <span className="sr-only">Loading chart.</span>
+      </div>
+    );
+  }
   return render(charts);
 }

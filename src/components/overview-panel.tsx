@@ -1,7 +1,7 @@
 import type { ReviewListModel, ReviewRowView } from "../ui/list-model.js";
 import type { StatsPageModel } from "../ui/stats-model.js";
 import { ClientChart } from "./client-chart.js";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card.js";
+import { FigureBlock, StatStrip, TrendDataTable } from "./stat-strip.js";
 
 export function OverviewPanel({
   model,
@@ -16,30 +16,20 @@ export function OverviewPanel({
   const trend = week?.trend;
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        {cards.map((card) => (
-          <Card key={card.label}>
-            <CardHeader className="gap-1 p-4">
-              <CardDescription>{card.label}</CardDescription>
-              <p className="font-mono text-2xl font-semibold tracking-tight tabular-nums">{card.value}</p>
-              <p className="text-xs text-muted-foreground">{card.detail}</p>
-            </CardHeader>
-          </Card>
-        ))}
-      </div>
-      <Card>
-        <CardHeader className="p-4">
-          <CardTitle>7-day trend</CardTitle>
-          <CardDescription>Token usage by model. Days follow this browser's timezone.</CardDescription>
-        </CardHeader>
-        <CardContent className="px-4 pb-4">
-          {!trend || trend.points.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No token usage in the last 7 days.</p>
-          ) : (
-            <ClientChart render={(charts) => <charts.TokenTrendChart trend={trend} />} />
-          )}
-        </CardContent>
-      </Card>
+      <StatStrip stats={cards} />
+      <FigureBlock
+        title="Tokens over 7 days"
+        caption="Each line is one model. Days use this browser's time zone. The chart shows token volume, not cost or review quality."
+      >
+        {!trend || trend.points.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No token usage in the last 7 days.</p>
+        ) : (
+          <>
+            <ClientChart className="h-72" render={(charts) => <charts.TokenTrendChart trend={trend} />} />
+            <TrendDataTable trend={trend} />
+          </>
+        )}
+      </FigureBlock>
     </>
   );
 }

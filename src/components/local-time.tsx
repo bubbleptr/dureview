@@ -17,7 +17,7 @@ export function LocalTime({ iso, label }: { iso: string; label: string }) {
     );
   }, [iso]);
   return (
-    <time dateTime={iso} title={iso}>
+    <time className="font-mono tabular-nums" dateTime={iso} title={iso}>
       {text}
     </time>
   );

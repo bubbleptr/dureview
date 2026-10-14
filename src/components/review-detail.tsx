@@ -30,20 +30,6 @@ const PRIORITY_BADGE = [
   "border-transparent bg-muted text-muted-foreground",
 ] as const;
 
-const PRIORITY_BORDER = [
-  "border-l-red-600",
-  "border-l-orange-700",
-  "border-l-amber-600",
-  "border-l-muted-foreground",
-] as const;
-
-const PRIORITY_SURFACE = [
-  "bg-red-50/80 dark:bg-red-400/10",
-  "bg-orange-50/70 dark:bg-orange-400/10",
-  "bg-amber-50/70 dark:bg-amber-400/10",
-  "bg-muted/50",
-] as const;
-
 const SEVERITY = [
   "shadow-[inset_2px_0_0_#cf222e]",
   "shadow-[inset_2px_0_0_#bc4c00]",
@@ -52,9 +38,9 @@ const SEVERITY = [
 ] as const;
 
 const COUNT_TONE: Record<string, string> = {
-  P0: "text-red-700",
-  P1: "text-orange-800",
-  P2: "text-amber-700",
+  P0: "text-red-700 dark:text-red-300",
+  P1: "text-orange-800 dark:text-orange-300",
+  P2: "text-amber-700 dark:text-amber-300",
   P3: "text-muted-foreground",
 };
 
@@ -90,7 +76,7 @@ export function ReviewDetailView({
             <span className="max-w-48 truncate text-sm font-medium">{model.pullLabel}</span>
           )}
           <Badge variant={model.resultKind}>{model.resultText}</Badge>
-          <Badge variant="outline">{model.triggerLabel}</Badge>
+          <span className="text-xs text-muted-foreground">{model.triggerLabel}</span>
           <span className="text-xs text-muted-foreground">{model.duration}</span>
           {model.whenLabel ? (
             <span className="text-xs text-muted-foreground">
@@ -102,7 +88,7 @@ export function ReviewDetailView({
     >
       <div className="grid h-full min-h-0 grid-cols-1 min-[960px]:grid-cols-[220px_minmax(0,1fr)_380px]">
         <aside className="flex min-h-0 flex-col overflow-hidden border-b min-[960px]:border-r min-[960px]:border-b-0">
-          <p className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Files</p>
+          <p className="px-3 pt-3 pb-1 text-sm font-medium">Files</p>
           <div className="min-h-48 flex-1">
             {model.files.length === 0 ? (
               <p className="px-3 py-2 text-sm text-muted-foreground">No changed files.</p>
@@ -337,7 +323,7 @@ function CommentGroup({ title, comments }: { title: string; comments: DetailComm
   if (comments.length === 0) return null;
   return (
     <div className="py-2">
-      <p className="px-3 pt-2 pb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{title}</p>
+      <p className="px-3 pt-2 pb-1 text-sm font-medium">{title}</p>
       {comments.map((comment) => (
         <CommentCard key={comment.ordinal} comment={comment} />
       ))}
@@ -346,18 +332,14 @@ function CommentGroup({ title, comments }: { title: string; comments: DetailComm
 }
 
 function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: boolean }) {
-  const surface = inset ? (PRIORITY_SURFACE[comment.priority] ?? PRIORITY_SURFACE[3]) : "";
   return (
-    <article
-      id={comment.anchor}
-      className={`my-2 rounded-lg border border-l-2 p-3 ${inset ? "mr-3 ml-16" : "mx-3"} ${PRIORITY_BORDER[comment.priority] ?? PRIORITY_BORDER[3]} ${surface}`}
-    >
-      <header className="mb-1 flex flex-wrap items-center gap-1.5">
+    <article id={comment.anchor} className={`border-b py-3 ${inset ? "pr-3 pl-16" : "px-3"}`}>
+      <header className="mb-1 flex flex-wrap items-baseline gap-2">
         <Badge className={PRIORITY_BADGE[comment.priority] ?? PRIORITY_BADGE[3]}>P{comment.priority}</Badge>
         {comment.tags.map((tag) => (
-          <Badge key={tag} variant="outline">
+          <span key={tag} className="text-xs text-muted-foreground">
             {tag}
-          </Badge>
+          </span>
         ))}
         <span className="text-xs text-muted-foreground">{comment.confidence}</span>
       </header>
@@ -390,7 +372,7 @@ function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: b
 function SummaryRail({ summary }: { summary: DetailSummary }) {
   return (
     <section className="border-b px-3 py-3">
-      <h2 className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Summary</h2>
+      <h2 className="mb-2 text-sm font-medium">Summary</h2>
       <Badge variant={summary.resultKind}>{summary.resultText}</Badge>
       {summary.mode === "incomplete" ? (
         <p className="mt-2 text-sm break-words whitespace-pre-wrap">{summary.note}</p>
@@ -444,7 +426,7 @@ function CompleteSummary({ summary }: { summary: Extract<DetailSummary, { mode: 
 function SettingsRail({ settings }: { settings: DetailSettings }) {
   return (
     <section className="px-3 py-3">
-      <h2 className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Settings</h2>
+      <h2 className="mb-2 text-sm font-medium">Settings</h2>
       {settings.recorded ? (
         <dl className="grid grid-cols-[9.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-sm">
           {settings.rows.map((row) => (
