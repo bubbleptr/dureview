@@ -8,6 +8,24 @@ export type IssueComment = { id: number; body: string };
 export type PullReview = { id: number; body: string };
 export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
 
+/** Conclusions the Checks API accepts when a check run completes. */
+export type CheckConclusion =
+  | "action_required"
+  | "cancelled"
+  | "failure"
+  | "neutral"
+  | "success"
+  | "skipped"
+  | "stale"
+  | "timed_out";
+
+export type CheckRun = {
+  id: number;
+  status: "queued" | "in_progress" | "completed";
+  conclusion: CheckConclusion | null;
+  externalId: string | null;
+};
+
 export type ReviewCommentDraft = { path: string; line: number; startLine?: number; body: string };
 
 /** Pull request fields needed to review the current head after a `/dureview` comment. */
@@ -104,6 +122,25 @@ export interface GitHub {
    * Callers fetch this when a review is opened. It is not stored.
    */
   listPullFiles(request: GitHubRepo & { number: number }, signal: AbortSignal): Promise<PullFile[]>;
+  /**
+   * Check runs named `name` on `sha`, including in-progress runs (`filter=all`).
+   * Used to reuse the run this task already opened after a crash between the create
+   * call and the next checkpoint, and to close another in-progress run on the same SHA.
+   */
+  listCheckRuns(request: GitHubRepo, sha: string, name: string, signal: AbortSignal): Promise<CheckRun[]>;
+  /** Opens an in-progress check run on `sha`. `externalId` is the review task id. */
+  createCheckRun(
+    request: GitHubRepo,
+    input: { name: string; sha: string; externalId: string },
+    signal: AbortSignal,
+  ): Promise<CheckRun>;
+  /** Completes a check run. `output` is the title and summary shown on the pull request. */
+  updateCheckRun(
+    request: GitHubRepo,
+    checkRunId: number,
+    input: { conclusion: CheckConclusion; title: string; summary: string; detailsUrl?: string },
+    signal: AbortSignal,
+  ): Promise<CheckRun>;
 }
 
 /** One file from `GET /repos/{owner}/{repo}/pulls/{number}/files`. */
@@ -425,6 +462,70 @@ export class GithubRest implements GitHub {
     return collected;
   }
 
+  async listCheckRuns(request: GitHubRepo, sha: string, name: string, signal: AbortSignal): Promise<CheckRun[]> {
+    const collected: CheckRun[] = [];
+    const checkName = encodeURIComponent(name);
+    const ref = encodeURIComponent(sha);
+    for (let page = 1; page <= 5; page++) {
+      const path = `/repos/${request.owner}/${request.repo}/commits/${ref}/check-runs?check_name=${checkName}&filter=all&per_page=100&page=${page}`;
+      const payload = await this.#json<{ check_runs?: unknown }>(request, "GET", path, signal);
+      const runs = Array.isArray(payload.check_runs) ? payload.check_runs : [];
+      for (const run of runs) {
+        const parsed = parseCheckRun(run);
+        if (parsed) collected.push(parsed);
+      }
+      if (runs.length < 100) break;
+    }
+    return collected;
+  }
+
+  async createCheckRun(
+    request: GitHubRepo,
+    input: { name: string; sha: string; externalId: string },
+    signal: AbortSignal,
+  ): Promise<CheckRun> {
+    const payload = await this.#json(
+      request,
+      "POST",
+      `/repos/${request.owner}/${request.repo}/check-runs`,
+      signal,
+      {
+        name: input.name,
+        head_sha: input.sha,
+        status: "in_progress",
+        external_id: input.externalId,
+        started_at: new Date().toISOString(),
+      },
+    );
+    const parsed = parseCheckRun(payload);
+    if (!parsed) throw new Error("GitHub check run response had no id.");
+    return parsed;
+  }
+
+  async updateCheckRun(
+    request: GitHubRepo,
+    checkRunId: number,
+    input: { conclusion: CheckConclusion; title: string; summary: string; detailsUrl?: string },
+    signal: AbortSignal,
+  ): Promise<CheckRun> {
+    const payload = await this.#json(
+      request,
+      "PATCH",
+      `/repos/${request.owner}/${request.repo}/check-runs/${checkRunId}`,
+      signal,
+      {
+        status: "completed",
+        conclusion: input.conclusion,
+        completed_at: new Date().toISOString(),
+        ...(input.detailsUrl ? { details_url: input.detailsUrl } : {}),
+        output: { title: input.title, summary: input.summary },
+      },
+    );
+    const parsed = parseCheckRun(payload);
+    if (!parsed) throw new Error("GitHub check run response had no id.");
+    return parsed;
+  }
+
   accessToken(request: ReviewRequest, signal: AbortSignal): Promise<string> {
     return this.#token(request, signal);
   }
@@ -604,7 +705,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function githubStatus(error: unknown): number | undefined {
+const CHECK_CONCLUSIONS = new Set<CheckConclusion>([
+  "action_required",
+  "cancelled",
+  "failure",
+  "neutral",
+  "success",
+  "skipped",
+  "stale",
+  "timed_out",
+]);
+
+function parseCheckRun(value: unknown): CheckRun | null {
+  if (!isRecord(value) || typeof value.id !== "number") return null;
+  const status = value.status === "queued" || value.status === "in_progress" || value.status === "completed"
+    ? value.status
+    : "queued";
+  const conclusion = typeof value.conclusion === "string" && CHECK_CONCLUSIONS.has(value.conclusion as CheckConclusion)
+    ? (value.conclusion as CheckConclusion)
+    : null;
+  return {
+    id: value.id,
+    status,
+    conclusion,
+    externalId: typeof value.external_id === "string" ? value.external_id : null,
+  };
+}
+
+export function githubStatus(error: unknown): number | undefined {
   if (!(error instanceof Error)) return undefined;
   const match = /failed \((\d+)\)/.exec(error.message);
   return match?.[1] ? Number(match[1]) : undefined;

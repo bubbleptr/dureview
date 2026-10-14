@@ -73,7 +73,7 @@ The API key is read from the environment. It is not written to the data director
 ### GitHub App (preferred)
 
 1. Create a GitHub App owned by the account that should review pull requests.
-2. Permissions: **Contents** (read), **Pull requests** (read and write), **Issues** (read and write). Metadata is included.
+2. Permissions: **Contents** (read), **Pull requests** (read and write), **Issues** (read and write), **Checks** (read and write). Metadata is included.
 3. Subscribe to the **Pull request** and **Issue comment** events.
 4. Webhook URL: `https://<your-host>/webhook`. Webhook secret: the same value as `DUREVIEW_WEBHOOK_SECRET`.
 5. Install the App on the repositories it should review.
@@ -81,13 +81,29 @@ The API key is read from the environment. It is not written to the data director
 
 Issue comment events deliver `/dureview`. The 👀 reaction uses the Issues write permission. The collaborator permission check uses the App's access to the repository.
 
+### Check runs
+
+Every review, including one started by `/dureview`, opens a check run named `dureview` on the pull request head commit. It stays in progress while the review runs, then completes:
+
+- No findings: **success**. The title is "No findings", or "未发现问题" when `language` is `zh`.
+- A P0 or P1: **failure**. The summary lists how many findings are at each priority. Findings that were not posted inline (for example a line outside the diff, when `summary` is false) are listed under that count, so a failing check is explained on the commit even when the conversation has no comment.
+- Only P2 and P3: **success**. The title is "N suggestions", or "有 N 条建议".
+- The review itself fails (the model errors, times out, or throws): **failure**. A bad `.dureview.md` or an unknown model is **action required** instead, and the check links to the configuration section of this README. The summary is the error, and the check does not stay in progress.
+- The task is aborted: **cancelled**.
+
+A second review of the same commit completes any other in-progress `dureview` run on that SHA, so two overlapping reviews do not leave a spinning check. A transient Checks API error is retried. Only a 403 is treated as a missing permission: dureview logs it and continues, and does not remember that skip across a crash that happened before the check id was saved. If creating the check succeeded and the process stopped before the id was saved, the next attempt finds that run by its task id.
+
+In branch protection, require the status check `dureview`. A success conclusion is a review that found nothing blocking. Failure and action required block the merge when the check is required.
+
+The App needs **Checks: Read & write** for this. If GitHub returns 403, dureview logs that the App cannot write check runs and continues. Inline comments, request changes, summaries, and `/dureview` are unchanged.
+
 The webhook payload includes `installation.id`. dureview mints a short-lived installation token for the API and for `git fetch`. The token is not stored.
 
 dureview checks out `pull/<number>/head` from the repository that hosts the pull request, so fork pull requests work when the App can read that repository.
 
 ### Personal access token
 
-Set `GITHUB_TOKEN` and omit the App variables. The token needs read access to the repository and permission to create issue comments and pull request reviews. Do not set `GITHUB_APP_ID` when using a token.
+Set `GITHUB_TOKEN` and omit the App variables. The token needs read access to the repository and permission to create issue comments and pull request reviews. The Checks API is what creates the `dureview` check run; a token that GitHub rejects with 403 still posts the review, and the miss is logged. Do not set `GITHUB_APP_ID` when using a token.
 
 ### What gets reviewed
 
@@ -101,7 +117,7 @@ A comment on the pull request whose first line is `/dureview` (leading and trail
 
 The same `owner/repo#number@sha` is not reviewed twice by an automatic event. A later push (a new SHA) is a new review when `trigger` is `auto`. What it posts depends on `summary` in `.dureview.md` (default `false`).
 
-With `summary: false`, dureview posts one inline comment per finding and nothing else. A review with no findings, and no earlier inline comment to resolve, writes nothing. It still reads existing inline comments so a finding that disappeared can be closed. A P0 or P1 inline finding submits the review as **Request changes**. Any other posted finding uses **Comment**. dureview does not approve. GitHub rejects Request changes when the token's user opened the pull request; dureview logs that and submits Comment instead. `investigate` findings and findings with an empty trigger are not posted. A finding that was posted before and is absent on the next push has its review thread resolved. If the thread cannot be resolved, dureview replies `fixed in <sha>` (or `已在 <sha> 修复` when `language` is `zh`).
+With `summary: false`, dureview posts one inline comment per finding and nothing else. A review with no findings, and no earlier inline comment to resolve, writes nothing to the conversation. The `dureview` check run on the head commit still completes as success, which is how you can see that the review finished. It still reads existing inline comments so a finding that disappeared can be closed. A P0 or P1 inline finding submits the review as **Request changes**. Any other posted finding uses **Comment**. dureview does not approve. GitHub rejects Request changes when the token's user opened the pull request; dureview logs that and submits Comment instead. `investigate` findings and findings with an empty trigger are not posted. A finding that was posted before and is absent on the next push has its review thread resolved. If the thread cannot be resolved, dureview replies `fixed in <sha>` (or `已在 <sha> 修复` when `language` is `zh`).
 
 With `summary: true`, a later push updates the existing summary comment. Inline comments are posted only for findings that were not already commented. A finding that disappears is marked fixed in the summary. The review event stays Comment.
 
@@ -109,9 +125,9 @@ With `summary: true`, a later push updates the existing summary comment. Inline 
 
 Each review is one Pi Durable task:
 
-1. **prepare** checks out the head and loads the diff plus `.dureview.md` from the base branch.
+1. **prepare** checks out the head, loads the diff plus `.dureview.md` from the base branch, and opens the `dureview` check run on the head SHA.
 2. **review** runs a conversation with `read`, `grep`, and `submit_review`. No write, edit, or shell tool is offered.
-3. **post** publishes to GitHub.
+3. **post** publishes to GitHub and completes the check run. Titles and the summary follow `language`.
 
 The default prompt is adversarial and disciplined. It looks for real bugs, security issues, edge cases, broken assumptions, and missing error handling, and it may record a suspicion it cannot prove. It does not praise the change or comment on style. Adapted from Codex's open review rubric, a finding has to be introduced by this pull request, name the code it affects, and come with a concrete trigger. Pre-existing bugs, intentional changes, and "this could be nicer" comments are out of scope.
 
@@ -238,7 +254,7 @@ npm test
 npm run e2e
 ```
 
-Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, the manual default when `.dureview.md` is missing or omits `trigger`, `DUREVIEW_DEFAULT_TRIGGER`, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, review-page authentication, the review archive and its filters, diff comments placed on the live pull request files, and the recent-review log.
+Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, the manual default when `.dureview.md` is missing or omits `trigger`, `DUREVIEW_DEFAULT_TRIGGER`, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, review-page authentication, the review archive and its filters, diff comments placed on the live pull request files, the recent-review log, and check runs (success, blocking failure, suggestions, a failed review, a 403 from the Checks API, reuse after a crash during checkout, a retried check update, an abort during create, `filter=all`, and overlapping reviews on one SHA).
 
 Live Codex OAuth and a real GitHub App are not exercised here. Pi Durable is experimental and its API can change between releases. This repo pins `@earendil-works/pi-durable`, `@earendil-works/pi-ai`, and `@earendil-works/chord` at 1.1.0.
 
