@@ -75,15 +75,19 @@ describe("review statistics migration", () => {
       },
       provider: "openai-codex",
       modelId: "gpt-5.5",
+      thinking: "medium",
     });
     archive.close();
 
     const check = new DatabaseSync(file, { readOnly: true });
-    const columns = new Set(check.prepare("PRAGMA table_info(reviews)").all().map((row) => String(row.name)));
-    for (const name of ["input_tokens", "output_tokens", "cache_read_tokens", "reasoning_tokens", "model_calls", "cost_usd"]) {
+    const ordered = check.prepare("PRAGMA table_info(reviews)").all().map((row) => String(row.name));
+    const columns = new Set(ordered);
+    for (const name of ["input_tokens", "output_tokens", "cache_read_tokens", "reasoning_tokens", "model_calls", "cost_usd", "thinking"]) {
       expect(columns.has(name)).toBe(true);
     }
-    const legacy = check.prepare("SELECT input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, model_calls, cost_usd FROM reviews WHERE task_id = 'old'").get() as UsageRow;
+    expect(ordered.indexOf("thinking")).toBeGreaterThan(ordered.indexOf("cost_usd"));
+    expect(ordered.indexOf("cost_usd")).toBeGreaterThan(ordered.indexOf("input_tokens"));
+    const legacy = check.prepare("SELECT input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, model_calls, cost_usd, thinking FROM reviews WHERE task_id = 'old'").get() as UsageRow & { thinking: string | null };
     expect(legacy).toMatchObject({
       input_tokens: null,
       output_tokens: null,
@@ -91,8 +95,9 @@ describe("review statistics migration", () => {
       reasoning_tokens: null,
       model_calls: null,
       cost_usd: null,
+      thinking: null,
     });
-    const created = check.prepare("SELECT input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, model_calls, cost_usd FROM reviews WHERE task_id = 'new'").get() as UsageRow;
+    const created = check.prepare("SELECT input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, model_calls, cost_usd, thinking FROM reviews WHERE task_id = 'new'").get() as UsageRow & { thinking: string | null };
     expect(created).toMatchObject({
       input_tokens: 120,
       output_tokens: 30,
@@ -100,6 +105,7 @@ describe("review statistics migration", () => {
       reasoning_tokens: null,
       model_calls: 2,
       cost_usd: 0.01,
+      thinking: "medium",
     });
     const finding = check.prepare("SELECT category, cwe, rule_ref, extension, language, posted, skip_reason FROM findings WHERE task_id = 'new'").get() as Record<string, unknown>;
     expect(finding).toMatchObject({
@@ -150,6 +156,7 @@ describe("review statistics aggregation", () => {
       verdict: "block",
       p0: 1,
       model: "gpt-5.5",
+      thinking: "low",
       input: 1000,
       output: 100,
       cache: 50,
@@ -170,6 +177,7 @@ describe("review statistics aggregation", () => {
       verdict: "fix_recommended",
       p1: 2,
       model: "gpt-5.5",
+      thinking: "high",
       input: 500,
       output: 50,
       cache: null,
@@ -319,7 +327,9 @@ describe("review statistics aggregation", () => {
     expect(days).toContain("2026-10-11");
     expect(days).toContain("2026-10-12");
     expect(days).toContain("2026-08-01");
-    expect(all.trend.find((row) => row.day === "2026-10-11" && row.model === "gpt-5.5")?.totalTokens).toBe(1150 + 550);
+    const sameDay = all.trend.filter((row) => row.day === "2026-10-11" && row.model === "gpt-5.5");
+    expect(sameDay).toHaveLength(1);
+    expect(sameDay[0]?.totalTokens).toBe(1150 + 550);
     expect(all.expensive[0]).toMatchObject({ repo: "acme/demo", number: 4, costUsd: 50 });
     expect(all.topRepos[0]).toMatchObject({ repo: "acme/demo", reviews: 5 });
     expect(all.topPulls[0]?.findings).toBeGreaterThan(0);
@@ -350,9 +360,10 @@ describe("usage capture", () => {
     await service.close();
 
     const db = new DatabaseSync(join(dataDir, "reviews.sqlite"), { readOnly: true });
-    const usage = db.prepare("SELECT input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, model_calls, cost_usd, model, outcome FROM reviews").get() as UsageRow & { model: string; outcome: string };
+    const usage = db.prepare("SELECT input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, model_calls, cost_usd, model, thinking, outcome FROM reviews").get() as UsageRow & { model: string; thinking: string; outcome: string };
     expect(usage.outcome).toBe("completed");
     expect(usage.model).toBe("faux-1");
+    expect(usage.thinking).toBe("off");
     expect(usage.input_tokens).toBeGreaterThan(0);
     expect(usage.output_tokens).toBeGreaterThan(0);
     expect(usage.model_calls).toBeGreaterThanOrEqual(3);
@@ -486,6 +497,7 @@ function insertReview(
     p2?: number;
     p3?: number;
     model: string | null;
+    thinking?: string | null;
     input: number | null;
     output: number | null;
     cache: number | null;
@@ -499,8 +511,8 @@ function insertReview(
     `INSERT INTO reviews (
       task_id, owner, repo, number, title, sha, base_sha, base_ref, trigger, started_at, finished_at,
       outcome, verdict, p0, p1, p2, p3, finding_count, counts_known, error, provider, model,
-      input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, model_calls, cost_usd
-    ) VALUES (?, ?, ?, ?, ?, 'abc', '', '', 'opened', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'openai-codex', ?, ?, ?, ?, ?, ?, ?)`,
+      input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, model_calls, cost_usd, thinking
+    ) VALUES (?, ?, ?, ?, ?, 'abc', '', '', 'opened', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'openai-codex', ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.taskId,
     row.owner,
@@ -524,5 +536,6 @@ function insertReview(
     row.reasoning,
     row.calls,
     row.cost,
+    row.thinking ?? null,
   );
 }

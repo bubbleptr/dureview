@@ -38,6 +38,7 @@ export async function startHttp(
     dataDir: config.dataDir,
     provider: config.provider ?? "unknown",
     modelId: config.modelId ?? "unknown",
+    thinking: "medium",
     githubApp: config.githubApp === true,
     githubToken: config.githubToken === true,
     githubApiUrl: config.githubApiUrl ?? "https://api.github.com",

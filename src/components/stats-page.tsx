@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { StatsPageModel, StatsRankRow } from "../ui/stats-model.js";
+import { UiNav } from "./ui-nav.js";
 import { Button } from "./ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card.js";
 import { Label } from "./ui/label.js";
@@ -24,9 +25,7 @@ export function StatsPage({ model }: { model: StatsPageModel }) {
             <CardTitle>Statistics</CardTitle>
             <CardDescription>Review volume, duration, findings, and model tokens.</CardDescription>
           </div>
-          <Button variant="outline" size="sm" asChild>
-            <a href="/ui">Reviews</a>
-          </Button>
+          <UiNav current="stats" />
         </CardHeader>
         <CardContent>
           <form className="flex flex-wrap items-end gap-3" method="get" action="/ui/stats">

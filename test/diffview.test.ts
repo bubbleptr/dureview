@@ -254,6 +254,7 @@ describe("pull request diff placement", () => {
       uptime: "1s",
       provider: "faux",
       model: "faux-1",
+      thinking: "off",
       codex: { kind: "plain", text: "Codex not signed in" },
       githubApp: false,
       githubToken: true,
@@ -277,6 +278,7 @@ describe("pull request diff placement", () => {
           duration: runningLabel(startedAt, now),
           whenIso: startedAt,
           whenLabel: formatTime(startedAt),
+          modelLine: null,
         },
       ],
       repos: ["acme/demo"],
@@ -339,6 +341,7 @@ function detail(comments: StoredComment[]): ReviewDetail {
     checked: ["payment capture"],
     provider: "faux",
     model: "faux-1",
+    thinking: "off",
     policy: {
       profile: "default",
       trigger: "auto",

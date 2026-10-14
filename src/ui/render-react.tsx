@@ -2,7 +2,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { LoginForm } from "../components/login-form.js";
 import { ReviewDetailView } from "../components/review-detail.js";
 import { ReviewListView } from "../components/review-list.js";
+import { SettingsForm } from "../components/settings-form.js";
 import { StatsPage } from "../components/stats-page.js";
+import type { SettingsPageModel } from "../settings/page.js";
 import type { ReviewDetailModel } from "./detail-model.js";
 import type { ReviewListModel } from "./list-model.js";
 import type { StatsPageModel } from "./stats-model.js";
@@ -14,6 +16,10 @@ export function renderLoginHtml(input: { next: string; error?: string }): string
 
 export function renderListHtml(model: ReviewListModel): string {
   return documentShell("dureview", renderToStaticMarkup(<ReviewListView model={model} />));
+}
+
+export function renderSettingsHtml(model: SettingsPageModel): string {
+  return documentShell("Settings · dureview", renderToStaticMarkup(<SettingsForm model={model} />));
 }
 
 export async function renderDetailHtml(model: ReviewDetailModel): Promise<string> {

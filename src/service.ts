@@ -6,7 +6,9 @@ import { createRegistry, Harness, type ConversationId, type TaskId } from "@eare
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { storageFile } from "./auth/session.js";
-import type { Config } from "./config.js";
+import { baselineFromConfig, type Config, type EditableBaseline } from "./config.js";
+import { ServerSettings, type EffectiveConfig, type SettingsWriteResult } from "./settings/effective.js";
+import type { SettingsFormValues, SettingsPageModel } from "./settings/page.js";
 import type { GitHub } from "./github/client.js";
 import { verifyGithubSignature } from "./github/signature.js";
 import { parseWebhook, type ReviewCommand } from "./github/webhook.js";
@@ -29,6 +31,13 @@ export type ServiceOptions = {
   provider: string;
   modelId: string;
   hooks?: ReviewHooks;
+  /**
+   * Environment layer for editable settings. When omitted, every config value is treated as set in the environment.
+   * Production passes `editableBaseline()` so an unset variable stays a built-in default.
+   */
+  baseline?: EditableBaseline;
+  /** When omitted, overrides are stored beside the review archive. */
+  settings?: ServerSettings;
 };
 
 export type WebhookResponse = { status: number; body: Record<string, unknown> };
@@ -42,6 +51,7 @@ export class DureviewService {
     private readonly github: GitHub,
     private readonly reviews: ReviewLog,
     private readonly archive: ReviewArchive,
+    private readonly settings: ServerSettings,
   ) {}
 
   static async open(options: ServiceOptions): Promise<DureviewService> {
@@ -52,12 +62,21 @@ export class DureviewService {
       join(options.config.dataDir, "reviews.json"),
     );
     await archive.open();
+    const settings =
+      options.settings ??
+      (await ServerSettings.open({
+        file: join(options.config.dataDir, REVIEWS_DB_FILE),
+        baseline: options.baseline ?? baselineFromConfig(options.config),
+        models: options.models,
+        provider: options.provider,
+      }));
     const { extension, task } = createReviewRuntime({
       checkout: options.checkout,
       github: options.github,
-      provider: options.provider,
-      modelId: options.modelId,
-      thinking: options.config.thinking,
+      currentModel: () => {
+        const effective = settings.effective();
+        return { provider: effective.provider, modelId: effective.modelId, thinking: effective.thinking };
+      },
       hooks: options.hooks,
       onFinished: async (event) => {
         try {
@@ -91,12 +110,34 @@ export class DureviewService {
       BACKGROUND_CONTEXT,
     );
     } catch (error) {
+      settings.close();
       archive.close();
       throw error;
     }
     const root = await harness.root(BACKGROUND_CONTEXT);
     harness.resume();
-    return new DureviewService(harness, root.id, task, options.config, options.github, reviews, archive);
+    return new DureviewService(harness, root.id, task, options.config, options.github, reviews, archive, settings);
+  }
+
+  /** Model, thinking, trigger, draft skip, and checkout TTL after overrides. */
+  effectiveConfig(): EffectiveConfig {
+    return this.settings.effective();
+  }
+
+  checkoutTtlMs(): number {
+    return this.settings.effective().checkoutTtlDays * 24 * 60 * 60 * 1000;
+  }
+
+  settingsPage(extra?: { error?: string | null; saved?: boolean }): Promise<SettingsPageModel> {
+    return this.settings.page(extra);
+  }
+
+  saveSettings(input: SettingsFormValues, actor: string): Promise<SettingsWriteResult> {
+    return this.settings.save(input, actor);
+  }
+
+  resetSetting(key: string, actor: string): Promise<SettingsWriteResult> {
+    return this.settings.reset(key, actor);
   }
 
   async enqueue(request: ReviewRequest, mode: EnqueueMode = { kind: "sha" }, trigger = "unknown"): Promise<EnqueueResult> {
@@ -296,7 +337,7 @@ export class DureviewService {
     let policy;
     try {
       policy = (
-        await readBaseDureview(this.github, request, signal, { trigger: this.config.defaultTrigger })
+        await readBaseDureview(this.github, request, signal, { trigger: this.settings.effective().defaultTrigger })
       ).policy;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -313,7 +354,7 @@ export class DureviewService {
       draft: request.draft,
       trigger: policy.trigger,
       drafts: policy.drafts,
-      forceSkipDrafts: this.config.skipDrafts,
+      forceSkipDrafts: this.settings.effective().skipDrafts,
     });
     if (!decision.review) {
       log("info", "skipped pull request", {
@@ -384,6 +425,7 @@ export class DureviewService {
     try {
       await this.harness.close(BACKGROUND_CONTEXT);
     } finally {
+      this.settings.close();
       this.archive.close();
     }
   }

@@ -1,6 +1,7 @@
 import { chmod, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
+import { isThinkingLevel } from "../config.js";
 import { log } from "../log.js";
 import { fileFacts, isSkipReason, type RecordedFinding } from "./findings.js";
 import type { ReviewFinished } from "./history.js";
@@ -80,6 +81,10 @@ export type ReviewSummary = {
   findingCount: number | null;
   /** False for rows imported from `reviews.json`, which only had a total. */
   countsKnown: boolean;
+  provider: string | null;
+  model: string | null;
+  /** Thinking level this review actually used. Null for rows recorded before that column existed. */
+  thinking: string | null;
 };
 
 export type ReviewDetail = ReviewSummary & {
@@ -90,8 +95,6 @@ export type ReviewDetail = ReviewSummary & {
   verdictReason: string | null;
   overallConfidence: number | null;
   checked: string[];
-  provider: string | null;
-  model: string | null;
   policy: StoredPolicy | null;
   comments: StoredComment[];
   /** Failure reason when `outcome` is `failed`. Null for other rows and for legacy archives. */
@@ -160,7 +163,8 @@ export class ReviewArchive {
         cache_read_tokens INTEGER,
         reasoning_tokens INTEGER,
         model_calls INTEGER,
-        cost_usd REAL
+        cost_usd REAL,
+        thinking TEXT
       ) STRICT;
       CREATE TABLE IF NOT EXISTS comments (
         task_id TEXT NOT NULL,
@@ -312,6 +316,7 @@ export class ReviewArchive {
     const policy = policyJson(event.policy);
     const provider = clip(event.provider ?? "", 80) || null;
     const model = clip(event.modelId ?? "", 80) || null;
+    const thinking = cleanThinking(event.thinking);
     const title = clip(event.title ?? "", 300);
     const sha = clip(event.sha ?? "", 64);
     const baseSha = clip(event.baseSha ?? "", 64);
@@ -328,7 +333,7 @@ export class ReviewArchive {
             `UPDATE reviews SET
               finished_at = ?, outcome = ?, verdict = ?, verdict_reason = ?, overall_confidence = ?,
               checked_json = ?, policy_json = COALESCE(?, policy_json),
-              provider = COALESCE(?, provider), model = COALESCE(?, model),
+              provider = COALESCE(?, provider), model = COALESCE(?, model), thinking = COALESCE(?, thinking),
               title = CASE WHEN ? != '' THEN ? ELSE title END,
               sha = CASE WHEN ? != '' THEN ? ELSE sha END,
               base_sha = CASE WHEN ? != '' THEN ? ELSE base_sha END,
@@ -353,6 +358,7 @@ export class ReviewArchive {
             policy,
             provider,
             model,
+            thinking,
             title,
             title,
             sha,
@@ -377,9 +383,9 @@ export class ReviewArchive {
             `INSERT INTO reviews (
               task_id, owner, repo, number, title, sha, base_sha, base_ref, installation_id,
               trigger, started_at, finished_at, outcome, verdict, verdict_reason, overall_confidence,
-              checked_json, policy_json, provider, model, p0, p1, p2, p3, finding_count, counts_known, error,
+              checked_json, policy_json, provider, model, thinking, p0, p1, p2, p3, finding_count, counts_known, error,
               input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, model_calls, cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
             identity.taskId,
             identity.owner,
@@ -400,6 +406,7 @@ export class ReviewArchive {
             policy,
             provider,
             model,
+            thinking,
             counts.p0,
             counts.p1,
             counts.p2,
@@ -581,8 +588,6 @@ export class ReviewArchive {
         verdictReason: str(row, "verdict_reason") || null,
         overallConfidence: cleanConfidence(numOrNull(row, "overall_confidence")),
         checked: stringList(str(row, "checked_json")),
-        provider: str(row, "provider") || null,
-        model: str(row, "model") || null,
         policy: parsePolicy(str(row, "policy_json")),
         comments,
         error: str(row, "error") || null,
@@ -672,8 +677,9 @@ function resultPredicate(result: ReviewFilter["result"]): string | undefined {
 }
 
 /**
- * Additive columns only. Existing rows keep NULL usage, which the statistics page
- * shows as unknown rather than zero. A missing findings table is created on open.
+ * Additive columns only, in the order they shipped: `error`, then the usage
+ * columns, then `thinking`. Existing rows keep NULL usage, which the statistics
+ * page shows as unknown rather than zero. A missing findings table is created on open.
  */
 function migrateReviews(db: DatabaseSync): void {
   const columns = db.prepare("PRAGMA table_info(reviews)").all();
@@ -688,6 +694,12 @@ function migrateReviews(db: DatabaseSync): void {
   add("reasoning_tokens", "reasoning_tokens INTEGER");
   add("model_calls", "model_calls INTEGER");
   add("cost_usd", "cost_usd REAL");
+  add("thinking", "thinking TEXT");
+}
+
+function cleanThinking(value: string | undefined): string | null {
+  if (typeof value !== "string" || !isThinkingLevel(value)) return null;
+  return value;
 }
 
 function cleanError(value: string | undefined): string | null {
@@ -726,6 +738,9 @@ function summaryFromRow(row: Record<string, SQLOutputValue>): ReviewSummary | un
     p3: int(row, "p3"),
     findingCount: numOrNull(row, "finding_count"),
     countsKnown: int(row, "counts_known") !== 0,
+    provider: str(row, "provider") || null,
+    model: str(row, "model") || null,
+    thinking: cleanThinking(str(row, "thinking")),
   };
 }
 

@@ -3,6 +3,7 @@ import type { ReviewListModel, ReviewRowView } from "../ui/list-model.js";
 import { LocalTime } from "./local-time.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
+import { UiNav } from "./ui-nav.js";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card.js";
 import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
@@ -31,14 +32,14 @@ export function ReviewListView({ model }: { model: ReviewListModel }) {
   return (
     <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-4 p-6">
       <Card>
-        <CardHeader className="flex-row items-start justify-between gap-3">
-          <div className="flex flex-col gap-1.5">
-            <CardTitle>dureview</CardTitle>
-            <StatusLine model={model} />
+        <CardHeader>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-1.5">
+              <CardTitle>dureview</CardTitle>
+              <StatusLine model={model} />
+            </div>
+            <UiNav current="reviews" />
           </div>
-          <Button variant="outline" size="sm" asChild>
-            <a href="/ui/stats">Statistics</a>
-          </Button>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <form className="flex flex-wrap items-end gap-3" method="get" action="/ui">
@@ -107,6 +108,8 @@ function StatusLine({ model }: { model: ReviewListModel }) {
       {" · "}
       {model.provider}/{model.model}
       {" · "}
+      {model.thinking}
+      {" · "}
       {model.codex.kind === "plain" ? (
         model.codex.text
       ) : (
@@ -157,7 +160,10 @@ function ReviewTable({ rows }: { rows: ReviewRowView[] }) {
                 {row.repoLabel}
               </a>
             </TableCell>
-            <TableCell className="max-w-xs whitespace-normal">{row.title}</TableCell>
+            <TableCell className="max-w-xs whitespace-normal">
+              <div>{row.title}</div>
+              {row.modelLine ? <p className="text-xs text-muted-foreground">{row.modelLine}</p> : null}
+            </TableCell>
             <TableCell>
               <span>{row.triggerLabel}</span>
             </TableCell>

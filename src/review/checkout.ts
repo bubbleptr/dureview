@@ -42,7 +42,7 @@ export class GitCheckout implements RepoCheckout {
     private readonly github: GitHub,
     private readonly root: string,
     private readonly tokenFor: (request: ReviewRequest, signal: AbortSignal) => Promise<string | undefined>,
-    private readonly policyDefaults: PolicyDefaults = {},
+    private readonly policyDefaults: PolicyDefaults | (() => PolicyDefaults) = {},
   ) {}
 
   async prepare(request: ReviewRequest, signal: AbortSignal): Promise<Checkout> {
@@ -66,8 +66,12 @@ export class GitCheckout implements RepoCheckout {
     await utimes(dir, new Date(), new Date());
     const diffText = await this.github.getPullDiff(request, signal);
     const { diff, truncated } = truncateDiff(diffText);
-    const loaded = await readBaseDureview(this.github, request, signal, this.policyDefaults);
+    const loaded = await readBaseDureview(this.github, request, signal, this.#defaults());
     return { dir, diff, truncated, rules: loaded.rules, policy: loaded.policy };
+  }
+
+  #defaults(): PolicyDefaults {
+    return typeof this.policyDefaults === "function" ? this.policyDefaults() : this.policyDefaults;
   }
 }
 

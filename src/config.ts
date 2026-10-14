@@ -10,6 +10,12 @@ import { BUILTIN_DEFAULT_TRIGGER, type ReviewTrigger } from "./review/policy.js"
  */
 export const DEFAULT_MODEL_ID = "gpt-5.5";
 
+export const DEFAULT_THINKING: ModelThinkingLevel = "medium";
+
+export const DEFAULT_SKIP_DRAFTS = false;
+
+export const DEFAULT_CHECKOUT_TTL_DAYS = 30;
+
 export const DEFAULT_PROVIDER = "openai-codex" as const;
 
 export type ProviderName = "openai-codex" | "openai";
@@ -41,9 +47,22 @@ export type Config = {
   checkoutTtlDays: number;
 };
 
+/**
+ * Editable settings as the environment left them.
+ * `undefined` means the variable is unset, so the built-in default applies.
+ * A UI override wins over these values. Secrets are not included.
+ */
+export type EditableBaseline = {
+  modelId: string | undefined;
+  thinking: ModelThinkingLevel | undefined;
+  defaultTrigger: ReviewTrigger | undefined;
+  skipDrafts: boolean | undefined;
+  checkoutTtlDays: number | undefined;
+};
+
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
   const provider = parseProvider(env.DUREVIEW_PROVIDER);
-  const thinking = parseThinking(env.DUREVIEW_THINKING ?? "medium");
+  const baseline = editableBaseline(env);
   const port = parsePort(env.DUREVIEW_PORT ?? "8787");
   return {
     dataDir: resolve(env.DUREVIEW_DATA_DIR ?? "data"),
@@ -51,17 +70,48 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     port,
     webhookSecret: emptyToUndefined(env.DUREVIEW_WEBHOOK_SECRET ?? env.GITHUB_WEBHOOK_SECRET),
     provider,
-    modelId: emptyToUndefined(env.DUREVIEW_MODEL) ?? DEFAULT_MODEL_ID,
-    thinking,
+    modelId: baseline.modelId ?? DEFAULT_MODEL_ID,
+    thinking: baseline.thinking ?? DEFAULT_THINKING,
     githubToken: emptyToUndefined(env.GITHUB_TOKEN),
     githubAppId: emptyToUndefined(env.GITHUB_APP_ID),
     githubAppPrivateKey: loadPrivateKey(env),
     githubApiUrl: (env.GITHUB_API_URL ?? "https://api.github.com").replace(/\/$/, ""),
-    skipDrafts: env.DUREVIEW_SKIP_DRAFTS === "1" || env.DUREVIEW_SKIP_DRAFTS === "true",
+    skipDrafts: baseline.skipDrafts ?? DEFAULT_SKIP_DRAFTS,
     uiToken: emptyToUndefined(env.DUREVIEW_UI_TOKEN)?.trim(),
-    defaultTrigger: parseDefaultTrigger(env.DUREVIEW_DEFAULT_TRIGGER),
-    checkoutTtlDays: parseCheckoutTtlDays(env.DUREVIEW_CHECKOUT_TTL_DAYS),
+    defaultTrigger: baseline.defaultTrigger ?? BUILTIN_DEFAULT_TRIGGER,
+    checkoutTtlDays: baseline.checkoutTtlDays ?? DEFAULT_CHECKOUT_TTL_DAYS,
   };
+}
+
+/** Which editable values were actually present in the environment. */
+export function editableBaseline(env: NodeJS.ProcessEnv = process.env): EditableBaseline {
+  return {
+    modelId: emptyToUndefined(env.DUREVIEW_MODEL),
+    thinking: thinkingFromEnv(env.DUREVIEW_THINKING),
+    defaultTrigger: triggerFromEnv(env.DUREVIEW_DEFAULT_TRIGGER),
+    skipDrafts: skipDraftsFromEnv(env.DUREVIEW_SKIP_DRAFTS),
+    checkoutTtlDays: checkoutTtlFromEnv(env.DUREVIEW_CHECKOUT_TTL_DAYS),
+  };
+}
+
+/**
+ * Treat an already-parsed config as the environment layer.
+ * Tests and callers that pass a `Config` do not have the original env presence.
+ */
+export function baselineFromConfig(
+  config: Pick<Config, "modelId" | "thinking" | "defaultTrigger" | "skipDrafts" | "checkoutTtlDays">,
+): EditableBaseline {
+  return {
+    modelId: config.modelId,
+    thinking: config.thinking,
+    defaultTrigger: config.defaultTrigger,
+    skipDrafts: config.skipDrafts,
+    checkoutTtlDays: config.checkoutTtlDays,
+  };
+}
+
+export function isThinkingLevel(value: string): value is ModelThinkingLevel {
+  return THINKING_LEVELS.has(value as ModelThinkingLevel);
 }
 
 export function assertServeConfig(config: Config): void {
@@ -77,16 +127,16 @@ export function assertServeConfig(config: Config): void {
   }
 }
 
-function parseDefaultTrigger(value: string | undefined): ReviewTrigger {
+function triggerFromEnv(value: string | undefined): ReviewTrigger | undefined {
   const trimmed = value?.trim() ?? "";
-  if (trimmed === "") return BUILTIN_DEFAULT_TRIGGER;
+  if (trimmed === "") return undefined;
   if (trimmed === "auto" || trimmed === "once" || trimmed === "manual") return trimmed;
   throw new Error(`DUREVIEW_DEFAULT_TRIGGER must be auto, once, or manual, got ${value}.`);
 }
 
-function parseCheckoutTtlDays(value: string | undefined): number {
+function checkoutTtlFromEnv(value: string | undefined): number | undefined {
   const trimmed = value?.trim() ?? "";
-  if (trimmed === "") return 30;
+  if (trimmed === "") return undefined;
   if (!/^\d+$/.test(trimmed)) {
     throw new Error(`DUREVIEW_CHECKOUT_TTL_DAYS must be a non-negative integer, got ${value}.`);
   }
@@ -97,6 +147,16 @@ function parseCheckoutTtlDays(value: string | undefined): number {
   return days;
 }
 
+function thinkingFromEnv(value: string | undefined): ModelThinkingLevel | undefined {
+  if (value === undefined || value === "") return undefined;
+  return parseThinking(value);
+}
+
+function skipDraftsFromEnv(value: string | undefined): boolean | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  return value === "1" || value === "true";
+}
+
 function parseProvider(value: string | undefined): ProviderName | undefined {
   if (value === undefined || value === "") return undefined;
   if (value === "openai-codex" || value === "openai") return value;
@@ -104,7 +164,7 @@ function parseProvider(value: string | undefined): ProviderName | undefined {
 }
 
 function parseThinking(value: string): ModelThinkingLevel {
-  if (THINKING_LEVELS.has(value as ModelThinkingLevel)) return value as ModelThinkingLevel;
+  if (isThinkingLevel(value)) return value;
   throw new Error(`DUREVIEW_THINKING must be one of ${[...THINKING_LEVELS].join(", ")}.`);
 }
 

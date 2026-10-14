@@ -38,9 +38,11 @@ describe("status page", () => {
     const stats = await fetch(`${http.url}/ui/stats`);
     const detail = await fetch(`${http.url}/ui/reviews/1`);
     const login = await fetch(`${http.url}/ui/login`, { method: "POST" });
+    const settings = await fetch(`${http.url}/ui/settings`);
     expect(root.status).toBe(404);
     expect(login.status).toBe(404);
     expect(detail.status).toBe(404);
+    expect(settings.status).toBe(404);
     expect(stats.status).toBe(404);
     expect(await root.json()).toEqual({ error: "not found" });
     expect(root.headers.get("www-authenticate")).toBeNull();

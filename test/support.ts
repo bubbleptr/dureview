@@ -447,21 +447,26 @@ export async function openTestService(options: {
   checkout?: RepoCheckout;
   skipDrafts?: boolean;
   defaultTrigger?: Config["defaultTrigger"];
+  modelId?: string;
+  thinking?: Config["thinking"];
+  fauxModels?: Array<{ id: string; reasoning?: boolean }>;
 }) {
-  const faux = fauxProvider();
+  const faux = options.fauxModels ? fauxProvider({ models: options.fauxModels }) : fauxProvider();
   faux.setResponses(options.responses ?? []);
   const models = createModels();
   models.setProvider(faux.provider);
   const config = testConfig(options.dataDir);
   if (options.skipDrafts) config.skipDrafts = true;
   if (options.defaultTrigger) config.defaultTrigger = options.defaultTrigger;
+  if (options.modelId) config.modelId = options.modelId;
+  if (options.thinking) config.thinking = options.thinking;
   const service = await DureviewService.open({
     config,
     models,
     github: options.github,
     checkout: options.checkout ?? new FixtureCheckout(),
     provider: "faux",
-    modelId: "faux-1",
+    modelId: config.modelId,
     hooks: options.hooks,
   });
   return { service, faux };
