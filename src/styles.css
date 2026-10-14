@@ -1,4 +1,7 @@
-@import "tailwindcss";
+/* Pin the scan to this directory. Automatic detection follows .gitignore and the
+   Vite environment root, so the client and SSR builds hash this file differently
+   and the SSR <link> 404s. https://tanstack.com/start/latest/docs/framework/react/guide/tailwind-integration */
+@import "tailwindcss" source("./");
 
 @custom-variant dark (&:is(.dark *));
 
