@@ -74,6 +74,7 @@ Migrated onto TanStack Start routes:
 - `POST /webhook`, including `X-Hub-Signature-256` verification, then the existing pi-durable review enqueue
 - `GET /` and `GET /ui` review list, React + shadcn, reading `$DUREVIEW_DATA_DIR/reviews.sqlite`
 - `GET /ui/reviews/:taskId` review detail, React + shadcn, three columns (files, diff with inline findings, summary and settings). The file list is `@pierre/trees` and the diff is `@pierre/diffs` (Shiki, unified or split, findings as line annotations). Unchanged regions expand from the full base and head files in the local checkout, loaded when a file is expanded. If that checkout is gone, the page asks GitHub for those two SHAs. If that also fails, the hunk patch stays as it is. Placement still uses `src/ui/diff.ts`. The patch is still loaded live from GitHub when the page opens. A GitHub error leaves the saved comments on the page.
+- `GET /ui/stats` statistics page, same token gate, with a Statistics link on the review list
 - `GET` and `POST /ui/login`. The cookie is still `dureview_ui`: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, 30 days. The value is `DUREVIEW_UI_TOKEN`. A successful login from `/` continues at `/ui`.
 
 Not migrated yet:
@@ -258,7 +259,51 @@ The list is one row per review: repository and pull request number, title, trigg
 
 Opening a row shows three columns: the pull request's changed files, the diff with saved comments on the lines they refer to, and a summary plus the `.dureview.md` settings used for that run (`trigger`, drafts, profile, and the rest). A finished review's summary lists P0–P3 counts. A failed review shows the error recorded for that run, and a review that is still running shows 进行中 or 疑似卡住, without a row of zero counts. The diff is not stored. The page loads the current pull request files from the GitHub API with the App installation token, or with the PAT when the server is not using an App. Comments keep the path and line range from the model output. A comment whose line is not in the current diff is listed on that file without a line highlight.
 
-Metadata, those comments, and the failure reason are stored in `$DUREVIEW_DATA_DIR/reviews.sqlite` (mode `0600`). An archive created before the error column gains that column on the next open. `$DUREVIEW_DATA_DIR/reviews.json` is still the short log of the last 50 reviews and does not contain finding text or the failure reason. The pages do not include the webhook secret, GitHub tokens, the App private key, or the contents of `auth.json`. An expired access token is not a missing login. pi-ai refreshes it on the next review and writes the new token back to `auth.json`.
+Metadata, posted comments, every finding, model usage, and the failure reason are stored in `$DUREVIEW_DATA_DIR/reviews.sqlite` (mode `0600`). An archive created before a later column gains that column on the next open. Usage columns and the `findings` table are added that way; old rows are not backfilled. `$DUREVIEW_DATA_DIR/reviews.json` is still the short log of the last 50 reviews and does not contain finding text, token counts, or the failure reason. The pages do not include the webhook secret, GitHub tokens, the App private key, or the contents of `auth.json`. An expired access token is not a missing login. pi-ai refreshes it on the next review and writes the new token back to `auth.json`.
+
+## Statistics
+
+`GET /ui/stats` uses the same token as the review list. The list header links to it. The page is a row of counts (reviews, average and p95 duration, findings, average tokens, estimated cost), a daily token chart split by model, bar charts for priority, category, verdict, and failure reasons, then tables for the most expensive pull requests, the busiest repositories, and the pull requests with the most findings. Filters are the last 24 hours, 7 days (the default), 30 days, or all time, plus one repository. Aggregates run in SQL.
+
+Day buckets follow the browser's timezone. The page reloads with a `tz` offset in minutes so `strftime` groups by local calendar days. Times elsewhere on the review pages stay in local time as well. A review with no recorded usage is left out of token averages and the trend. It is not counted as zero. A provider that reports zero tokens or a zero cost is stored as zero.
+
+Usage is one set of columns on `reviews`, filled from the pi-ai ledger for that conversation (assistant generations only; tool-result usage is not added again):
+
+| Column | Meaning |
+| --- | --- |
+| `input_tokens` | Prompt tokens. Null when usage was not captured. |
+| `output_tokens` | Completion tokens, which already include reasoning tokens. |
+| `cache_read_tokens` | Cached input tokens. Null when the provider did not report them. |
+| `reasoning_tokens` | Reasoning tokens, a subset of `output_tokens`. Null when the provider omitted them. A reported zero is stored as zero. |
+| `model_calls` | Assistant generations in the review. |
+| `cost_usd` | `usage.cost.total` from pi-ai's catalog rates. This is an estimate, not a ChatGPT subscription invoice. Null when no cost was reported. |
+
+A run that fails after the model has answered still stores those numbers. A failure during checkout, before any conversation exists, stores the model id and leaves the usage columns null.
+
+## Findings table
+
+The `comments` table is still the comments drawn on the diff page, and only for a completed review. The `findings` table is a separate row for every finding the model returned, including ones that were not posted inline: `investigate`, P3, low confidence, out of range, ignored paths, overflow past `max_inline`, and fingerprints already on the pull request. There is no clustering UI. The table is there so findings can be grouped later.
+
+| Column | Meaning |
+| --- | --- |
+| `task_id` | Review run. Foreign key to `reviews`, deleted with that review. |
+| `owner`, `repo`, `number` | Repository and pull request number. |
+| `sha` | Head SHA reviewed. |
+| `title`, `body` | Finding text. |
+| `trigger_text` | The trigger the model cited. |
+| `priority`, `kind`, `category` | P0–P3, `bug` / `security` / `investigate`, and the finding category. An empty category is stored as `unknown`. |
+| `cwe`, `rule_ref` | Optional identifiers from the model. |
+| `confidence` | Model confidence, 0–1. |
+| `path`, `start_line`, `end_line` | File and line range. |
+| `extension`, `language` | File extension and a coarse language name derived from it (`ts` → `typescript`). Null when the path has no recognized extension. |
+| `fingerprint` | Same 12-hex fingerprint used to dedupe comments. |
+| `posted` | `1` when the finding was written to GitHub (a new inline comment, or a mention in the summary when `summary` is true). `0` when it was not written. Null when that run did not classify posting. |
+| `skip_reason` | Why it was not a new inline comment. Null when it was posted inline. A summary mention keeps the skip reason and sets `posted` to 1. |
+| `created_at` | When the review finished, ISO-8601. |
+
+`skip_reason` is one of `low_confidence`, `ignored`, `out_of_range`, `investigate`, `empty_trigger`, `priority`, `p2_confidence`, `overflow`, `already_inlined`, or `publish_failed`. `publish_failed` means the run reached posting and GitHub was not written, so a finding that would have been posted is stored with `posted` 0. A resume that finds this task's own inline comment still stores `posted` 1. A comment left by an earlier task stays `already_inlined`.
+
+Indexes: `findings_task` (`task_id`), `findings_repo` (`owner`, `repo`, `number`), `findings_category` (`category`, `priority`), `findings_fingerprint` (`fingerprint`), `findings_created` (`created_at`), `findings_language` (`language`), `findings_path` (`path`). `reviews_repo_started` covers repository and time filters on the review rows.
 
 ## Configuration
 
@@ -280,7 +325,7 @@ Metadata, those comments, and the failure reason are stored in `$DUREVIEW_DATA_D
 | `GITHUB_APP_PRIVATE_KEY_PATH` | | Path to the App private key |
 | `GITHUB_TOKEN` | | PAT used when App id is unset |
 | `GITHUB_API_URL` | `https://api.github.com` | API root for GitHub Enterprise |
-| `DUREVIEW_UI_TOKEN` | | Enables the review pages at `GET /`, `GET /ui`, and `GET /ui/reviews/<id>`. Login-form token, Basic-auth password, or bearer token. Unset leaves the pages disabled. |
+| `DUREVIEW_UI_TOKEN` | | Enables the review pages at `GET /`, `GET /ui`, `GET /ui/stats`, and `GET /ui/reviews/<id>`. Login-form token, Basic-auth password, or bearer token. Unset leaves the pages disabled. |
 | `DUREVIEW_CHECKOUT_TTL_DAYS` | `30` | Delete `checkouts/<owner>/<repo>/<sha>` directories older than this many days. `0` deletes every checkout no review is still running. The sweep runs at startup and every six hours, and it skips a directory whose review is still running. |
 
 `auth.json`, `session.sqlite`, `reviews.sqlite`, and `reviews.json` live in the data directory. Checkouts live in `checkouts/<owner>/<repo>/<sha>`. The pull request head is `HEAD`. The base commit is `refs/dureview/base`, so either side can be read with `git show <sha>:<path>`.
@@ -296,7 +341,7 @@ npm run e2e
 npm run build
 ```
 
-Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, the manual default when `.dureview.md` is missing or omits `trigger`, `DUREVIEW_DEFAULT_TRIGGER`, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, review-page authentication, the review archive and its filters, diff comments placed on the live pull request files, the recent-review log, and check runs (success, blocking failure, suggestions, a failed review, a 403 from the Checks API, reuse after a crash during checkout, a retried check update, an abort during create, `filter=all`, and overlapping reviews on one SHA).
+Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, the manual default when `.dureview.md` is missing or omits `trigger`, `DUREVIEW_DEFAULT_TRIGGER`, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, review-page authentication, the statistics page, usage capture (including a failed run), the findings table (including findings that were not posted), SQL aggregation for the statistics page, the review archive and its filters, the React review detail page, full-file expansion from the checkout, checkout retention, diff comments placed on the live pull request files, the recent-review log, and check runs (success, blocking failure, suggestions, a failed review, a 403 from the Checks API, reuse after a crash during checkout, a retried check update, an abort during create, `filter=all`, and overlapping reviews on one SHA).
 
 Live Codex OAuth and a real GitHub App are not exercised here. Pi Durable is experimental and its API can change between releases. This repo pins `@earendil-works/pi-durable`, `@earendil-works/pi-ai`, and `@earendil-works/chord` at 1.1.0.
 

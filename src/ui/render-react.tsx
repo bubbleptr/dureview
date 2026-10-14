@@ -2,8 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { LoginForm } from "../components/login-form.js";
 import { ReviewDetailView } from "../components/review-detail.js";
 import { ReviewListView } from "../components/review-list.js";
+import { StatsPage } from "../components/stats-page.js";
 import type { ReviewDetailModel } from "./detail-model.js";
 import type { ReviewListModel } from "./list-model.js";
+import type { StatsPageModel } from "./stats-model.js";
 import { preloadReviewPresentation } from "./review-preload.js";
 
 export function renderLoginHtml(input: { next: string; error?: string }): string {
@@ -20,6 +22,10 @@ export async function renderDetailHtml(model: ReviewDetailModel): Promise<string
     model.pageTitle,
     renderToStaticMarkup(<ReviewDetailView model={model} presentation={presentation} />),
   );
+}
+
+export function renderStatsHtml(model: StatsPageModel): string {
+  return documentShell("Statistics · dureview", renderToStaticMarkup(<StatsPage model={model} />));
 }
 
 function documentShell(title: string, body: string): string {

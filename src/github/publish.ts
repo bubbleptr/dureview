@@ -10,6 +10,7 @@ import {
   reviewIdPostedByTask,
   type InlineLedgerEntry,
 } from "../review/ledger.js";
+import { postingsFromClassified, type FindingPosting } from "../review/findings.js";
 import { classifyFindings, type ReviewLanguage, type ReviewPolicy } from "../review/policy.js";
 import { renderFixedReply, renderInlineDrafts, renderSummary } from "../review/render.js";
 import type { ReviewSubmission } from "../review/schema.js";
@@ -20,6 +21,8 @@ export type PublishResult = {
   summaryAction: "created" | "updated" | "unchanged" | "skipped";
   reviewId: number | null;
   reviewAction: "created" | "unchanged" | "skipped";
+  /** How each finding was posted. Kept so the archive can record ones that were not inlined. */
+  postings: FindingPosting[];
 };
 
 /**
@@ -132,7 +135,13 @@ async function publishWithSummary(input: {
   }
 
   if (input.afterRemoteWrite) await input.afterRemoteWrite();
-  return { summaryCommentId, summaryAction, reviewId, reviewAction };
+  return {
+    summaryCommentId,
+    summaryAction,
+    reviewId,
+    reviewAction,
+    postings: postingsFromClassified(classified, input.policy),
+  };
 }
 
 async function publishWithoutSummary(input: {
@@ -150,7 +159,11 @@ async function publishWithoutSummary(input: {
   const language = languageOf(input.policy);
   const comments = await input.github.listReviewComments(input.request, input.signal);
   const ledger = readInlineLedger(comments);
-  const alreadyInlined = new Set(ledger.filter((entry) => !entry.handled).map((entry) => entry.fingerprint));
+  const openLedger = ledger.filter((entry) => !entry.handled);
+  const alreadyInlined = new Set(openLedger.map((entry) => entry.fingerprint));
+  const recoveredByThisTask = new Set(
+    openLedger.filter((entry) => entry.taskId === input.taskId).map((entry) => entry.fingerprint),
+  );
   const classified = classifyFindings({
     findings: input.review.findings,
     diff: input.diff,
@@ -190,7 +203,17 @@ async function publishWithoutSummary(input: {
   }
 
   if (input.afterRemoteWrite) await input.afterRemoteWrite();
-  return { summaryCommentId: null, summaryAction: "skipped", reviewId, reviewAction };
+  return {
+    summaryCommentId: null,
+    summaryAction: "skipped",
+    reviewId,
+    reviewAction,
+    postings: postingsFromClassified(classified, input.policy).map((posting) =>
+      recoveredByThisTask.has(posting.fingerprint)
+        ? { fingerprint: posting.fingerprint, posted: true, skipReason: null }
+        : posting,
+    ),
+  };
 }
 
 function reviewEvent(priorities: readonly number[]): ReviewEvent {

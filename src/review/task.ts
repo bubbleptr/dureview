@@ -1,10 +1,12 @@
 import type { Context } from "@earendil-works/chord";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
+  AssistantEntry,
   configure,
   defineExtension,
   defineTask,
   section,
+  UsageDoc,
   type Conversation,
   type ConversationId,
   type Extension,
@@ -27,11 +29,13 @@ import {
 } from "./checks.js";
 import type { RepoCheckout } from "./checkout.js";
 import { ReviewConfigError, type ReviewLanguage, type ReviewPolicy } from "./policy.js";
+import { postingsForReview, postingsWhenPublishFailed, recordedFindings } from "./findings.js";
 import type { ReviewFinished } from "./history.js";
 import { buildUserPrompt, ADVERSARIAL_ROLE } from "./prompt.js";
 import type { ReviewSubmission } from "./schema.js";
 import { ReviewDraft, ReviewIndex } from "./state.js";
 import { reviewTools } from "./tools.js";
+import { reviewUsageFromLedger, type ReviewUsage } from "./usage.js";
 
 export type ReviewHooks = {
   /** Test hook. Runs after generation and before any GitHub write. */
@@ -122,7 +126,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               language,
               signal,
             },
-            () => notifyFinished(deps, failedEvent(current, error)),
+            () => failureNotice(deps, runtime, current, context, error),
           );
         try {
           if (slot.kind === "missing" || slot.kind === "retry") {
@@ -210,7 +214,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               language: checkpoint.policy.language,
               signal,
             },
-            () => notifyFinished(deps, failedEvent(current, error)),
+            () => failureNotice(deps, runtime, current, context, error),
           );
         try {
           const conversationId = checkpoint.conversationId as ConversationId;
@@ -297,7 +301,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               language: checkpoint.policy.language,
               signal,
             },
-            () => notifyFinished(deps, failedEvent(current, error)),
+            () => failureNotice(deps, runtime, current, context, error),
           );
         let checkCompleted = false;
         try {
@@ -356,6 +360,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             summaryAction: published.summaryAction,
             reviewAction: published.reviewAction,
           });
+          const recorded = await collectReviewRecord(runtime, checkpoint, context);
           await notifyFinished(deps, {
             taskId: String(current.id),
             owner: current.input.owner,
@@ -376,6 +381,8 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             findings: checkpoint.review.findings,
             provider: checkpoint.provider,
             modelId: checkpoint.modelId,
+            usage: recorded.usage,
+            recordedFindings: recorded.recordedFindings,
           });
           await runtime.commit(
             () => ({
@@ -391,7 +398,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
           if (context.abortSignal?.aborted) throw error instanceof Error ? error : new Error(String(error));
           if (error instanceof CheckUpdateError) {
             log("error", "could not update the dureview check run", { error: error.message });
-            await notifyFinished(deps, failedEvent(current, error));
+            await failureNotice(deps, runtime, current, context, error);
             await runtime.commit(
               () => ({ status: "terminal", outcome: { status: "failed", error: { message: error.message } } }),
               context,
@@ -617,6 +624,73 @@ async function notifyFinished(deps: ReviewDeps, event: ReviewFinished): Promise<
     await deps.onFinished(event);
   } catch (error) {
     log("error", "could not record review", { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function failureNotice(
+  deps: ReviewDeps,
+  runtime: TaskRuntime,
+  current: { id: TaskId<ReviewResult>; input: ReviewRequest; state: { checkpoint: ReviewState } },
+  context: Context,
+  error: unknown,
+): Promise<void> {
+  const recorded = await collectReviewRecord(runtime, current.state.checkpoint, context);
+  await notifyFinished(deps, {
+    ...failedEvent(current, error),
+    provider: recorded.provider ?? deps.provider,
+    modelId: recorded.modelId ?? deps.modelId,
+    policy: recorded.policy,
+    usage: recorded.usage,
+    recordedFindings: recorded.recordedFindings,
+  });
+}
+
+async function collectReviewRecord(
+  runtime: TaskRuntime,
+  checkpoint: ReviewState,
+  context: Context,
+): Promise<{
+  usage?: ReviewUsage;
+  recordedFindings?: ReviewFinished["recordedFindings"];
+  provider?: string;
+  modelId?: string;
+  policy?: ReviewPolicy;
+}> {
+  if (checkpoint.phase === "prepare") return {};
+  const usage = await captureModelUsage(runtime, checkpoint.conversationId as ConversationId, context);
+  const base = {
+    usage,
+    provider: checkpoint.provider,
+    modelId: checkpoint.modelId,
+    policy: checkpoint.policy,
+  };
+  if (checkpoint.phase !== "post") return base;
+  const decided = checkpoint.published?.postings;
+  const postings =
+    decided ??
+    postingsWhenPublishFailed(
+      postingsForReview({
+        findings: checkpoint.review.findings,
+        diff: checkpoint.diff,
+        policy: checkpoint.policy,
+      }),
+    );
+  return { ...base, recordedFindings: recordedFindings(checkpoint.review.findings, postings) };
+}
+
+async function captureModelUsage(
+  runtime: TaskRuntime,
+  conversationId: ConversationId,
+  context: Context,
+): Promise<ReviewUsage | undefined> {
+  try {
+    const state = await runtime.snapshot(UsageDoc, conversationId, context);
+    const view = await runtime.context(conversationId, context);
+    const modelCalls = view.entries.filter((entry) => AssistantEntry.is(entry)).length;
+    return reviewUsageFromLedger(state?.models, modelCalls);
+  } catch (error) {
+    log("warn", "could not read model usage", { error: error instanceof Error ? error.message : String(error) });
+    return undefined;
   }
 }
 
