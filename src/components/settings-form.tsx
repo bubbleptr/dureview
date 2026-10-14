@@ -4,6 +4,7 @@ import { nearestThinking } from "../settings/thinking.js";
 import { formatTime } from "../ui/page.js";
 import { LocalTime } from "./local-time.js";
 import { AppShell, type ShellStatus } from "./app-shell.js";
+import { DiffStyleControl } from "./diff-style.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
 import { Input } from "./ui/input.js";
@@ -29,6 +30,7 @@ export function SettingsForm({ model, status = null }: { model: SettingsPageMode
         <p className="text-sm text-muted-foreground">
           Provider <b>{model.provider}</b>. Model choices are the pi-ai catalog for this provider.
         </p>
+        <DiffStyleControl />
         {model.error ? (
           <p className="text-sm text-destructive" role="alert">
             {model.error}

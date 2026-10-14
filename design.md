@@ -53,7 +53,8 @@ SaaS landing page. This is an operator console for pull-request review.
 - The sidebar lists Overview, Reviews, and Settings. Overview is `/ui` and is
   only metrics: the counts, charts, token usage, and findings distribution that
   used to live on `/ui/stats`. `GET /ui/stats` redirects to `/ui`. Reviews is
-  `/ui/reviews` and is only the review list. Settings is only settings. The
+  `/ui/reviews` and is only the review list. Settings is only settings, including
+  the unified or split diff view saved in the browser. The
   sidebar collapses on a wide screen and becomes a sheet on a narrow one. Its
   footer keeps the theme control, version, uptime, model, ChatGPT login expiry,
   and GitHub credential status. Repo and time-range filters sit in the page

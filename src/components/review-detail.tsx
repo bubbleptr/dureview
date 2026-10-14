@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FileDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { FileTree, useFileTree } from "@pierre/trees/react";
 import type {
@@ -26,10 +26,11 @@ import {
   reviewTreeOptions,
   type ReviewPresentation,
 } from "../ui/review-presentation.js";
+import { dragLimit, fitPanelWidths, SUMMARY_LIMIT, TREE_LIMIT } from "../ui/panel-widths.js";
 import { AppShell, type ShellStatus } from "./app-shell.js";
+import { useDiffStyle } from "./diff-style.js";
 import { LocalTime } from "./local-time.js";
 import { Badge } from "./ui/badge.js";
-import { Button } from "./ui/button.js";
 
 const PRIORITY_BADGE = [
   "border-transparent bg-red-50 text-red-700 dark:bg-red-400/10 dark:text-red-300",
@@ -59,7 +60,6 @@ const COUNT_TONE: Record<string, string> = {
   P3: "text-muted-foreground",
 };
 
-const DIFF_STYLE_KEY = "dureview-diff-style";
 const TREE_WIDTH_KEY = "dureview-tree-width";
 const SUMMARY_WIDTH_KEY = "dureview-summary-width";
 
@@ -73,10 +73,24 @@ export function ReviewDetailView({
   taskId?: string;
   status?: ShellStatus | null;
 }) {
-  const [diffStyle, setDiffStyle] = useDiffStyle();
-  const [treeWidth, setTreeWidth] = useStoredWidth(TREE_WIDTH_KEY, 240, 180, 420);
-  const [summaryWidth, setSummaryWidth] = useStoredWidth(SUMMARY_WIDTH_KEY, 320, 240, 520);
-  const files = orderCommentedFirst(model.files, reviewFindingCount);
+  const [diffStyle] = useDiffStyle();
+  const [treePref, setTreePref] = useStoredWidth(TREE_WIDTH_KEY, TREE_LIMIT.fallback, TREE_LIMIT.max);
+  const [summaryPref, setSummaryPref] = useStoredWidth(SUMMARY_WIDTH_KEY, SUMMARY_LIMIT.fallback, SUMMARY_LIMIT.max);
+  const columnsRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  useEffect(() => {
+    const node = columnsRef.current;
+    if (!node) return;
+    const measure = () => setContainerWidth(node.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const shown = fitPanelWidths(treePref, summaryPref, containerWidth);
+  const treeDrag = dragLimit(shown.summary, containerWidth, TREE_LIMIT.min, TREE_LIMIT.max);
+  const summaryDrag = dragLimit(shown.tree, containerWidth, SUMMARY_LIMIT.min, SUMMARY_LIMIT.max);
+  const files = useMemo(() => orderCommentedFirst(model.files, reviewFindingCount), [model.files]);
   return (
     <AppShell
       current="reviews"
@@ -92,8 +106,9 @@ export function ReviewDetailView({
       <div className="flex h-full min-h-0 flex-col">
         <ReviewMeta model={model} />
         <div
+          ref={columnsRef}
           className="review-columns min-h-0 flex-1"
-          style={{ ["--tree-width" as string]: `${treeWidth}px`, ["--summary-width" as string]: `${summaryWidth}px` }}
+          style={{ ["--tree-width" as string]: `${shown.tree}px`, ["--summary-width" as string]: `${shown.summary}px` }}
         >
           <aside className="flex max-h-72 min-h-0 flex-col overflow-hidden border-b min-[960px]:max-h-none min-[960px]:border-r min-[960px]:border-b-0">
             {files.length === 0 ? (
@@ -105,14 +120,27 @@ export function ReviewDetailView({
               <p className="px-3 py-2 text-sm text-muted-foreground">{model.hiddenFiles} more files are not shown.</p>
             ) : null}
           </aside>
-          <PanelHandle label="Resize file tree" width={treeWidth} min={180} max={420} onWidth={setTreeWidth} />
+          <PanelHandle
+            label="Resize file tree"
+            width={shown.tree}
+            min={treeDrag.min}
+            max={treeDrag.max}
+            onWidth={(requested) => setTreePref(clamp(requested, treeDrag.min, treeDrag.max))}
+          />
           <div className="min-h-0 min-w-0 overflow-auto border-b min-[960px]:border-r min-[960px]:border-b-0">
             <DiffColumn files={files} model={model} presentation={presentation} diffStyle={diffStyle} />
           </div>
-          <PanelHandle label="Resize summary" width={summaryWidth} min={240} max={520} invert onWidth={setSummaryWidth} />
+          <PanelHandle
+            label="Resize summary"
+            width={shown.summary}
+            min={summaryDrag.min}
+            max={summaryDrag.max}
+            invert
+            onWidth={(requested) => setSummaryPref(clamp(requested, summaryDrag.min, summaryDrag.max))}
+          />
           <aside className="min-h-0 overflow-x-hidden overflow-y-auto">
             <SummaryRail summary={model.summary} />
-            <SettingsRail settings={model.settings} diffStyle={diffStyle} onDiffStyle={setDiffStyle} />
+            <ReviewConfig settings={model.settings} />
           </aside>
         </div>
       </div>
@@ -186,28 +214,61 @@ function DiffColumn({
   const diffTheme = useDiffTheme();
   const [openFiles, setOpenFiles] = useState<Record<string, boolean>>({});
   const [expandedGaps, setExpandedGaps] = useState<Record<string, true>>({});
+  const [pendingScroll, setPendingScroll] = useState<string | null>(null);
   const isOpen = (file: DetailFileView) => {
     const stored = openFiles[file.anchor];
     if (stored !== undefined) return stored;
     return reviewFindingCount(file) > 0;
   };
   useEffect(() => {
-    const reveal = () => {
-      const id = window.location.hash.slice(1);
+    const reveal = (raw: string) => {
+      const id = decodeHash(raw);
       if (!id) return;
-      const file = files.find(
-        (item) =>
-          item.anchor === id ||
-          item.lines.some((line) => line.comments.some((comment) => comment.anchor === id)) ||
-          item.unanchored.some((comment) => comment.anchor === id),
-      );
+      const file = fileForHash(files, id);
       if (!file) return;
-      setOpenFiles((current) => ({ ...current, [file.anchor]: true }));
+      setOpenFiles((current) => (current[file.anchor] === true ? current : { ...current, [file.anchor]: true }));
+      setPendingScroll(id);
     };
-    reveal();
-    window.addEventListener("hashchange", reveal);
-    return () => window.removeEventListener("hashchange", reveal);
+    const fromLocation = () => reveal(window.location.hash.slice(1));
+    const onClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      if (!(event.target instanceof Element)) return;
+      const link = event.target.closest("a[href^='#']");
+      if (!(link instanceof HTMLAnchorElement)) return;
+      const href = link.getAttribute("href");
+      if (!href || href.length < 2) return;
+      reveal(href.slice(1));
+    };
+    fromLocation();
+    window.addEventListener("hashchange", fromLocation);
+    document.addEventListener("click", onClick);
+    return () => {
+      window.removeEventListener("hashchange", fromLocation);
+      document.removeEventListener("click", onClick);
+    };
   }, [files]);
+  useLayoutEffect(() => {
+    if (!pendingScroll) return;
+    let attempts = 0;
+    let frame = 0;
+    let cancelled = false;
+    const tryScroll = () => {
+      if (cancelled) return;
+      const target = document.getElementById(pendingScroll);
+      if (target) {
+        target.scrollIntoView({ block: "center" });
+        setPendingScroll(null);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 12) frame = requestAnimationFrame(tryScroll);
+    };
+    tryScroll();
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [pendingScroll, openFiles]);
   return (
     <div>
       {model.diffUnavailable ? (
@@ -392,46 +453,25 @@ function useDiffTheme(): "light" | "dark" {
   return theme;
 }
 
-function useDiffStyle(): ["unified" | "split", (value: "unified" | "split") => void] {
-  const [style, setStyle] = useState<"unified" | "split">("unified");
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(DIFF_STYLE_KEY);
-      if (stored === "split" || stored === "unified") setStyle(stored);
-    } catch {
-      // Storage can be blocked. The diff stays unified.
-    }
-  }, []);
-  return [
-    style,
-    (value) => {
-      setStyle(value);
-      try {
-        localStorage.setItem(DIFF_STYLE_KEY, value);
-      } catch {
-        // The choice still applies until reload.
-      }
-    },
-  ];
-}
-
-function useStoredWidth(key: string, fallback: number, min: number, max: number): [number, (value: number) => void] {
+function useStoredWidth(key: string, fallback: number, max: number): [number, (value: number) => void] {
   const [width, setWidth] = useState(fallback);
   useEffect(() => {
     try {
-      const parsed = Number(localStorage.getItem(key));
-      if (Number.isFinite(parsed)) setWidth(clamp(parsed, min, max));
+      const stored = localStorage.getItem(key);
+      if (stored === null) return;
+      const parsed = Number(stored);
+      if (Number.isFinite(parsed)) setWidth(clamp(parsed, 0, max));
     } catch {
       // Keep the default width.
     }
-  }, [key, min, max]);
+  }, [key, max]);
   return [
     width,
     (value) => {
-      const next = clamp(value, min, max);
+      const next = clamp(value, 0, max);
       setWidth(next);
       try {
-        localStorage.setItem(key, String(Math.round(next)));
+        localStorage.setItem(key, String(next));
       } catch {
         // The width still applies until reload.
       }
@@ -636,32 +676,12 @@ function CompleteSummary({ summary }: { summary: Extract<DetailSummary, { mode: 
   );
 }
 
-function SettingsRail({
-  settings,
-  diffStyle,
-  onDiffStyle,
-}: {
-  settings: DetailSettings;
-  diffStyle: "unified" | "split";
-  onDiffStyle: (value: "unified" | "split") => void;
-}) {
+function ReviewConfig({ settings }: { settings: DetailSettings }) {
   return (
-    <section className="px-3 py-3">
-      <h2 className="mb-2 text-sm font-medium">Settings</h2>
-      <div className="mb-4 flex flex-col gap-2">
-        <p className="text-sm">Diff view</p>
-        <p className="text-xs leading-5 text-muted-foreground">Unified or split. Saved in this browser.</p>
-        <div className="flex gap-1">
-          <Button type="button" size="sm" variant={diffStyle === "unified" ? "default" : "outline"} aria-pressed={diffStyle === "unified"} onClick={() => onDiffStyle("unified")}>
-            Unified
-          </Button>
-          <Button type="button" size="sm" variant={diffStyle === "split" ? "default" : "outline"} aria-pressed={diffStyle === "split"} onClick={() => onDiffStyle("split")}>
-            Split
-          </Button>
-        </div>
-      </div>
+    <details className="border-t px-3 py-2">
+      <summary className="cursor-pointer text-sm font-medium">Review configuration</summary>
       {settings.recorded ? (
-        <dl className="grid grid-cols-[9.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-sm">
+        <dl className="mt-2 grid grid-cols-[9.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-sm">
           {settings.rows.map((row) => (
             <Fragment key={row.key}>
               <dt className="text-muted-foreground">{row.key}</dt>
@@ -672,10 +692,27 @@ function SettingsRail({
           ))}
         </dl>
       ) : (
-        <p className="text-sm text-muted-foreground">Settings were not recorded for this review.</p>
+        <p className="mt-2 text-sm text-muted-foreground">Settings were not recorded for this review.</p>
       )}
-    </section>
+    </details>
   );
+}
+
+function fileForHash(files: DetailFileView[], id: string): DetailFileView | undefined {
+  return files.find(
+    (item) =>
+      item.anchor === id ||
+      item.lines.some((line) => line.comments.some((comment) => comment.anchor === id)) ||
+      item.unanchored.some((comment) => comment.anchor === id),
+  );
+}
+
+function decodeHash(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 function verdictTone(kind: "pass" | "suggest" | "blocker" | null): string {

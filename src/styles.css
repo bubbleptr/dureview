@@ -241,7 +241,7 @@ html[data-sidebar="collapsed"] .nav-link {
 @media (min-width: 960px) {
   .review-columns {
     display: grid;
-    grid-template-columns: var(--tree-width) 0.375rem minmax(0, 1fr) 0.375rem var(--summary-width);
+    grid-template-columns: minmax(0, var(--tree-width)) 0.375rem minmax(20rem, 1fr) 0.375rem minmax(0, var(--summary-width));
   }
   .review-columns > .panel-handle {
     display: block;
