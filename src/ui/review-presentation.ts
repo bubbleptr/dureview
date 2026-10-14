@@ -1,13 +1,35 @@
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffMetadata, type ThemeTypes } from "@pierre/diffs";
 import type { FileTreeOptions, GitStatus } from "@pierre/trees";
 import type { DetailCommentView, DetailFileView } from "./detail-model.js";
+import { findingLineCss, findingRanges } from "./diff-focus.js";
 
 export const REVIEW_DIFF_THEME: ThemeTypes = "light";
 
-/**
- * Pierre hides the "Expand all" control. Show it beside the up and down buttons
- * so a collapsed gap can be opened in either direction or all at once.
- */
+export const REVIEW_TREE_CSS = [
+  "[data-file-tree-search-container]{display:block;padding:12px 12px 8px}",
+  "[data-file-tree-search-input]{box-sizing:border-box;width:100%;height:32px;margin:0;border:1px solid var(--border, #e5e5e5);border-radius:6px;background:transparent;color:inherit;padding:0 10px;font:inherit;font-size:13px;outline:none}",
+  "[data-file-tree-search-input]:focus{box-shadow:0 0 0 2px var(--ring, #a3a3a3)}",
+].join("");
+
+export function reviewDiffOptions(input: {
+  diffStyle: "unified" | "split";
+  themeType: "light" | "dark";
+  lines: DetailFileView["lines"];
+}): {
+  diffStyle: "unified" | "split";
+  themeType: "light" | "dark";
+  unsafeCSS: string;
+  disableFileHeader: true;
+} {
+  return {
+    diffStyle: input.diffStyle,
+    themeType: input.themeType,
+    unsafeCSS: `${REVIEW_EXPAND_CSS}${findingLineCss(findingRanges(input.lines))}`,
+    disableFileHeader: true,
+  };
+}
+
+/** Keep a leftover hunk separator readable if a partial patch still emits one. */
 export const REVIEW_EXPAND_CSS =
   "[data-expand-button][data-expand-all-button]{display:flex}[data-expand-index] [data-separator-wrapper][data-separator-multi-button]{grid-template-columns:32px 32px minmax(0,1fr) auto}";
 
@@ -27,10 +49,33 @@ export function parseReviewPatch(diffText: string): FileDiffMetadata | null {
     if (parsed.length !== 1) return null;
     const file = parsed[0]?.files[0];
     if (!file || file.hunks.length === 0) return null;
-    return file;
+    return dropUnloadedGaps(file);
   } catch {
     return null;
   }
+}
+
+/**
+ * A GitHub patch is partial: lines outside its hunks were never loaded.
+ * Pierre treats that gap as expandable context and then asks for the full file.
+ * The review page owns those gaps, so drop them and keep the hunk line numbers.
+ */
+function dropUnloadedGaps(file: FileDiffMetadata): FileDiffMetadata {
+  if (!file.isPartial) return file;
+  let removed = 0;
+  for (const hunk of file.hunks) {
+    const gap = hunk.collapsedBefore;
+    if (gap <= 0) continue;
+    hunk.collapsedBefore = 0;
+    hunk.splitLineStart -= removed + gap;
+    hunk.unifiedLineStart -= removed + gap;
+    removed += gap;
+  }
+  if (removed > 0) {
+    file.splitLineCount -= removed;
+    file.unifiedLineCount -= removed;
+  }
+  return file;
 }
 
 /** Head-file comments, one annotation per comment, on the additions side. */
@@ -61,6 +106,8 @@ export function reviewTreeOptions(
     initialExpansion: "open",
     flattenEmptyDirectories: true,
     search: true,
+    searchBlurBehavior: "retain",
+    unsafeCSS: REVIEW_TREE_CSS,
     initialVisibleRowCount: Math.min(80, Math.max(files.length + 8, 8)),
     gitStatus: files.map((file) => ({ path: file.filename, status: treeStatus(file.status) })),
     renderRowDecoration: (context) => {

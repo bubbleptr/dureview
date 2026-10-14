@@ -1,12 +1,8 @@
 import type { ReactNode } from "react";
 import type { ReviewListModel, ReviewRowView } from "../ui/list-model.js";
 import { compareReviewRows } from "../ui/list-sort.js";
-import type { StatsPageModel } from "../ui/stats-model.js";
-import { timezoneOffsetMinutes } from "../ui/stats-query.js";
 import { AppShell, type ShellStatus } from "./app-shell.js";
-import { TimezoneField } from "./timezone-field.js";
 import { LocalTime } from "./local-time.js";
-import { OverviewPanel } from "./overview-panel.js";
 import { Badge } from "./ui/badge.js";
 import { Button, buttonVariants } from "./ui/button.js";
 import { Input } from "./ui/input.js";
@@ -35,17 +31,7 @@ const SINCE: Array<[string, string]> = [
 const SORT_KEYS = ["repo", "title", "trigger", "result", "p0", "p1", "p2", "p3", "duration", "when"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
-export function ReviewListView({
-  model,
-  search = "",
-  week = null,
-  day = null,
-}: {
-  model: ReviewListModel;
-  search?: string;
-  week?: StatsPageModel | null;
-  day?: StatsPageModel | null;
-}) {
+export function ReviewListView({ model, search = "" }: { model: ReviewListModel; search?: string }) {
   const status: ShellStatus = {
     version: model.version,
     uptime: model.uptime,
@@ -59,46 +45,32 @@ export function ReviewListView({
   const view = pageRows(model.reviews, search);
   const count = model.total === model.shown ? `${model.shown} shown` : `${model.shown} shown of ${model.total}`;
   return (
-    <AppShell
-      current="overview"
-      title="Overview"
-      status={status}
-      form={{ method: "get", action: "/ui" }}
-      filters={
-        <>
-          <TimezoneField tz={timezoneOffsetMinutes(new URLSearchParams(search.startsWith("?") ? search.slice(1) : search).get("tz"))} />
-          <Filter label="Repository">
-            <NativeSelect name="repo" defaultValue={model.form.repo} className="h-8 w-44 text-xs" onChange={submitForm}>
-              <option value="">All repositories</option>
-              {model.repos.map((repo) => (
-                <option key={repo} value={repo}>
-                  {repo}
-                </option>
-              ))}
-            </NativeSelect>
-          </Filter>
-          <Filter label="Time">
-            <NativeSelect name="since" defaultValue={model.form.since} className="h-8 text-xs" onChange={submitForm}>
-              {SINCE.map(([value, label]) => (
-                <option key={value || "any"} value={value}>
-                  {label}
-                </option>
-              ))}
-            </NativeSelect>
-          </Filter>
-        </>
-      }
-    >
-      <OverviewPanel model={model} week={week} day={day} />
-      <section id="reviews" className="flex flex-col gap-3">
+    <AppShell current="reviews" title="Reviews" status={status} form={{ method: "get", action: "/ui/reviews" }}>
+      <section className="flex flex-col gap-4">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="flex max-w-prose flex-col gap-1">
-            <h2 className="text-base font-medium">Reviews</h2>
-            <p className="text-sm text-muted-foreground">Latest reviews. Open a row for the diff.</p>
-          </div>
-          <p className="text-xs text-muted-foreground">{count}</p>
+          <p className="max-w-prose text-sm leading-6 text-muted-foreground">Latest reviews. Open a row for the diff.</p>
+          <p className="text-xs text-muted-foreground tabular-nums">{count}</p>
         </div>
-        <div className="flex flex-wrap items-end gap-3">
+        <div className="flex flex-wrap items-end gap-3 border-b pb-4">
+            <Filter label="Repository">
+              <NativeSelect name="repo" defaultValue={model.form.repo} className="h-8 w-44 text-xs" onChange={submitForm}>
+                <option value="">All repositories</option>
+                {model.repos.map((repo) => (
+                  <option key={repo} value={repo}>
+                    {repo}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Filter>
+            <Filter label="Time">
+              <NativeSelect name="since" defaultValue={model.form.since} className="h-8 text-xs" onChange={submitForm}>
+                {SINCE.map(([value, label]) => (
+                  <option key={value || "any"} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Filter>
             <Filter label="Result">
               <NativeSelect name="result" defaultValue={model.form.result} className="h-8 text-xs" onChange={submitForm}>
                 {RESULTS.map(([value, label]) => (
@@ -121,7 +93,7 @@ export function ReviewListView({
               Apply
             </Button>
             {model.filtered ? (
-              <a className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui">
+              <a className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui/reviews">
                 Clear
               </a>
             ) : null}
@@ -208,7 +180,7 @@ function ReviewTable({
             }}
           >
             <TableCell>
-              <a className="font-medium underline-offset-4 hover:underline" href={row.href}>
+              <a className="font-mono text-xs font-medium underline-offset-4 hover:underline" href={row.href}>
                 {row.repoLabel}
               </a>
             </TableCell>
@@ -299,5 +271,5 @@ function listHref(search: string, updates: Record<string, string | null>): strin
     else params.set(key, value);
   }
   const query = params.toString();
-  return query ? `/ui?${query}` : "/ui";
+  return query ? `/ui/reviews?${query}` : "/ui/reviews";
 }

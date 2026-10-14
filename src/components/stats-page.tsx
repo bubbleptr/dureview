@@ -17,16 +17,13 @@ const RANGES: Array<[string, string]> = [
   ["all", "All time"],
 ];
 
-export function StatsPage({ model, status = null }: { model: StatsPageModel; status?: ShellStatus | null }) {
+export function OverviewPage({ model, status = null }: { model: StatsPageModel; status?: ShellStatus | null }) {
   return (
-    <AppShell
-      current="stats"
-      title="Statistics"
-      status={status}
-      form={{ method: "get", action: "/ui/stats" }}
-      filters={
-        <>
-          <Label className="flex flex-col gap-1">
+    <AppShell current="overview" title="Overview" status={status} form={{ method: "get", action: "/ui" }}>
+      <div className="flex flex-col gap-2">
+        <p className="max-w-prose text-sm leading-6 text-muted-foreground">Counts and token totals for the selected range.</p>
+        <div className="flex flex-wrap items-end gap-3 border-b pb-4">
+          <Label className="flex flex-col gap-1 text-xs">
             Time range
             <NativeSelect name="range" defaultValue={model.form.range} className="h-8 text-xs" onChange={submitForm}>
               {RANGES.map(([value, label]) => (
@@ -36,7 +33,7 @@ export function StatsPage({ model, status = null }: { model: StatsPageModel; sta
               ))}
             </NativeSelect>
           </Label>
-          <Label className="flex min-w-40 flex-col gap-1">
+          <Label className="flex min-w-40 flex-col gap-1 text-xs">
             Repository
             <NativeSelect name="repo" defaultValue={model.form.repo} className="h-8 w-44 text-xs" onChange={submitForm}>
               <option value="">All repositories</option>
@@ -52,14 +49,12 @@ export function StatsPage({ model, status = null }: { model: StatsPageModel; sta
             Apply
           </Button>
           {model.filtered ? (
-            <a className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui/stats">
+            <a className="mb-1 text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui">
               Clear
             </a>
           ) : null}
-        </>
-      }
-    >
-      <p className="max-w-prose text-sm leading-6 text-muted-foreground">Counts and token totals for the selected range.</p>
+        </div>
+      </div>
 
       <StatStrip stats={model.cards} columns={6} />
 

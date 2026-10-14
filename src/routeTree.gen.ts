@@ -16,6 +16,7 @@ import { Route as UiIndexRouteImport } from './routes/ui/index'
 import { Route as UiLoginRouteImport } from './routes/ui/login'
 import { Route as UiSettingsRouteImport } from './routes/ui/settings'
 import { Route as UiStatsRouteImport } from './routes/ui/stats'
+import { Route as UiReviewsIndexRouteImport } from './routes/ui/reviews/index'
 import { Route as UiReviewsTaskIdRouteImport } from './routes/ui/reviews/$taskId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -53,6 +54,11 @@ const UiStatsRoute = UiStatsRouteImport.update({
   path: '/ui/stats',
   getParentRoute: () => rootRouteImport,
 } as any)
+const UiReviewsIndexRoute = UiReviewsIndexRouteImport.update({
+  id: '/ui/reviews/',
+  path: '/ui/reviews/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const UiReviewsTaskIdRoute = UiReviewsTaskIdRouteImport.update({
   id: '/ui/reviews/$taskId',
   path: '/ui/reviews/$taskId',
@@ -68,6 +74,7 @@ export interface FileRoutesByFullPath {
   '/ui/stats': typeof UiStatsRoute
   '/ui/': typeof UiIndexRoute
   '/ui/reviews/$taskId': typeof UiReviewsTaskIdRoute
+  '/ui/reviews/': typeof UiReviewsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -78,6 +85,7 @@ export interface FileRoutesByTo {
   '/ui/stats': typeof UiStatsRoute
   '/ui': typeof UiIndexRoute
   '/ui/reviews/$taskId': typeof UiReviewsTaskIdRoute
+  '/ui/reviews': typeof UiReviewsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -89,6 +97,7 @@ export interface FileRoutesById {
   '/ui/stats': typeof UiStatsRoute
   '/ui/': typeof UiIndexRoute
   '/ui/reviews/$taskId': typeof UiReviewsTaskIdRoute
+  '/ui/reviews/': typeof UiReviewsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -101,6 +110,7 @@ export interface FileRouteTypes {
     | '/ui/stats'
     | '/ui/'
     | '/ui/reviews/$taskId'
+    | '/ui/reviews/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -111,6 +121,7 @@ export interface FileRouteTypes {
     | '/ui/stats'
     | '/ui'
     | '/ui/reviews/$taskId'
+    | '/ui/reviews'
   id:
     | '__root__'
     | '/'
@@ -121,6 +132,7 @@ export interface FileRouteTypes {
     | '/ui/stats'
     | '/ui/'
     | '/ui/reviews/$taskId'
+    | '/ui/reviews/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -132,6 +144,7 @@ export interface RootRouteChildren {
   UiStatsRoute: typeof UiStatsRoute
   UiIndexRoute: typeof UiIndexRoute
   UiReviewsTaskIdRoute: typeof UiReviewsTaskIdRoute
+  UiReviewsIndexRoute: typeof UiReviewsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -185,6 +198,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UiStatsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/ui/reviews/': {
+      id: '/ui/reviews/'
+      path: '/ui/reviews'
+      fullPath: '/ui/reviews/'
+      preLoaderRoute: typeof UiReviewsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ui/reviews/$taskId': {
       id: '/ui/reviews/$taskId'
       path: '/ui/reviews/$taskId'
@@ -204,6 +224,7 @@ const rootRouteChildren: RootRouteChildren = {
   UiStatsRoute: UiStatsRoute,
   UiIndexRoute: UiIndexRoute,
   UiReviewsTaskIdRoute: UiReviewsTaskIdRoute,
+  UiReviewsIndexRoute: UiReviewsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

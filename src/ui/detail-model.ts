@@ -13,6 +13,7 @@ export type DetailCommentView = {
   suggestion: string | null;
   path: string;
   startLine: number;
+  endLine: number;
 };
 
 export type DetailLineView = {
@@ -82,7 +83,7 @@ export type DetailSettings =
  */
 export type ReviewDetailModel = {
   pageTitle: string;
-  backHref: "/ui";
+  backHref: "/ui/reviews";
   pullHref: string | null;
   pullLabel: string;
   heading: string;

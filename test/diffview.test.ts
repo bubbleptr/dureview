@@ -131,7 +131,7 @@ describe("pull request diff placement", () => {
         now: Date.parse("2026-10-13T15:05:00.000Z"),
       }),
     );
-    expect(html).toContain('href="/ui"');
+    expect(html).toContain('href="/ui/reviews"');
     expect(html).toContain("https://github.com/acme/demo/pull/7");
     expect(html).toContain("src/pay.ts");
     expect(html).toContain("&lt;b&gt;xss&lt;/b&gt;");

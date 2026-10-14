@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChartColumn, GitPullRequest, LayoutDashboard, PanelLeft, Settings } from "lucide-react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { GitPullRequest, LayoutDashboard, PanelLeft, Settings } from "lucide-react";
 import type { CodexView } from "../ui/list-model.js";
 import { mobileSidebarConcealed } from "../ui/sidebar-state.js";
 import { LocalTime } from "./local-time.js";
 import { ThemeToggle } from "./theme.js";
 
-export type ShellSection = "overview" | "reviews" | "stats" | "settings";
+export type ShellSection = "overview" | "reviews" | "settings";
 
 export type ShellStatus = {
   version: string;
@@ -20,8 +20,7 @@ export type ShellStatus = {
 
 const NAV = [
   ["overview", "/ui", "Overview", LayoutDashboard],
-  ["reviews", "/ui#reviews", "Reviews", GitPullRequest],
-  ["stats", "/ui/stats", "Stats", ChartColumn],
+  ["reviews", "/ui/reviews", "Reviews", GitPullRequest],
   ["settings", "/ui/settings", "Settings", Settings],
 ] as const;
 
@@ -30,7 +29,6 @@ export function AppShell({
   title,
   crumbs,
   status,
-  filters,
   form,
   fill,
   children,
@@ -39,16 +37,14 @@ export function AppShell({
   title: string;
   crumbs?: ReactNode;
   status?: ShellStatus | null;
-  filters?: ReactNode;
   form?: { method: "get" | "post"; action: string };
   fill?: boolean;
   children: ReactNode;
 }) {
-  const hash = useHash();
   const sidebarRef = useRef<HTMLElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   useMobileSidebar(sidebarRef);
-  const active = current === "overview" && hash === "#reviews" ? "reviews" : current;
+  const active = current;
   const column = (
     <>
       <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b bg-background px-3 py-2">
@@ -70,11 +66,7 @@ export function AppShell({
               </span>
             </>
           ) : null}
-          <h1 className="truncate text-base font-medium">{title}</h1>
-        </div>
-        <div className="ml-auto flex w-full flex-wrap items-end justify-end gap-2 sm:w-auto">
-          {filters}
-          <ThemeToggle />
+          <h1 className="truncate text-base font-medium tracking-tight">{title}</h1>
         </div>
       </header>
         <main id="main" className={fill ? "min-h-0 min-w-0 flex-1 overflow-hidden" : "min-h-0 min-w-0 flex-1 overflow-auto"}>
@@ -122,7 +114,13 @@ export function AppShell({
             );
           })}
         </nav>
-        <div className="sidebar-footer-detail border-t px-3 py-3">{status ? <StatusLine status={status} /> : <p className="text-[11px] text-muted-foreground">dureview</p>}</div>
+        <div className="border-t">
+          <div className="sidebar-theme flex items-center justify-between gap-2 px-2 py-2">
+            <span className="sidebar-theme-label nav-label px-1 text-xs text-muted-foreground">Theme</span>
+            <ThemeToggle />
+          </div>
+          <div className="sidebar-footer-detail px-3 pb-3">{status ? <StatusLine status={status} /> : <p className="text-[11px] text-muted-foreground">dureview</p>}</div>
+        </div>
       </aside>
       {form ? (
         <form className="flex min-w-0 flex-1 flex-col" method={form.method} action={form.action}>
@@ -167,17 +165,6 @@ function StatusLine({ status }: { status: ShellStatus }) {
       </p>
     </div>
   );
-}
-
-function useHash(): string {
-  const [hash, setHash] = useState("");
-  useEffect(() => {
-    const sync = () => setHash(window.location.hash);
-    sync();
-    window.addEventListener("hashchange", sync);
-    return () => window.removeEventListener("hashchange", sync);
-  }, []);
-  return hash;
 }
 
 function useMobileSidebar(sidebarRef: { current: HTMLElement | null }): void {

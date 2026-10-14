@@ -68,7 +68,7 @@ export function buildReviewDetail(input: {
   const pullLabel = `${review.owner}/${review.repo} #${review.number}`;
   return {
     pageTitle: pullLabel,
-    backHref: "/ui",
+    backHref: "/ui/reviews",
     pullHref: pullRequestUrl(input.githubApiUrl, review.owner, review.repo, review.number),
     pullLabel,
     heading: review.title || "Untitled",
@@ -144,6 +144,7 @@ function commentView(comment: StoredComment): DetailCommentView {
     suggestion: comment.suggestion,
     path: comment.path,
     startLine: comment.startLine,
+    endLine: comment.endLine,
   };
 }
 
