@@ -159,7 +159,11 @@ async function publishWithoutSummary(input: {
   const language = languageOf(input.policy);
   const comments = await input.github.listReviewComments(input.request, input.signal);
   const ledger = readInlineLedger(comments);
-  const alreadyInlined = new Set(ledger.filter((entry) => !entry.handled).map((entry) => entry.fingerprint));
+  const openLedger = ledger.filter((entry) => !entry.handled);
+  const alreadyInlined = new Set(openLedger.map((entry) => entry.fingerprint));
+  const recoveredByThisTask = new Set(
+    openLedger.filter((entry) => entry.taskId === input.taskId).map((entry) => entry.fingerprint),
+  );
   const classified = classifyFindings({
     findings: input.review.findings,
     diff: input.diff,
@@ -204,7 +208,11 @@ async function publishWithoutSummary(input: {
     summaryAction: "skipped",
     reviewId,
     reviewAction,
-    postings: postingsFromClassified(classified, input.policy),
+    postings: postingsFromClassified(classified, input.policy).map((posting) =>
+      recoveredByThisTask.has(posting.fingerprint)
+        ? { fingerprint: posting.fingerprint, posted: true, skipReason: null }
+        : posting,
+    ),
   };
 }
 

@@ -412,6 +412,36 @@ describe("usage capture", () => {
     expect(configDb.prepare("SELECT COUNT(*) AS n FROM findings").get()).toMatchObject({ n: 0 });
     configDb.close();
   });
+
+  it("archives eligible findings as not posted when GitHub rejects the review before a write", async () => {
+    const dataDir = await tempDataDir();
+    const github = new MemoryGitHub();
+    github.createError = new Error("GitHub POST /repos/acme/demo/pulls/7/reviews failed (500)");
+    const low = sampleFinding({ title: "Too unsure", priority: 0, confidence: 0.1 });
+    const { service } = await openTestService({
+      dataDir,
+      github,
+      responses: scriptedReview("charge() reports success without billing.", [sampleFinding(), low]),
+    });
+    const queued = await service.enqueue(reviewRequest(), { kind: "sha" }, "opened");
+    const settled = await service.wait(queued.taskId);
+    expect(settled.state.outcome.status).toBe("failed");
+    expect(github.reviews).toHaveLength(0);
+    expect(github.comments).toHaveLength(0);
+    await service.close();
+
+    const db = new DatabaseSync(join(dataDir, "reviews.sqlite"), { readOnly: true });
+    const rows = db.prepare("SELECT title, posted, skip_reason FROM findings ORDER BY title").all() as Array<{
+      title: string;
+      posted: number;
+      skip_reason: string;
+    }>;
+    expect(rows).toEqual([
+      { title: "Return success without billing", posted: 0, skip_reason: "publish_failed" },
+      { title: "Too unsure", posted: 0, skip_reason: "low_confidence" },
+    ]);
+    db.close();
+  });
 });
 
 describe("statistics query", () => {

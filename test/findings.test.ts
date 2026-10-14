@@ -1,5 +1,10 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { fileFacts, postingsForReview, recordedFindings } from "../src/review/findings.js";
+import { ReviewArchive } from "../src/review/archive.js";
+import { fileFacts, postingsForReview, postingsWhenPublishFailed, recordedFindings } from "../src/review/findings.js";
 import { defaultPolicy } from "../src/review/policy.js";
 import { FIXTURE_DIFF, sampleFinding } from "./support.js";
 
@@ -48,5 +53,42 @@ describe("finding records", () => {
     expect(fileFacts("web/App.tsx")).toEqual({ extension: "tsx", language: "typescript" });
     expect(fileFacts("Dockerfile")).toEqual({ extension: null, language: null });
     expect(fileFacts(".gitignore")).toEqual({ extension: null, language: null });
+  });
+
+  it("does not inherit Object.prototype names as languages", async () => {
+    expect(fileFacts("src/pay.constructor")).toEqual({ extension: "constructor", language: null });
+    expect(fileFacts("src/pay.valueOf")).toEqual({ extension: "valueof", language: null });
+
+    const dir = await mkdtemp(join(tmpdir(), "dureview-lang-"));
+    const file = join(dir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    await archive.finish({
+      taskId: "1",
+      owner: "acme",
+      repo: "demo",
+      number: 1,
+      outcome: "completed",
+      verdict: "fix_recommended",
+      findingCount: 1,
+      sha: "abc",
+      findings: [sampleFinding({ path: "src/pay.constructor", title: "Prototype path" })],
+    });
+    archive.close();
+
+    const db = new DatabaseSync(file, { readOnly: true });
+    const row = db.prepare("SELECT extension, language, title FROM findings").get();
+    expect(row).toMatchObject({ extension: "constructor", language: null, title: "Prototype path" });
+    db.close();
+  });
+
+  it("records a failed publish as not posted", () => {
+    const policy = { ...defaultPolicy(), summary: true };
+    const inline = sampleFinding({ title: "Dropped charge" });
+    const low = sampleFinding({ title: "Too unsure", priority: 0, confidence: 0.1 });
+    const postings = postingsWhenPublishFailed(postingsForReview({ findings: [inline, low], diff: FIXTURE_DIFF, policy }));
+    const byTitle = new Map(recordedFindings([inline, low], postings).map((row) => [row.finding.title, row]));
+    expect(byTitle.get("Dropped charge")).toMatchObject({ posted: false, skipReason: "publish_failed" });
+    expect(byTitle.get("Too unsure")).toMatchObject({ posted: false, skipReason: "low_confidence" });
   });
 });

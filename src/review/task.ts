@@ -29,7 +29,7 @@ import {
 } from "./checks.js";
 import type { RepoCheckout } from "./checkout.js";
 import { ReviewConfigError, type ReviewLanguage, type ReviewPolicy } from "./policy.js";
-import { postingsForReview, recordedFindings } from "./findings.js";
+import { postingsForReview, postingsWhenPublishFailed, recordedFindings } from "./findings.js";
 import type { ReviewFinished } from "./history.js";
 import { buildUserPrompt, ADVERSARIAL_ROLE } from "./prompt.js";
 import type { ReviewSubmission } from "./schema.js";
@@ -665,13 +665,16 @@ async function collectReviewRecord(
     policy: checkpoint.policy,
   };
   if (checkpoint.phase !== "post") return base;
+  const decided = checkpoint.published?.postings;
   const postings =
-    checkpoint.published?.postings ??
-    postingsForReview({
-      findings: checkpoint.review.findings,
-      diff: checkpoint.diff,
-      policy: checkpoint.policy,
-    });
+    decided ??
+    postingsWhenPublishFailed(
+      postingsForReview({
+        findings: checkpoint.review.findings,
+        diff: checkpoint.diff,
+        policy: checkpoint.policy,
+      }),
+    );
   return { ...base, recordedFindings: recordedFindings(checkpoint.review.findings, postings) };
 }
 

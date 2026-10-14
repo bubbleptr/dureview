@@ -301,7 +301,7 @@ The `comments` table is still the comments drawn on the diff page, and only for 
 | `skip_reason` | Why it was not a new inline comment. Null when it was posted inline. A summary mention keeps the skip reason and sets `posted` to 1. |
 | `created_at` | When the review finished, ISO-8601. |
 
-`skip_reason` is one of `low_confidence`, `ignored`, `out_of_range`, `investigate`, `empty_trigger`, `priority`, `p2_confidence`, `overflow`, or `already_inlined`.
+`skip_reason` is one of `low_confidence`, `ignored`, `out_of_range`, `investigate`, `empty_trigger`, `priority`, `p2_confidence`, `overflow`, `already_inlined`, or `publish_failed`. `publish_failed` means the run reached posting and GitHub was not written, so a finding that would have been posted is stored with `posted` 0. A resume that finds this task's own inline comment still stores `posted` 1. A comment left by an earlier task stays `already_inlined`.
 
 Indexes: `findings_task` (`task_id`), `findings_repo` (`owner`, `repo`, `number`), `findings_category` (`category`, `priority`), `findings_fingerprint` (`fingerprint`), `findings_created` (`created_at`), `findings_language` (`language`), `findings_path` (`path`). `reviews_repo_started` covers repository and time filters on the review rows.
 

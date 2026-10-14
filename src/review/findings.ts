@@ -12,6 +12,7 @@ export const SKIP_REASONS = [
   "p2_confidence",
   "overflow",
   "already_inlined",
+  "publish_failed",
 ] as const;
 
 export type SkipReason = (typeof SKIP_REASONS)[number];
@@ -32,7 +33,8 @@ export type RecordedFinding = {
   skipReason: SkipReason | null;
 };
 
-const LANGUAGES: Record<string, string> = {
+/** Null prototype so `constructor` and other Object.prototype names are not languages. */
+const LANGUAGES: Record<string, string> = Object.assign(Object.create(null), {
   ts: "typescript",
   tsx: "typescript",
   mts: "typescript",
@@ -87,7 +89,7 @@ const LANGUAGES: Record<string, string> = {
   r: "r",
   dart: "dart",
   proto: "protobuf",
-};
+});
 
 const SKIP = new Set<string>(SKIP_REASONS);
 
@@ -97,7 +99,19 @@ export function fileFacts(path: string): { extension: string | null; language: s
   if (dot <= 0) return { extension: null, language: null };
   const extension = base.slice(dot + 1).toLowerCase();
   if (!/^[a-z0-9]+$/.test(extension) || extension.length > 16) return { extension: null, language: null };
-  return { extension, language: LANGUAGES[extension] ?? null };
+  if (!Object.hasOwn(LANGUAGES, extension)) return { extension, language: null };
+  const language = LANGUAGES[extension];
+  return { extension, language: typeof language === "string" ? language : null };
+}
+
+/**
+ * Eligibility is not a GitHub write. Use this when publish failed before any write,
+ * so a finding the classifier would have posted is stored as not posted.
+ */
+export function postingsWhenPublishFailed(postings: readonly FindingPosting[]): FindingPosting[] {
+  return postings.map((posting) =>
+    posting.posted ? { fingerprint: posting.fingerprint, posted: false, skipReason: "publish_failed" } : posting,
+  );
 }
 
 export function isSkipReason(value: string | null | undefined): value is SkipReason {
