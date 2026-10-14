@@ -1,4 +1,6 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
+import { FileDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
+import { FileTree, useFileTree } from "@pierre/trees/react";
 import type {
   DetailCommentView,
   DetailFileView,
@@ -7,6 +9,13 @@ import type {
   DetailSummary,
   ReviewDetailModel,
 } from "../ui/detail-model.js";
+import {
+  REVIEW_DIFF_THEME,
+  parseReviewPatch,
+  reviewAnnotations,
+  reviewTreeOptions,
+  type ReviewPresentation,
+} from "../ui/review-presentation.js";
 import { LocalTime } from "./local-time.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
@@ -25,6 +34,8 @@ const PRIORITY_BORDER = [
   "border-l-muted-foreground",
 ] as const;
 
+const PRIORITY_SURFACE = ["bg-red-50/80", "bg-orange-50/70", "bg-amber-50/70", "bg-muted/50"] as const;
+
 const SEVERITY = [
   "shadow-[inset_2px_0_0_#cf222e]",
   "shadow-[inset_2px_0_0_#bc4c00]",
@@ -39,7 +50,13 @@ const COUNT_TONE: Record<string, string> = {
   P3: "text-muted-foreground",
 };
 
-export function ReviewDetailView({ model }: { model: ReviewDetailModel }) {
+export function ReviewDetailView({
+  model,
+  presentation,
+}: {
+  model: ReviewDetailModel;
+  presentation?: ReviewPresentation;
+}) {
   return (
     <div className="flex h-screen flex-col bg-background">
       <header className="flex min-h-12 flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2">
@@ -66,15 +83,21 @@ export function ReviewDetailView({ model }: { model: ReviewDetailModel }) {
         ) : null}
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-1 min-[960px]:grid-cols-[220px_minmax(0,1fr)_380px]">
-        <aside className="min-h-0 overflow-auto border-b min-[960px]:border-r min-[960px]:border-b-0">
+        <aside className="flex min-h-0 flex-col overflow-hidden border-b min-[960px]:border-r min-[960px]:border-b-0">
           <p className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Files</p>
-          <FileTree files={model.files} />
+          <div className="min-h-48 flex-1">
+            {model.files.length === 0 ? (
+              <p className="px-3 py-2 text-sm text-muted-foreground">No changed files.</p>
+            ) : (
+              <ReviewTree files={model.files} preloaded={presentation?.tree ?? null} />
+            )}
+          </div>
           {model.hiddenFiles > 0 ? (
             <p className="px-3 py-2 text-sm text-muted-foreground">{model.hiddenFiles} more files are not shown.</p>
           ) : null}
         </aside>
         <main className="min-h-0 overflow-auto border-b min-[960px]:border-r min-[960px]:border-b-0">
-          <DiffColumn model={model} />
+          <DiffColumn model={model} presentation={presentation} />
         </main>
         <aside className="min-h-0 overflow-x-hidden overflow-y-auto">
           <SummaryRail summary={model.summary} />
@@ -85,74 +108,42 @@ export function ReviewDetailView({ model }: { model: ReviewDetailModel }) {
   );
 }
 
-function FileTree({ files }: { files: DetailFileView[] }) {
-  if (files.length === 0) return <p className="px-3 py-2 text-sm text-muted-foreground">No changed files.</p>;
+function ReviewTree({
+  files,
+  preloaded,
+}: {
+  files: DetailFileView[];
+  preloaded: ReviewPresentation["tree"];
+}) {
+  const { model } = useFileTree(
+    reviewTreeOptions(files, (selected) => {
+      if (typeof window === "undefined") return;
+      const path = selected[0];
+      if (!path) return;
+      const file = files.find((item) => item.filename === path);
+      if (!file) return;
+      window.location.hash = file.anchor;
+    }),
+  );
   return (
-    <ul className="py-1 text-sm">
-      <TreeNodes node={indexTree(files)} />
-    </ul>
+    <FileTree
+      model={model}
+      preloadedData={preloaded ?? undefined}
+      className="h-full min-h-48"
+      style={{ height: "100%", minHeight: "12rem" }}
+    />
   );
 }
 
-type TreeDir = { dirs: Map<string, TreeDir>; files: DetailFileView[] };
-
-function indexTree(files: DetailFileView[]): TreeDir {
-  const root: TreeDir = { dirs: new Map(), files: [] };
-  for (const file of files) {
-    const parts = file.filename.split("/");
-    let node = root;
-    for (const part of parts.slice(0, -1)) {
-      if (!part) continue;
-      let child = node.dirs.get(part);
-      if (!child) {
-        child = { dirs: new Map(), files: [] };
-        node.dirs.set(part, child);
-      }
-      node = child;
-    }
-    node.files.push(file);
-  }
-  return root;
-}
-
-function TreeNodes({ node }: { node: TreeDir }) {
-  const entries: Array<{ key: string; name: string; node: ReactNode }> = [];
-  for (const [name, child] of node.dirs) {
-    entries.push({
-      key: `dir:${name}`,
-      name,
-      node: (
-        <li>
-          <span className="flex px-3 py-0.5 text-muted-foreground">{name}</span>
-          <ul className="pl-3">
-            <TreeNodes node={child} />
-          </ul>
-        </li>
-      ),
-    });
-  }
-  for (const file of node.files) {
-    const leaf = file.filename.split("/").at(-1) ?? file.filename;
-    entries.push({
-      key: file.anchor,
-      name: leaf,
-      node: (
-        <li>
-          <a className="flex items-center gap-1.5 px-3 py-0.5 hover:bg-muted/60" href={`#${file.anchor}`}>
-            <span className="w-3 text-xs text-muted-foreground">{file.statusMark}</span>
-            {leaf}
-          </a>
-        </li>
-      ),
-    });
-  }
-  entries.sort((left, right) => left.name.localeCompare(right.name));
-  return entries.map((entry) => (
-    <Fragment key={entry.key}>{entry.node}</Fragment>
-  ));
-}
-
-function DiffColumn({ model }: { model: ReviewDetailModel }) {
+function DiffColumn({
+  model,
+  presentation,
+}: {
+  model: ReviewDetailModel;
+  presentation?: ReviewPresentation;
+}) {
+  const [diffStyle, setDiffStyle] = useState<"unified" | "split">("unified");
+  const highlighted = model.files.some((file) => file.diffText != null && parseReviewPatch(file.diffText) != null);
   return (
     <div>
       {model.diffUnavailable ? (
@@ -163,20 +154,90 @@ function DiffColumn({ model }: { model: ReviewDetailModel }) {
       {model.hiddenFiles > 0 ? (
         <p className="border-b px-3 py-2 text-sm text-muted-foreground">{model.hiddenFiles} files are hidden on this page.</p>
       ) : null}
+      {highlighted ? (
+        <div className="sticky top-0 z-10 flex items-center justify-end gap-1 border-b bg-background px-3 py-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={diffStyle === "unified" ? "default" : "outline"}
+            aria-pressed={diffStyle === "unified"}
+            onClick={() => setDiffStyle("unified")}
+          >
+            Unified
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={diffStyle === "split" ? "default" : "outline"}
+            aria-pressed={diffStyle === "split"}
+            onClick={() => setDiffStyle("split")}
+          >
+            Split
+          </Button>
+        </div>
+      ) : null}
       {model.noChangedFiles ? (
         <p className="px-3 py-4 text-sm text-muted-foreground">GitHub returned no changed files.</p>
       ) : null}
       {model.files.map((file) => (
-        <FileDiff key={file.anchor} file={file} />
+        <FileSection
+          key={file.anchor}
+          file={file}
+          diffStyle={diffStyle}
+          prerenderedHTML={diffStyle === "unified" ? presentation?.diffs[file.anchor] : undefined}
+        />
       ))}
       <CommentGroup title={model.outsideTitle} comments={model.outside} />
     </div>
   );
 }
 
-function FileDiff({ file }: { file: DetailFileView }) {
+function FileSection({
+  file,
+  diffStyle,
+  prerenderedHTML,
+}: {
+  file: DetailFileView;
+  diffStyle: "unified" | "split";
+  prerenderedHTML?: string;
+}) {
+  const parsed = file.diffText ? parseReviewPatch(file.diffText) : null;
+  const annotations = reviewAnnotations(file);
   return (
     <section id={file.anchor} className="scroll-mt-12 border-b target:bg-muted/40">
+      {parsed && file.diffText ? (
+        <FileDiff
+          fileDiff={parsed}
+          options={{ diffStyle, themeType: REVIEW_DIFF_THEME }}
+          lineAnnotations={annotations}
+          prerenderedHTML={prerenderedHTML}
+          disableWorkerPool
+          renderAnnotation={renderFinding}
+          renderHeaderFilenameSuffix={() => (
+            <Badge variant="outline" className="ml-2">
+              {file.status}
+            </Badge>
+          )}
+          renderHeaderMetadata={() =>
+            file.stats ? <span className="text-sm text-muted-foreground">{file.stats}</span> : null
+          }
+        />
+      ) : (
+        <PlainFile file={file} />
+      )}
+      {file.patchTruncated ? <p className="px-3 py-2 text-sm text-muted-foreground">Patch truncated.</p> : null}
+      <CommentGroup title="Not on a line in this diff" comments={file.unanchored} />
+    </section>
+  );
+}
+
+function renderFinding(annotation: DiffLineAnnotation<DetailCommentView>): ReactNode {
+  return <CommentCard comment={annotation.metadata} inset />;
+}
+
+function PlainFile({ file }: { file: DetailFileView }) {
+  return (
+    <>
       <header className="sticky top-0 flex items-center gap-2 border-b bg-background px-3 py-2">
         <span className="font-semibold">{file.filename}</span>
         <Badge variant="outline">{file.status}</Badge>
@@ -191,9 +252,7 @@ function FileDiff({ file }: { file: DetailFileView }) {
           ))}
         </div>
       )}
-      {file.patchTruncated ? <p className="px-3 py-2 text-sm text-muted-foreground">Patch truncated.</p> : null}
-      <CommentGroup title="Not on a line in this diff" comments={file.unanchored} />
-    </section>
+    </>
   );
 }
 
@@ -230,10 +289,11 @@ function CommentGroup({ title, comments }: { title: string; comments: DetailComm
 }
 
 function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: boolean }) {
+  const surface = inset ? (PRIORITY_SURFACE[comment.priority] ?? PRIORITY_SURFACE[3]) : "";
   return (
     <article
       id={comment.anchor}
-      className={`my-2 rounded-lg border border-l-2 p-3 ${inset ? "mr-3 ml-16" : "mx-3"} ${PRIORITY_BORDER[comment.priority] ?? PRIORITY_BORDER[3]}`}
+      className={`my-2 rounded-lg border border-l-2 p-3 ${inset ? "mr-3 ml-16" : "mx-3"} ${PRIORITY_BORDER[comment.priority] ?? PRIORITY_BORDER[3]} ${surface}`}
     >
       <header className="mb-1 flex flex-wrap items-center gap-1.5">
         <Badge className={PRIORITY_BADGE[comment.priority] ?? PRIORITY_BADGE[3]}>P{comment.priority}</Badge>

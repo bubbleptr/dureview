@@ -20,13 +20,14 @@ import {
   reviewDurationMs,
   runningLabel,
 } from "./page.js";
+import type { ReviewPresentation } from "./review-presentation.js";
 
 const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export type DetailPayload =
   | { kind: "login"; next: string }
   | { kind: "missing" }
-  | { kind: "detail"; model: ReviewDetailModel };
+  | { kind: "detail"; model: ReviewDetailModel; presentation: ReviewPresentation };
 
 /**
  * Saved review plus the live pull request diff.
@@ -101,6 +102,7 @@ function fileView(file: {
   unanchored: StoredComment[];
   patchMissing: boolean;
   patchTruncated: boolean;
+  diffText: string | null;
 }): DetailFileView {
   return {
     anchor: file.anchor,
@@ -110,6 +112,7 @@ function fileView(file: {
     stats: file.patchMissing ? null : `+${file.additions} −${file.deletions}`,
     patchMissing: file.patchMissing,
     patchTruncated: file.patchTruncated,
+    diffText: file.diffText,
     lines: file.lines.map(lineView),
     unanchored: file.unanchored.map(commentView),
   };

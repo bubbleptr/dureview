@@ -28,5 +28,5 @@ export const Route = createFileRoute("/ui/reviews/$taskId")({
 function ReviewDetailPage() {
   const data = Route.useLoaderData();
   if (data.kind === "login") return <LoginForm next={data.next} />;
-  return <ReviewDetailView model={data.model} />;
+  return <ReviewDetailView model={data.model} presentation={data.presentation} />;
 }

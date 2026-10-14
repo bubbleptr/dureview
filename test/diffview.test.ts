@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { reviewResult, type ReviewDetail, type StoredComment } from "../src/review/archive.js";
 import { buildReviewDetail } from "../src/ui/detail-data.js";
-import { parsePatch, placeReview } from "../src/ui/diff.js";
+import { gitDiffText, parsePatch, placeReview } from "../src/ui/diff.js";
+import { parseReviewPatch } from "../src/ui/review-presentation.js";
 import type { ReviewListModel } from "../src/ui/list-model.js";
 import { displayTrigger, formatTime, resultLabel, runningLabel, STUCK_AFTER_MS } from "../src/ui/page.js";
 import { renderDetailHtml, renderListHtml } from "../src/ui/render-react.js";
@@ -77,7 +78,32 @@ describe("pull request diff placement", () => {
     expect(placed.files[0]?.unanchored).toHaveLength(1);
   });
 
-  it("renders the comment on the diff and escapes it", () => {
+  it("wraps a GitHub hunk as a git diff without moving the start line", () => {
+    const diffText = gitDiffText({
+      filename: "src/pay.ts",
+      previousFilename: null,
+      status: "modified",
+      patch: PATCH,
+    });
+    expect(diffText).toContain("diff --git a/src/pay.ts b/src/pay.ts");
+    expect(diffText).toContain("@@ -1,3 +1,4 @@");
+    const parsed = parseReviewPatch(diffText);
+    expect(parsed?.name).toBe("src/pay.ts");
+    expect(parsed?.hunks[0]?.additionStart).toBe(1);
+    expect(parsed?.hunks[0]?.additionCount).toBe(4);
+
+    const quoted = gitDiffText({
+      filename: "my file.ts",
+      previousFilename: "old name.ts",
+      status: "renamed",
+      patch: "@@ -1 +1 @@\n-a\n+b\n",
+    });
+    expect(quoted).toContain('diff --git "a/old name.ts" "b/my file.ts"');
+    expect(quoted).toContain("rename from old name.ts");
+    expect(parseReviewPatch(quoted)?.name).toBe("my file.ts");
+  });
+
+  it("renders the comment on the diff and escapes it", async () => {
     const review = detail([
       stored(
         sampleFinding({
@@ -87,7 +113,7 @@ describe("pull request diff placement", () => {
         }),
       ),
     ]);
-    const html = renderDetailHtml(
+    const html = await renderDetailHtml(
       buildReviewDetail({
         review,
         files: [
@@ -112,7 +138,11 @@ describe("pull request diff placement", () => {
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toMatch(/<script[\s>]/);
     expect(html).not.toContain("<b>xss</b>");
-    expect(html.indexOf("Positive amounts")).toBeGreaterThan(html.indexOf("if (amount &gt; 0)"));
+    const text = html.replace(/<[^>]+>/g, "");
+    const lineAt = text.indexOf("if (amount > 0) return { ok: true };");
+    expect(lineAt).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("Positive amounts")).toBeGreaterThan(lineAt);
+    expect(html).toContain("1 finding");
     expect(html).toContain(">trigger<");
     expect(html).toContain('title="auto"');
     expect(html).toContain('datetime="2026-10-13T15:05:00.000Z"');
@@ -120,7 +150,7 @@ describe("pull request diff placement", () => {
     expect(html).toContain("P0/P1");
   });
 
-  it("shows status instead of zero counts, and one tag when kind and category match", () => {
+  it("shows status instead of zero counts, and one tag when kind and category match", async () => {
     const now = Date.parse("2026-10-13T16:00:00.000Z");
     const failed = detail([]);
     failed.outcome = "failed";
@@ -133,7 +163,7 @@ describe("pull request diff placement", () => {
     failed.checked = ["payment capture"];
     failed.error = "clone failed: permission denied";
     failed.finishedAt = "2026-10-13T15:10:00.000Z";
-    const failedHtml = renderDetailHtml(
+    const failedHtml = await renderDetailHtml(
       buildReviewDetail({
         review: failed,
         files: [],
@@ -154,7 +184,7 @@ describe("pull request diff placement", () => {
     running.p1 = 0;
     running.checked = ["payment capture"];
     running.startedAt = new Date(now - 5 * 60 * 1000).toISOString();
-    const runningHtml = renderDetailHtml(
+    const runningHtml = await renderDetailHtml(
       buildReviewDetail({
         review: running,
         files: [],
@@ -168,7 +198,7 @@ describe("pull request diff placement", () => {
     expect(runningHtml).not.toContain("5m");
 
     running.startedAt = new Date(now - STUCK_AFTER_MS).toISOString();
-    const stuckHtml = renderDetailHtml(
+    const stuckHtml = await renderDetailHtml(
       buildReviewDetail({
         review: running,
         files: [],
@@ -183,7 +213,7 @@ describe("pull request diff placement", () => {
     const same = stored(sampleFinding());
     same.kind = "correctness";
     same.category = "Correctness";
-    const tagged = renderDetailHtml(
+    const tagged = await renderDetailHtml(
       buildReviewDetail({
         review: detail([same]),
         files: [],

@@ -33,6 +33,8 @@ export type DetailFileView = {
   stats: string | null;
   patchMissing: boolean;
   patchTruncated: boolean;
+  /** One-file git diff, or null when GitHub omitted the patch. */
+  diffText: string | null;
   lines: DetailLineView[];
   unanchored: DetailCommentView[];
 };

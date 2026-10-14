@@ -4,6 +4,7 @@ import { ReviewDetailView } from "../components/review-detail.js";
 import { ReviewListView } from "../components/review-list.js";
 import type { ReviewDetailModel } from "./detail-model.js";
 import type { ReviewListModel } from "./list-model.js";
+import { preloadReviewPresentation } from "./review-preload.js";
 
 export function renderLoginHtml(input: { next: string; error?: string }): string {
   return documentShell("登录 · dureview", renderToStaticMarkup(<LoginForm next={input.next} error={input.error} />));
@@ -13,8 +14,12 @@ export function renderListHtml(model: ReviewListModel): string {
   return documentShell("dureview", renderToStaticMarkup(<ReviewListView model={model} />));
 }
 
-export function renderDetailHtml(model: ReviewDetailModel): string {
-  return documentShell(model.pageTitle, renderToStaticMarkup(<ReviewDetailView model={model} />));
+export async function renderDetailHtml(model: ReviewDetailModel): Promise<string> {
+  const presentation = await preloadReviewPresentation(model);
+  return documentShell(
+    model.pageTitle,
+    renderToStaticMarkup(<ReviewDetailView model={model} presentation={presentation} />),
+  );
 }
 
 function documentShell(title: string, body: string): string {

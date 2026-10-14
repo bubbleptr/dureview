@@ -177,9 +177,10 @@ describe("status page", () => {
     expect(detailHtml).toContain("https://github.com/acme/demo/pull/7");
     expect(detailHtml).toContain("Reviews");
     expect(detailHtml).toContain("src/pay.ts");
-    expect(detailHtml).toContain("if (amount &gt; 0) return { ok: true };");
-    expect(detailHtml).toContain("never billed");
-    expect(detailHtml.indexOf("never billed")).toBeGreaterThan(detailHtml.indexOf("if (amount &gt; 0) return { ok: true };"));
+    const detailText = detailHtml.replace(/<[^>]+>/g, "");
+    const lineAt = detailText.indexOf("if (amount > 0) return { ok: true };");
+    expect(lineAt).toBeGreaterThanOrEqual(0);
+    expect(detailText.indexOf("never billed")).toBeGreaterThan(lineAt);
     expect(detailHtml).toContain(">trigger<");
     expect(detailHtml).toContain('title="manual"');
     expect(detailHtml).toContain("P1");

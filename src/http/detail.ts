@@ -22,5 +22,5 @@ export async function reviewDetailResponse(input: {
   if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(path) }), 401);
   const model = await loadReviewDetail(input.service, input.githubApiUrl, taskId);
   if (!model) return notFoundJson();
-  return htmlResponse(renderDetailHtml(model));
+  return htmlResponse(await renderDetailHtml(model));
 }

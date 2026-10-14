@@ -20,5 +20,6 @@ export const getReviewDetail = createServerFn({ method: "GET" })
     if (!data.taskId) return { kind: "missing" };
     const model = await loadReviewDetail(runtime.service, runtime.config.githubApiUrl, data.taskId);
     if (!model) return { kind: "missing" };
-    return { kind: "detail", model };
+    const { preloadReviewPresentation } = await import("./review-preload.js");
+    return { kind: "detail", model, presentation: await preloadReviewPresentation(model) };
   });
