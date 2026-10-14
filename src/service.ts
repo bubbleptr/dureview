@@ -189,6 +189,11 @@ export class DureviewService {
     return this.harness.waitForTask(taskId, BACKGROUND_CONTEXT);
   }
 
+  /** Secret configured for `X-Hub-Signature-256`. The HTTP layer verifies with this before enqueueing. */
+  configuredWebhookSecret(): string | undefined {
+    return this.config.webhookSecret;
+  }
+
   async handleWebhook(raw: Buffer, signature: string | undefined, event: string | undefined): Promise<WebhookResponse> {
     if (!this.config.webhookSecret) {
       return { status: 500, body: { error: "webhook secret is not configured" } };

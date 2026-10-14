@@ -33,16 +33,55 @@ docker compose up -d
 
 `GET /health` returns `{"ok":true}`. Point a GitHub webhook at `POST /webhook`. `GET /` is a status page on that same port. It stays off until `DUREVIEW_UI_TOKEN` is set. See [Status page](#status-page).
 
-Without Docker:
+Without Docker, local development uses Vite. Production is still one Node process: `npm start` loads the built TanStack Start server in-process.
 
 ```bash
 npm ci
+
+# Dev server (Vite). Default bind is 0.0.0.0:8787.
+DUREVIEW_DATA_DIR=./data \
+DUREVIEW_WEBHOOK_SECRET=replace-with-a-long-random-string \
+GITHUB_TOKEN=github_pat_... \
+DUREVIEW_UI_TOKEN=replace-with-a-long-random-string \
+npm run dev
+
+# Production process, same env. `npm start` is `node dist/cli.js serve`.
 npm run build
-DUREVIEW_DATA_DIR=./data node dist/cli.js login
-DUREVIEW_DATA_DIR=./data DUREVIEW_WEBHOOK_SECRET=... GITHUB_TOKEN=... node dist/cli.js serve
+DUREVIEW_DATA_DIR=./data \
+DUREVIEW_WEBHOOK_SECRET=replace-with-a-long-random-string \
+GITHUB_TOKEN=github_pat_... \
+DUREVIEW_UI_TOKEN=replace-with-a-long-random-string \
+npm start
 ```
 
-Run **one process**. Pi Durable storage is not locked across processes.
+`DUREVIEW_HOST` defaults to `0.0.0.0` and `DUREVIEW_PORT` defaults to `8787`. When `PORT` or `HOST` is already set (Fly sets `PORT`), the production process keeps those and does not overwrite them. The dev server follows `DUREVIEW_HOST` and `DUREVIEW_PORT` only.
+
+Login once if you use the Codex provider instead of `OPENAI_API_KEY`:
+
+```bash
+DUREVIEW_DATA_DIR=./data node dist/cli.js login
+```
+
+Run **one process**. Pi Durable storage is not locked across processes. On Fly, keep a single machine and mount the SQLite volume at `/data` (`DUREVIEW_DATA_DIR=/data`). Do not run a second listener beside this process.
+
+### TanStack Start skeleton
+
+This tree serves HTTP with TanStack Start, React, and shadcn/ui. Nitro builds a Node server into `.output/server/index.mjs`. `dureview serve` imports that file in the same process. Docker still starts `node dist/cli.js serve`.
+
+Migrated onto TanStack Start routes:
+
+- `GET /health`
+- `POST /webhook`, including `X-Hub-Signature-256` verification, then the existing pi-durable review enqueue
+- `GET /` and `GET /ui` review list, React + shadcn, reading `$DUREVIEW_DATA_DIR/reviews.sqlite`
+- `GET` and `POST /ui/login`. The cookie is still `dureview_ui`: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, 30 days. The value is `DUREVIEW_UI_TOKEN`.
+
+Not migrated yet:
+
+- `GET /ui/reviews/:taskId` still returns the previous HTML detail page (diff parsing in `src/ui/diff.ts` is unchanged and still used there)
+- Codex `login` / `logout`, review execution, GitHub publishing, and the archive format
+- Tests still boot an in-process `node:http` listener (`startHttp`) so they can call the same helpers without Vite. That listener is not the production server.
+
+`npm run typecheck` and `npm test` (106 tests) pass on this branch.
 
 ## Login
 
@@ -226,8 +265,8 @@ Metadata, those comments, and the failure reason are stored in `$DUREVIEW_DATA_D
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `DUREVIEW_DATA_DIR` | `./data` | Session database, review archive, `auth.json`, and checkouts. Mount this. |
-| `DUREVIEW_HOST` | `0.0.0.0` | Webhook bind address |
-| `DUREVIEW_PORT` | `8787` | Webhook port |
+| `DUREVIEW_HOST` | `0.0.0.0` | Bind address for `npm run dev`. Production uses this only when `HOST` is unset. |
+| `DUREVIEW_PORT` | `8787` | Port for `npm run dev`. Production uses this only when `PORT` is unset. |
 | `DUREVIEW_WEBHOOK_SECRET` | | HMAC secret for `X-Hub-Signature-256`. Also accepts `GITHUB_WEBHOOK_SECRET`. |
 | `DUREVIEW_PROVIDER` | `openai-codex` if a Codex credential exists, otherwise `openai` when `OPENAI_API_KEY` is set | `openai-codex` or `openai` |
 | `DUREVIEW_MODEL` | `gpt-5.5` | Model id from the pi-ai catalog for the selected provider |
@@ -249,9 +288,11 @@ Metadata, those comments, and the failure reason are stored in `$DUREVIEW_DATA_D
 
 ```bash
 npm ci
-npm run build
+npm run dev
+npm run typecheck
 npm test
 npm run e2e
+npm run build
 ```
 
 Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, the manual default when `.dureview.md` is missing or omits `trigger`, `DUREVIEW_DEFAULT_TRIGGER`, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, review-page authentication, the review archive and its filters, diff comments placed on the live pull request files, the recent-review log, and check runs (success, blocking failure, suggestions, a failed review, a 403 from the Checks API, reuse after a crash during checkout, a retried check update, an abort during create, `filter=all`, and overlapping reviews on one SHA).

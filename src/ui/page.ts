@@ -455,15 +455,26 @@ function statusLine(status: DashboardStatus): string {
   ].join(" · ");
 }
 
-function codexLabel(codex: DashboardStatus["codex"]): string {
-  if (codex.unreadable) return "Codex login unreadable";
-  if (!codex.present) return "Codex not signed in";
-  if (!codex.expiresAt) return "Codex signed in";
-  const when = formatTime(codex.expiresAt);
+export type CodexPhrase =
+  | { kind: "plain"; text: string }
+  | { kind: "timed"; lead: string; iso: string; label: string };
+
+/** Same wording the status line uses for the Codex credential. `label` is the UTC timestamp. */
+export function codexPhrase(codex: DashboardStatus["codex"], now = Date.now()): CodexPhrase {
+  if (codex.unreadable) return { kind: "plain", text: "Codex login unreadable" };
+  if (!codex.present) return { kind: "plain", text: "Codex not signed in" };
+  if (!codex.expiresAt) return { kind: "plain", text: "Codex signed in" };
+  const label = formatTime(codex.expiresAt);
   const expiry = Date.parse(codex.expiresAt);
-  if (Number.isNaN(expiry) || when === "") return "Codex signed in";
-  if (expiry <= Date.now()) return `Codex signed in, access token expired ${timeElement(codex.expiresAt)}`;
-  return `Codex signed in, access token expires ${timeElement(codex.expiresAt)}`;
+  if (Number.isNaN(expiry) || label === "") return { kind: "plain", text: "Codex signed in" };
+  if (expiry <= now) return { kind: "timed", lead: "Codex signed in, access token expired ", iso: codex.expiresAt, label };
+  return { kind: "timed", lead: "Codex signed in, access token expires ", iso: codex.expiresAt, label };
+}
+
+function codexLabel(codex: DashboardStatus["codex"]): string {
+  const phrase = codexPhrase(codex);
+  if (phrase.kind === "plain") return phrase.text;
+  return `${phrase.lead}${timeElement(phrase.iso)}`;
 }
 
 function repoOptions(repos: string[], selected: string): string {

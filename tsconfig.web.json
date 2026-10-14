@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node", "vite/client"],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "src/routes",
+    "src/router.tsx",
+    "src/server-entry.ts",
+    "src/ui/list-fn.ts",
+    "src/routeTree.gen.ts",
+    "src/components",
+    "src/lib",
+    "src/ui",
+    "src/http",
+    "src/app",
+    "vite.config.ts"
+  ]
+}
