@@ -14,6 +14,7 @@ import { Route as HealthRouteImport } from './routes/health'
 import { Route as WebhookRouteImport } from './routes/webhook'
 import { Route as UiIndexRouteImport } from './routes/ui/index'
 import { Route as UiLoginRouteImport } from './routes/ui/login'
+import { Route as UiStatsRouteImport } from './routes/ui/stats'
 import { Route as UiReviewsTaskIdRouteImport } from './routes/ui/reviews/$taskId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -41,6 +42,11 @@ const UiLoginRoute = UiLoginRouteImport.update({
   path: '/ui/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const UiStatsRoute = UiStatsRouteImport.update({
+  id: '/ui/stats',
+  path: '/ui/stats',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const UiReviewsTaskIdRoute = UiReviewsTaskIdRouteImport.update({
   id: '/ui/reviews/$taskId',
   path: '/ui/reviews/$taskId',
@@ -52,6 +58,7 @@ export interface FileRoutesByFullPath {
   '/health': typeof HealthRoute
   '/webhook': typeof WebhookRoute
   '/ui/login': typeof UiLoginRoute
+  '/ui/stats': typeof UiStatsRoute
   '/ui/': typeof UiIndexRoute
   '/ui/reviews/$taskId': typeof UiReviewsTaskIdRoute
 }
@@ -60,6 +67,7 @@ export interface FileRoutesByTo {
   '/health': typeof HealthRoute
   '/webhook': typeof WebhookRoute
   '/ui/login': typeof UiLoginRoute
+  '/ui/stats': typeof UiStatsRoute
   '/ui': typeof UiIndexRoute
   '/ui/reviews/$taskId': typeof UiReviewsTaskIdRoute
 }
@@ -69,21 +77,36 @@ export interface FileRoutesById {
   '/health': typeof HealthRoute
   '/webhook': typeof WebhookRoute
   '/ui/login': typeof UiLoginRoute
+  '/ui/stats': typeof UiStatsRoute
   '/ui/': typeof UiIndexRoute
   '/ui/reviews/$taskId': typeof UiReviewsTaskIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/health' | '/webhook' | '/ui/login' | '/ui/' | '/ui/reviews/$taskId'
+    | '/'
+    | '/health'
+    | '/webhook'
+    | '/ui/login'
+    | '/ui/stats'
+    | '/ui/'
+    | '/ui/reviews/$taskId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/health' | '/webhook' | '/ui/login' | '/ui' | '/ui/reviews/$taskId'
+  to:
+    | '/'
+    | '/health'
+    | '/webhook'
+    | '/ui/login'
+    | '/ui/stats'
+    | '/ui'
+    | '/ui/reviews/$taskId'
   id:
     | '__root__'
     | '/'
     | '/health'
     | '/webhook'
     | '/ui/login'
+    | '/ui/stats'
     | '/ui/'
     | '/ui/reviews/$taskId'
   fileRoutesById: FileRoutesById
@@ -93,6 +116,7 @@ export interface RootRouteChildren {
   HealthRoute: typeof HealthRoute
   WebhookRoute: typeof WebhookRoute
   UiLoginRoute: typeof UiLoginRoute
+  UiStatsRoute: typeof UiStatsRoute
   UiIndexRoute: typeof UiIndexRoute
   UiReviewsTaskIdRoute: typeof UiReviewsTaskIdRoute
 }
@@ -134,6 +158,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UiLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/ui/stats': {
+      id: '/ui/stats'
+      path: '/ui/stats'
+      fullPath: '/ui/stats'
+      preLoaderRoute: typeof UiStatsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ui/reviews/$taskId': {
       id: '/ui/reviews/$taskId'
       path: '/ui/reviews/$taskId'
@@ -149,6 +180,7 @@ const rootRouteChildren: RootRouteChildren = {
   HealthRoute: HealthRoute,
   WebhookRoute: WebhookRoute,
   UiLoginRoute: UiLoginRoute,
+  UiStatsRoute: UiStatsRoute,
   UiIndexRoute: UiIndexRoute,
   UiReviewsTaskIdRoute: UiReviewsTaskIdRoute,
 }

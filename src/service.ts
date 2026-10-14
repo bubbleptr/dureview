@@ -14,6 +14,7 @@ import { log } from "./log.js";
 import { readBaseDureview, safeRepoPath, type RepoCheckout } from "./review/checkout.js";
 import { loadReviewFilePair, matchReviewedFile, type ReviewFileContents } from "./ui/file-contents.js";
 import { ReviewArchive, REVIEWS_DB_FILE, type ReviewDetail, type ReviewFilter, type ReviewList } from "./review/archive.js";
+import type { StatsQuery, StatsSnapshot } from "./review/stats.js";
 import type { PullFile } from "./github/client.js";
 import { ReviewLog, type ReviewLogEntry } from "./review/history.js";
 import { createReviewRuntime, enqueueReview, type EnqueueMode, type EnqueueResult, type ReviewHooks, type ReviewResult } from "./review/task.js";
@@ -153,6 +154,11 @@ export class DureviewService {
   /** Filtered review rows for the list page. Does not include comment text. */
   reviewsForUi(filter: ReviewFilter): Promise<ReviewList> {
     return this.archive.list(filter);
+  }
+
+  /** Aggregated statistics. Finding text is not returned. */
+  statsForUi(filter: StatsQuery): Promise<StatsSnapshot> {
+    return this.archive.stats(filter);
   }
 
   /** True when this task is in the archive. Does not call GitHub. */

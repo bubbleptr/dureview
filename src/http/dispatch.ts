@@ -2,7 +2,8 @@ import type { DureviewService } from "../service.js";
 import { safeNextPath } from "../ui/auth.js";
 import type { ListContext } from "../ui/list-data.js";
 import { buildReviewList, searchParamsFrom } from "../ui/list-data.js";
-import { renderListHtml, renderLoginHtml } from "../ui/render-react.js";
+import { buildStatsPage } from "../ui/stats-data.js";
+import { renderListHtml, renderLoginHtml, renderStatsHtml } from "../ui/render-react.js";
 import { gateGetPage, uiSession } from "./auth.js";
 import { reviewDetailResponse } from "./detail.js";
 import { htmlResponse, notFoundJson, redirectResponse, unauthorizedJson } from "./headers.js";
@@ -26,6 +27,7 @@ export async function dispatch(ctx: DispatchContext, request: Request): Promise<
   }
   if (pathname === "/ui/login") return loginDispatch(ctx, request);
   if (method === "GET" && (pathname === "/" || pathname === "/ui")) return listDispatch(ctx, request, pathname);
+  if (method === "GET" && pathname === "/ui/stats") return statsDispatch(ctx, request);
   const detail = method === "GET" ? /^\/ui\/reviews\/([A-Za-z0-9_-]{1,64})$/.exec(pathname) : null;
   const taskId = detail?.[1];
   if (taskId) {
@@ -57,6 +59,15 @@ async function listDispatch(ctx: DispatchContext, request: Request, pathname: st
   if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(pathname) }), 401);
   const model = await buildReviewList(ctx, searchParamsFrom(new URL(request.url).search));
   return htmlResponse(renderListHtml(model));
+}
+
+async function statsDispatch(ctx: DispatchContext, request: Request): Promise<Response> {
+  const gate = gateGetPage(request, ctx.uiToken);
+  if (gate === "disabled") return notFoundJson();
+  if (gate === "challenge") return unauthorizedJson();
+  if (gate === "login") return htmlResponse(renderLoginHtml({ next: "/ui/stats" }), 401);
+  const model = await buildStatsPage(ctx.service, searchParamsFrom(new URL(request.url).search));
+  return htmlResponse(renderStatsHtml(model));
 }
 
 function stripTrailingSlash(pathname: string): string {

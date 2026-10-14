@@ -35,11 +35,13 @@ describe("status page", () => {
 
     const root = await fetch(`${http.url}/`);
     const ui = await fetch(`${http.url}/ui`);
+    const stats = await fetch(`${http.url}/ui/stats`);
     const detail = await fetch(`${http.url}/ui/reviews/1`);
     const login = await fetch(`${http.url}/ui/login`, { method: "POST" });
     expect(root.status).toBe(404);
     expect(login.status).toBe(404);
     expect(detail.status).toBe(404);
+    expect(stats.status).toBe(404);
     expect(await root.json()).toEqual({ error: "not found" });
     expect(root.headers.get("www-authenticate")).toBeNull();
     expect(ui.status).toBe(404);
@@ -397,6 +399,98 @@ describe("status page", () => {
       headers: { authorization: `Bearer ${UI_TOKEN}` },
     });
     expect(missing.status).toBe(404);
+  });
+
+  it("serves the statistics page behind the same token", async () => {
+    const dataDir = await tempDataDir();
+    const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
+    await archive.open();
+    await archive.start({
+      taskId: "1",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      title: "Charge positive amounts",
+      sha: SHA_A,
+      baseSha: "1111111111111111111111111111111111111111",
+      baseRef: "main",
+      installationId: 99,
+      trigger: "opened",
+    });
+    await archive.finish({
+      taskId: "1",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      outcome: "completed",
+      verdict: "fix_recommended",
+      findingCount: 1,
+      provider: "faux",
+      modelId: "faux-1",
+      usage: {
+        inputTokens: 400,
+        outputTokens: 80,
+        cacheReadTokens: 20,
+        reasoningTokens: 0,
+        modelCalls: 3,
+        costUsd: 0,
+      },
+      findings: [
+        {
+          title: "Dropped charge",
+          priority: 1,
+          kind: "bug",
+          category: "correctness",
+          path: "src/pay.ts",
+          startLine: 2,
+          endLine: 2,
+          body: "charge() reports success without billing.",
+          trigger: "if (amount > 0) return { ok: true };",
+          confidence: 0.9,
+          fingerprint: "aaaaaaaaaaaa",
+        },
+      ],
+    });
+    archive.close();
+
+    const github = new MemoryGitHub();
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const http = await startHttp(service, { host: "127.0.0.1", port: 0, uiToken: UI_TOKEN, dataDir });
+    closers.push(async () => {
+      await http.close();
+      await service.close();
+    });
+
+    const locked = await fetch(`${http.url}/ui/stats`);
+    expect(locked.status).toBe(401);
+    const loginHtml = await locked.text();
+    expect(loginHtml).toContain('name="next" value="/ui/stats"');
+    expect(loginHtml).not.toContain(UI_TOKEN);
+
+    const page = await fetch(`${http.url}/ui/stats?range=all`, {
+      headers: { authorization: `Bearer ${UI_TOKEN}` },
+    });
+    expect(page.status).toBe(200);
+    expect(page.headers.get("cache-control")).toBe("no-store");
+    const html = await page.text();
+    expect(html).toContain("Statistics");
+    expect(html).toContain("Tokens by day");
+    expect(html).toContain("Avg tokens");
+    expect(html).toContain("acme/demo");
+    expect(html).toContain("Charge positive amounts");
+    expect(html).not.toContain(UI_TOKEN);
+    expect(html).not.toContain(SHA_A);
+
+    const list = await fetch(`${http.url}/ui`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    expect(await list.text()).toContain('href="/ui/stats"');
+
+    const next = await fetch(`${http.url}/ui/login`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: UI_TOKEN, next: "/ui/stats" }),
+    });
+    expect(next.headers.get("location")).toBe("/ui/stats");
   });
 });
 
