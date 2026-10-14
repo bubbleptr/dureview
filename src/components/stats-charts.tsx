@@ -4,6 +4,16 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } f
 
 const PALETTE = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
 
+/** Recharts draws a line over 1500ms, so a load or screenshot shows a stroke that stops early. Keep the series complete on first paint, including when the user prefers reduced motion. */
+export function trendLineAnimationActive(reducedMotion: boolean): boolean {
+  if (reducedMotion) return false;
+  return false;
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 export function TokenTrendChart({ trend }: { trend: StatsPageModel["trend"] }) {
   const config: ChartConfig = {};
   trend.models.forEach((model, index) => {
@@ -27,6 +37,7 @@ export function TokenTrendChart({ trend }: { trend: StatsPageModel["trend"] }) {
             strokeWidth={2}
             dot={false}
             connectNulls={false}
+            isAnimationActive={trendLineAnimationActive(prefersReducedMotion())}
           />
         ))}
       </LineChart>
