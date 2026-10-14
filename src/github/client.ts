@@ -118,6 +118,11 @@ export interface GitHub {
   /** 👀 on an accepted `/dureview` comment. GitHub treats a repeat as the same reaction. */
   reactToComment(request: GitHubRepo, commentId: number, signal: AbortSignal): Promise<void>;
   /**
+   * Changed files for a pull request, including each file's patch when GitHub sends one.
+   * Callers fetch this when a review is opened. It is not stored.
+   */
+  listPullFiles(request: GitHubRepo & { number: number }, signal: AbortSignal): Promise<PullFile[]>;
+  /**
    * Check runs named `name` on `sha`, including in-progress runs (`filter=all`).
    * Used to reuse the run this task already opened after a crash between the create
    * call and the next checkpoint, and to close another in-progress run on the same SHA.
@@ -137,6 +142,16 @@ export interface GitHub {
     signal: AbortSignal,
   ): Promise<CheckRun>;
 }
+
+/** One file from `GET /repos/{owner}/{repo}/pulls/{number}/files`. */
+export type PullFile = {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch: string | null;
+  previousFilename: string | null;
+};
 
 type CachedToken = { token: string; expiresAt: number };
 
@@ -435,6 +450,18 @@ export class GithubRest implements GitHub {
     });
   }
 
+  async listPullFiles(request: GitHubRepo & { number: number }, signal: AbortSignal): Promise<PullFile[]> {
+    const collected: PullFile[] = [];
+    let next: string | undefined =
+      `/repos/${request.owner}/${request.repo}/pulls/${request.number}/files?per_page=100`;
+    for (let page = 0; page < 30 && next; page += 1) {
+      const response = await this.#send(request, "GET", next, signal);
+      collected.push(...parsePullFiles(await response.json()));
+      next = linkNext(response.headers.get("link"));
+    }
+    return collected;
+  }
+
   async listCheckRuns(request: GitHubRepo, sha: string, name: string, signal: AbortSignal): Promise<CheckRun[]> {
     const collected: CheckRun[] = [];
     const checkName = encodeURIComponent(name);
@@ -578,6 +605,31 @@ export function appJwt(appId: string, privateKey: string, now = Date.now()): str
 
 function base64url(value: string): string {
   return Buffer.from(value).toString("base64url");
+}
+
+/** Keep files whose names stay inside the repository. A missing patch stays null. */
+export function parsePullFiles(payload: unknown): PullFile[] {
+  if (!Array.isArray(payload)) throw new Error("GitHub pull files did not return a list");
+  const files: PullFile[] = [];
+  for (const row of payload) {
+    if (!isRecord(row) || typeof row.filename !== "string") continue;
+    const filename = row.filename.replaceAll("\\", "/").replace(/^\.\//, "");
+    if (!filename || filename.startsWith("/") || filename.split("/").includes("..")) continue;
+    files.push({
+      filename,
+      status: typeof row.status === "string" ? row.status : "modified",
+      additions: nonNegative(row.additions),
+      deletions: nonNegative(row.deletions),
+      patch: typeof row.patch === "string" ? row.patch : null,
+      previousFilename: typeof row.previous_filename === "string" ? row.previous_filename : null,
+    });
+  }
+  return files;
+}
+
+function nonNegative(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return 0;
+  return value;
 }
 
 function linkNext(header: string | null): string | undefined {

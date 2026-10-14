@@ -1,6 +1,8 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { log } from "../log.js";
+import type { ReviewPolicy } from "./policy.js";
+import type { Finding } from "./schema.js";
 
 /** How many reviews `reviews.json` keeps. Newest entries stay. */
 export const MAX_REVIEWS = 50;
@@ -11,7 +13,8 @@ const TRIGGERS = new Set(["opened", "synchronize", "reopened", "ready_for_review
 
 /**
  * Outcome written when a review task finishes.
- * Finding text, diffs, and credentials are intentionally absent.
+ * Finding text, diffs, credentials, and failure reasons are intentionally absent
+ * from `reviews.json`. The archive may store `error` separately.
  */
 export type ReviewFinished = {
   taskId: string;
@@ -21,6 +24,24 @@ export type ReviewFinished = {
   outcome: "completed" | "failed";
   verdict: "block" | "fix_recommended" | "clean" | null;
   findingCount: number | null;
+  /**
+   * Optional context for the review archive. `reviews.json` does not store these.
+   * Finding text and the failure reason stay out of the short log.
+   */
+  title?: string;
+  sha?: string;
+  baseSha?: string;
+  baseRef?: string;
+  installationId?: number | null;
+  verdictReason?: string | null;
+  overallConfidence?: number | null;
+  checked?: string[];
+  policy?: ReviewPolicy | null;
+  findings?: Finding[];
+  provider?: string;
+  modelId?: string;
+  /** Failure reason for the archive only. Not written to `reviews.json`. */
+  error?: string;
 };
 
 export type ReviewLogEntry = {

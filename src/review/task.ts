@@ -122,7 +122,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               language,
               signal,
             },
-            () => notifyFinished(deps, failedEvent(current)),
+            () => notifyFinished(deps, failedEvent(current, error)),
           );
         try {
           if (slot.kind === "missing" || slot.kind === "retry") {
@@ -210,7 +210,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               language: checkpoint.policy.language,
               signal,
             },
-            () => notifyFinished(deps, failedEvent(current)),
+            () => notifyFinished(deps, failedEvent(current, error)),
           );
         try {
           const conversationId = checkpoint.conversationId as ConversationId;
@@ -297,7 +297,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               language: checkpoint.policy.language,
               signal,
             },
-            () => notifyFinished(deps, failedEvent(current)),
+            () => notifyFinished(deps, failedEvent(current, error)),
           );
         let checkCompleted = false;
         try {
@@ -364,6 +364,18 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             outcome: "completed",
             verdict: checkpoint.review.verdict,
             findingCount: checkpoint.review.findings.length,
+            title: current.input.title,
+            sha: current.input.sha,
+            baseSha: current.input.baseSha,
+            baseRef: current.input.baseRef,
+            installationId: current.input.installationId,
+            verdictReason: checkpoint.review.verdictReason,
+            overallConfidence: checkpoint.review.overallConfidence,
+            checked: checkpoint.review.checked,
+            policy: checkpoint.policy,
+            findings: checkpoint.review.findings,
+            provider: checkpoint.provider,
+            modelId: checkpoint.modelId,
           });
           await runtime.commit(
             () => ({
@@ -379,7 +391,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
           if (context.abortSignal?.aborted) throw error instanceof Error ? error : new Error(String(error));
           if (error instanceof CheckUpdateError) {
             log("error", "could not update the dureview check run", { error: error.message });
-            await notifyFinished(deps, failedEvent(current));
+            await notifyFinished(deps, failedEvent(current, error));
             await runtime.commit(
               () => ({ status: "terminal", outcome: { status: "failed", error: { message: error.message } } }),
               context,
@@ -608,7 +620,8 @@ async function notifyFinished(deps: ReviewDeps, event: ReviewFinished): Promise<
   }
 }
 
-function failedEvent(current: { id: TaskId<ReviewResult>; input: ReviewRequest }): ReviewFinished {
+function failedEvent(current: { id: TaskId<ReviewResult>; input: ReviewRequest }, error: unknown): ReviewFinished {
+  const message = error instanceof Error ? error.message : String(error);
   return {
     taskId: String(current.id),
     owner: current.input.owner,
@@ -617,6 +630,12 @@ function failedEvent(current: { id: TaskId<ReviewResult>; input: ReviewRequest }
     outcome: "failed",
     verdict: null,
     findingCount: null,
+    error: message,
+    title: current.input.title,
+    sha: current.input.sha,
+    baseSha: current.input.baseSha,
+    baseRef: current.input.baseRef,
+    installationId: current.input.installationId,
   };
 }
 

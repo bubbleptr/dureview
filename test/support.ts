@@ -16,6 +16,7 @@ import {
   type PullReviewComment,
   type RemotePull,
   type ReviewCommentDraft,
+  type PullFile,
   type ReviewEvent,
 } from "../src/github/client.js";
 import { loadDureviewFile, type Checkout, type RepoCheckout } from "../src/review/checkout.js";
@@ -308,6 +309,19 @@ export class MemoryGitHub implements GitHub {
   async reactToComment(_request: GitHubRepo, commentId: number): Promise<void> {
     this.calls.push("reactToComment");
     this.reactions.push({ commentId, content: "eyes" });
+  }
+
+  /** Files returned by `listPullFiles`. Empty until a test sets them. */
+  pullFiles: PullFile[] = [];
+  pullFileRequests: Array<{ installationId: number | null; number: number }> = [];
+  /** When set, `listPullFiles` throws this instead of returning `pullFiles`. */
+  pullFilesError: Error | null = null;
+
+  async listPullFiles(request: GitHubRepo & { number: number }): Promise<PullFile[]> {
+    this.calls.push("listPullFiles");
+    this.pullFileRequests.push({ installationId: request.installationId, number: request.number });
+    if (this.pullFilesError) throw this.pullFilesError;
+    return this.pullFiles.map((file) => ({ ...file }));
   }
 
   async listCheckRuns(_request: GitHubRepo, sha: string, name: string): Promise<CheckRun[]> {

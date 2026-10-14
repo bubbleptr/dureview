@@ -12,6 +12,8 @@ import { verifyGithubSignature } from "./github/signature.js";
 import { parseWebhook, type ReviewCommand } from "./github/webhook.js";
 import { log } from "./log.js";
 import { readBaseDureview, type RepoCheckout } from "./review/checkout.js";
+import { ReviewArchive, REVIEWS_DB_FILE, type ReviewDetail, type ReviewFilter, type ReviewList } from "./review/archive.js";
+import type { PullFile } from "./github/client.js";
 import { ReviewLog, type ReviewLogEntry } from "./review/history.js";
 import { createReviewRuntime, enqueueReview, type EnqueueMode, type EnqueueResult, type ReviewHooks, type ReviewResult } from "./review/task.js";
 import { permissionAllowsCommand, shouldReviewPull, type PullReviewAction } from "./review/trigger.js";
@@ -37,11 +39,17 @@ export class DureviewService {
     private readonly config: Config,
     private readonly github: GitHub,
     private readonly reviews: ReviewLog,
+    private readonly archive: ReviewArchive,
   ) {}
 
   static async open(options: ServiceOptions): Promise<DureviewService> {
     await mkdir(options.config.dataDir, { recursive: true, mode: 0o700 });
     const reviews = new ReviewLog(join(options.config.dataDir, "reviews.json"));
+    const archive = new ReviewArchive(
+      join(options.config.dataDir, REVIEWS_DB_FILE),
+      join(options.config.dataDir, "reviews.json"),
+    );
+    await archive.open();
     const { extension, task } = createReviewRuntime({
       checkout: options.checkout,
       github: options.github,
@@ -49,11 +57,20 @@ export class DureviewService {
       modelId: options.modelId,
       thinking: options.config.thinking,
       hooks: options.hooks,
-      onFinished: (event) => reviews.finish(event),
+      onFinished: async (event) => {
+        try {
+          await reviews.finish(event);
+        } catch (error) {
+          log("error", "could not record review", { error: error instanceof Error ? error.message : String(error) });
+        }
+        await archive.finish(event);
+      },
     });
     const registry = createRegistry();
     registry.install(extension);
-    const harness = await Harness.open(
+    let harness: Harness;
+    try {
+      harness = await Harness.open(
       await openNodeSqliteStorage(storageFile(options.config)),
       {
         models: options.models,
@@ -71,9 +88,13 @@ export class DureviewService {
       },
       BACKGROUND_CONTEXT,
     );
+    } catch (error) {
+      archive.close();
+      throw error;
+    }
     const root = await harness.root(BACKGROUND_CONTEXT);
     harness.resume();
-    return new DureviewService(harness, root.id, task, options.config, options.github, reviews);
+    return new DureviewService(harness, root.id, task, options.config, options.github, reviews, archive);
   }
 
   async enqueue(request: ReviewRequest, mode: EnqueueMode = { kind: "sha" }, trigger = "unknown"): Promise<EnqueueResult> {
@@ -87,6 +108,22 @@ export class DureviewService {
           owner: request.owner,
           repo: request.repo,
           number: request.number,
+          trigger,
+        });
+      } catch (error) {
+        log("error", "could not record review", { error: error instanceof Error ? error.message : String(error) });
+      }
+      try {
+        await this.archive.start({
+          taskId: String(result.taskId),
+          owner: request.owner,
+          repo: request.repo,
+          number: request.number,
+          title: request.title,
+          sha: request.sha,
+          baseSha: request.baseSha,
+          baseRef: request.baseRef,
+          installationId: request.installationId,
           trigger,
         });
       } catch (error) {
@@ -110,6 +147,42 @@ export class DureviewService {
   /** Newest reviews first. Empty when the log is missing or unreadable. */
   recentReviews(): Promise<ReviewLogEntry[]> {
     return this.reviews.list();
+  }
+
+  /** Filtered review rows for the list page. Does not include comment text. */
+  reviewsForUi(filter: ReviewFilter): Promise<ReviewList> {
+    return this.archive.list(filter);
+  }
+
+  /**
+   * One saved review plus the pull request files fetched now.
+   * The diff is not read from disk. A GitHub error leaves the saved comments in place.
+   */
+  async reviewForUi(
+    taskId: string,
+    signal: AbortSignal,
+  ): Promise<{ review: ReviewDetail; files: PullFile[]; diffUnavailable: boolean } | null> {
+    const review = await this.archive.get(taskId);
+    if (!review) return null;
+    try {
+      const files = await this.github.listPullFiles(
+        {
+          owner: review.owner,
+          repo: review.repo,
+          number: review.number,
+          installationId: review.installationId,
+        },
+        signal,
+      );
+      return { review, files, diffUnavailable: false };
+    } catch (error) {
+      log("error", "could not load pull request diff", {
+        repo: `${review.owner}/${review.repo}`,
+        pr: review.number,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { review, files: [], diffUnavailable: true };
+    }
   }
 
   async wait(taskId: TaskId<ReviewResult>) {
@@ -231,6 +304,10 @@ export class DureviewService {
   }
 
   async close(): Promise<void> {
-    await this.harness.close(BACKGROUND_CONTEXT);
+    try {
+      await this.harness.close(BACKGROUND_CONTEXT);
+    } finally {
+      this.archive.close();
+    }
   }
 }
