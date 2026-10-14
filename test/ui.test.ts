@@ -1,7 +1,8 @@
 import { createHmac } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { ReviewArchive } from "../src/review/archive.js";
 import type { RepoCheckout } from "../src/review/checkout.js";
 import { startHttp } from "../src/server.js";
 import { VERSION } from "../src/version.js";
@@ -34,7 +35,11 @@ describe("status page", () => {
 
     const root = await fetch(`${http.url}/`);
     const ui = await fetch(`${http.url}/ui`);
+    const detail = await fetch(`${http.url}/ui/reviews/1`);
+    const login = await fetch(`${http.url}/ui/login`, { method: "POST" });
     expect(root.status).toBe(404);
+    expect(login.status).toBe(404);
+    expect(detail.status).toBe(404);
     expect(await root.json()).toEqual({ error: "not found" });
     expect(root.headers.get("www-authenticate")).toBeNull();
     expect(ui.status).toBe(404);
@@ -87,12 +92,18 @@ describe("status page", () => {
 
     const missing = await fetch(`${http.url}/`);
     expect(missing.status).toBe(401);
-    expect(await missing.json()).toEqual({ error: "unauthorized" });
-    expect(missing.headers.get("www-authenticate")).toContain("Basic");
+    expect(missing.headers.get("content-type")).toContain("text/html");
+    expect(missing.headers.get("www-authenticate")).toBeNull();
+    const loginHtml = await missing.text();
+    expect(loginHtml).toContain('action="/ui/login"');
+    expect(loginHtml).toContain("登录");
+    expect(loginHtml).not.toContain(UI_TOKEN);
     expect(JSON.stringify(missing.headers)).not.toContain(UI_TOKEN);
 
     const wrong = await fetch(`${http.url}/ui`, { headers: { authorization: "Bearer nope" } });
     expect(wrong.status).toBe(401);
+    expect(await wrong.json()).toEqual({ error: "unauthorized" });
+    expect(wrong.headers.get("www-authenticate")).toContain("Basic");
 
     const query = await fetch(`${http.url}/?token=${UI_TOKEN}`);
     expect(query.status).toBe(401);
@@ -117,13 +128,16 @@ describe("status page", () => {
     expect(page.headers.get("cache-control")).toBe("no-store");
     const html = await page.text();
     expect(html).toContain(VERSION);
-    expect(html).toContain("acme/demo");
-    expect(html).toContain("https://github.com/acme/demo/pull/7");
-    expect(html).toContain("opened");
-    expect(html).toContain("fix recommended · 1 finding");
-    expect(html).toContain("access token expires 2030-01-02 03:04 UTC");
-    expect(html).toContain("<dt>GitHub App</dt><dd>no</dd>");
-    expect(html).toContain("<dt>GitHub token</dt><dd>yes</dd>");
+    expect(html).toContain("acme/demo #7");
+    expect(html).toContain(`/ui/reviews/${body.taskId}`);
+    expect(html).toContain("Charge positive amounts");
+    expect(html).toContain(">auto<");
+    expect(html).toContain("P0/P1");
+    expect(html).toContain("access token expires ");
+    expect(html).toContain('datetime="2030-01-02T03:04:05.000Z"');
+    expect(html).toContain("2030-01-02 03:04 UTC");
+    expect(html).toContain("GitHub App <b>no</b>");
+    expect(html).toContain("GitHub token <b>yes</b>");
     expect(html).not.toContain("ACCESS_TOKEN_CANARY_9f3a");
     expect(html).not.toContain("REFRESH_TOKEN_CANARY_bb12");
     expect(html).not.toContain(SECRET);
@@ -131,8 +145,48 @@ describe("status page", () => {
     expect(html).not.toContain(UI_TOKEN);
     expect(html).not.toContain(SHA_A);
     expect(html).not.toContain(dataDir);
-    expect(html).not.toContain("Charge positive amounts");
     expect(html).not.toContain("billing");
+    expect(html).not.toContain("never billed");
+    expect(github.calls.filter((call) => call === "listPullFiles")).toHaveLength(0);
+
+    github.pullFiles = [
+      {
+        filename: "src/pay.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        previousFilename: null,
+        patch: [
+          "@@ -1,5 +1,6 @@",
+          " export function charge(amount: number): { ok: boolean } {",
+          "-  return gateway.capture(amount);",
+          "+  if (amount > 0) return { ok: true };",
+          "+  return gateway.capture(amount);",
+          " }",
+          " ",
+          " const gateway = {",
+        ].join("\n"),
+      },
+    ];
+    const detail = await fetch(`${http.url}/ui/reviews/${body.taskId}`, {
+      headers: { authorization: `Bearer ${UI_TOKEN}` },
+    });
+    expect(detail.status).toBe(200);
+    const detailHtml = await detail.text();
+    expect(detailHtml).toContain("https://github.com/acme/demo/pull/7");
+    expect(detailHtml).toContain("Reviews");
+    expect(detailHtml).toContain("src/pay.ts");
+    expect(detailHtml).toContain("if (amount &gt; 0) return { ok: true };");
+    expect(detailHtml).toContain("never billed");
+    expect(detailHtml.indexOf("never billed")).toBeGreaterThan(detailHtml.indexOf("if (amount &gt; 0) return { ok: true };"));
+    expect(detailHtml).toContain("<dt>trigger</dt><dd title=\"manual\">manual</dd>");
+    expect(detailHtml).toContain("P1");
+    expect(github.pullFileRequests).toEqual([{ installationId: 99, number: 7 }]);
+    expect(detailHtml).not.toContain(SHA_A);
+    expect(detailHtml).not.toContain(UI_TOKEN);
+    const stored = await readFile(join(dataDir, "reviews.sqlite"));
+    expect(stored.toString("utf8")).toContain("never billed");
+    expect(stored.toString("utf8")).not.toContain("if (amount > 0) return { ok: true };");
 
     const ui = await fetch(`${http.url}/ui/`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
     expect(ui.status).toBe(200);
@@ -145,7 +199,7 @@ describe("status page", () => {
     expect(posted.status).toBe(404);
   });
 
-  it("records a failed review without the failure text", async () => {
+  it("stores a failed review's error in the archive but not the short log", async () => {
     const dataDir = await tempDataDir();
     const github = new MemoryGitHub();
     const checkout: RepoCheckout = {
@@ -185,6 +239,152 @@ describe("status page", () => {
       findingCount: null,
     });
     expect(JSON.stringify(reviews)).not.toContain("CANARY_SHOULD_NOT_BE_STORED");
+    const log = await readFile(join(dataDir, "reviews.json"), "utf8");
+    expect(log).not.toContain("CANARY_SHOULD_NOT_BE_STORED");
+    const stored = await readFile(join(dataDir, "reviews.sqlite"));
+    expect(stored.toString("utf8")).toContain("CANARY_SHOULD_NOT_BE_STORED");
+    expect(stored.toString("utf8")).toContain("Charge positive amounts");
+    const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
+    await archive.open();
+    const detail = await archive.get(String(queued.taskId));
+    expect(detail?.error).toContain("clone failed CANARY_SHOULD_NOT_BE_STORED");
+    archive.close();
+  });
+
+  it("sets an HttpOnly cookie from the login form and keeps bearer auth", async () => {
+    const dataDir = await tempDataDir();
+    const github = new MemoryGitHub();
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const http = await startHttp(service, { host: "127.0.0.1", port: 0, uiToken: UI_TOKEN, dataDir });
+    closers.push(async () => {
+      await http.close();
+      await service.close();
+    });
+
+    const rejected = await fetch(`${http.url}/ui/login`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: "wrong-token-canary", next: "/ui/reviews/1" }),
+    });
+    expect(rejected.status).toBe(401);
+    expect(rejected.headers.get("set-cookie")).toBeNull();
+    expect(rejected.headers.get("www-authenticate")).toBeNull();
+    const rejectedHtml = await rejected.text();
+    expect(rejectedHtml).toContain("token 不正确");
+    expect(rejectedHtml).not.toContain("wrong-token-canary");
+    expect(rejectedHtml).not.toContain(UI_TOKEN);
+
+    const evil = await fetch(`${http.url}/ui/login`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: UI_TOKEN, next: "https://evil.example/phish" }),
+    });
+    expect(evil.status).toBe(303);
+    expect(evil.headers.get("location")).toBe("/ui");
+    const setCookie = evil.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain("HttpOnly");
+    expect(setCookie).toContain("Secure");
+    expect(setCookie).toContain("SameSite=Lax");
+    expect(setCookie).toContain("Path=/");
+    expect(setCookie.startsWith("dureview_ui=")).toBe(true);
+
+    const cookie = setCookie.split(";")[0] ?? "";
+    const page = await fetch(`${http.url}/ui`, { headers: { cookie } });
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("dureview");
+
+    const detailNext = await fetch(`${http.url}/ui/login`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: UI_TOKEN, next: "/ui/reviews/task_1" }),
+    });
+    expect(detailNext.headers.get("location")).toBe("/ui/reviews/task_1");
+  });
+
+  it("filters the list and hides unknown reviews", async () => {
+    const dataDir = await tempDataDir();
+    const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
+    await archive.open();
+    await archive.start({
+      taskId: "1",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      title: "Charge positive amounts",
+      sha: SHA_A,
+      baseSha: "1111111111111111111111111111111111111111",
+      baseRef: "main",
+      installationId: 99,
+      trigger: "opened",
+    });
+    await archive.finish({
+      taskId: "1",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      outcome: "completed",
+      verdict: "fix_recommended",
+      findingCount: 1,
+      findings: [],
+    });
+    await archive.finish({
+      taskId: "1",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      outcome: "completed",
+      verdict: "clean",
+      findingCount: 0,
+      findings: [],
+    });
+    await archive.start({
+      taskId: "2",
+      owner: "other",
+      repo: "app",
+      number: 3,
+      title: "Rename helpers",
+      sha: SHA_A,
+      baseSha: "1111111111111111111111111111111111111111",
+      baseRef: "main",
+      installationId: 99,
+      trigger: "command",
+    });
+    await archive.finish({
+      taskId: "2",
+      owner: "other",
+      repo: "app",
+      number: 3,
+      outcome: "completed",
+      verdict: "clean",
+      findingCount: 0,
+      findings: [],
+    });
+    archive.close();
+
+    const github = new MemoryGitHub();
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const http = await startHttp(service, { host: "127.0.0.1", port: 0, uiToken: UI_TOKEN, dataDir });
+    closers.push(async () => {
+      await http.close();
+      await service.close();
+    });
+
+    const filtered = await fetch(`${http.url}/ui?result=pass&repo=other/app&q=rename`, {
+      headers: { authorization: `Bearer ${UI_TOKEN}` },
+    });
+    expect(filtered.status).toBe(200);
+    const html = await filtered.text();
+    expect(html).toContain("other/app #3");
+    expect(html).toContain("/dureview");
+    expect(html).toContain("Pass");
+    expect(html).not.toContain("acme/demo #7");
+
+    const missing = await fetch(`${http.url}/ui/reviews/missing`, {
+      headers: { authorization: `Bearer ${UI_TOKEN}` },
+    });
+    expect(missing.status).toBe(404);
   });
 });
 

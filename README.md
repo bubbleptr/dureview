@@ -186,28 +186,30 @@ A file with no front matter is prompt text only. It uses the default profile, En
 
 Built-in skip globs cover lockfiles (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `Cargo.lock`, `Gemfile.lock`, `poetry.lock`, `composer.lock`, `go.sum`, and the other common lockfile names), generated output (`dist/**`, `build/**`, `coverage/**`, `*.min.js`, `*.min.css`, `*.generated.*`, `*_generated.*`, `*.pb.go`, `*.pb.ts`), and binary assets (images, fonts, archives, and compiled objects). Nested paths match, so `packages/app/package-lock.json` is skipped too.
 
-## Status page
+## Review page
 
-`GET /` and `GET /ui` serve a small status page from the webhook process, on the same port. Nothing else listens. The page is off unless `DUREVIEW_UI_TOKEN` is set to a long random string. With that variable unset, both paths return the same `404` as any other unknown path. `GET /health` and `POST /webhook` do not look at this token, and webhook signature checks are unchanged.
+`GET /` and `GET /ui` serve the review list from the webhook process, on the same port. `GET /ui/reviews/<task id>` opens one review. Nothing else listens. The pages are off unless `DUREVIEW_UI_TOKEN` is set to a long random string. With that variable unset, these paths return the same `404` as any other unknown path. `GET /health` and `POST /webhook` do not look at this token, and webhook signature checks are unchanged.
 
-The token is the HTTP Basic password. The username is ignored, so a browser prompt accepts any username. `curl` can send the same value as a bearer token:
+A browser that opens the page without a credential sees a login form. Submitting the token sets an `HttpOnly`, `Secure`, `SameSite=Lax` cookie. `curl` can still send the same value as a bearer token or as the HTTP Basic password (the username is ignored):
 
 ```bash
 curl -u dureview:"$DUREVIEW_UI_TOKEN" http://127.0.0.1:8787/
 curl -H "Authorization: Bearer $DUREVIEW_UI_TOKEN" http://127.0.0.1:8787/ui
 ```
 
-A missing or wrong token is `401`. The token is not accepted from the query string.
+A request that presents a wrong `Authorization` header is `401` with `WWW-Authenticate`. A browser visit with no `Authorization` header is the login page and does not send `WWW-Authenticate`, so the browser shows the form instead of its own dialog. The token is not accepted from the query string.
 
-The page shows the service version, uptime, model provider, whether `auth.json` has a Codex OAuth login and when that access token expires, whether a GitHub App is configured (`GITHUB_APP_ID` and a private key), and whether `GITHUB_TOKEN` is set. Those last two are yes or no. It also lists recent reviews: repository, pull request number and link, trigger (`opened`, `synchronize`, `reopened`, `ready_for_review`, or `/dureview`), time, and outcome with the finding count. The last 50 are stored in `$DUREVIEW_DATA_DIR/reviews.json`.
+The list is one row per review: repository and pull request number, title, trigger (`auto` for a pull request event, `/dureview` for a comment), a result badge, P0–P3 counts, duration, and time. Green is a pass, yellow is suggestions, red is at least one P0 or P1, and gray is an error. Times are rendered in the browser's local timezone; hovering a time shows the full timestamp. A review that is still running shows 进行中, or 疑似卡住 once it has been running for 30 minutes, instead of a duration that keeps growing. The page can filter by repository, result, and time, and it can search the title, repository, and pull request number. A line under the title still shows the version, uptime, model, whether `auth.json` has a Codex login and when that access token expires, and whether a GitHub App or `GITHUB_TOKEN` is configured. Those last two are yes or no.
 
-The page does not include the webhook secret, GitHub tokens, the App private key, finding text, or the contents of `auth.json`. An expired access token is not a missing login. pi-ai refreshes it on the next review and writes the new token back to `auth.json`.
+Opening a row shows three columns: the pull request's changed files, the diff with saved comments on the lines they refer to, and a summary plus the `.dureview.md` settings used for that run (`trigger`, drafts, profile, and the rest). A finished review's summary lists P0–P3 counts. A failed review shows the error recorded for that run, and a review that is still running shows 进行中 or 疑似卡住, without a row of zero counts. The diff is not stored. The page loads the current pull request files from the GitHub API with the App installation token, or with the PAT when the server is not using an App. Comments keep the path and line range from the model output. A comment whose line is not in the current diff is listed on that file without a line highlight.
+
+Metadata, those comments, and the failure reason are stored in `$DUREVIEW_DATA_DIR/reviews.sqlite` (mode `0600`). An archive created before the error column gains that column on the next open. `$DUREVIEW_DATA_DIR/reviews.json` is still the short log of the last 50 reviews and does not contain finding text or the failure reason. The pages do not include the webhook secret, GitHub tokens, the App private key, or the contents of `auth.json`. An expired access token is not a missing login. pi-ai refreshes it on the next review and writes the new token back to `auth.json`.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DUREVIEW_DATA_DIR` | `./data` | SQLite session, `auth.json`, and checkouts. Mount this. |
+| `DUREVIEW_DATA_DIR` | `./data` | Session database, review archive, `auth.json`, and checkouts. Mount this. |
 | `DUREVIEW_HOST` | `0.0.0.0` | Webhook bind address |
 | `DUREVIEW_PORT` | `8787` | Webhook port |
 | `DUREVIEW_WEBHOOK_SECRET` | | HMAC secret for `X-Hub-Signature-256`. Also accepts `GITHUB_WEBHOOK_SECRET`. |
@@ -223,9 +225,9 @@ The page does not include the webhook secret, GitHub tokens, the App private key
 | `GITHUB_APP_PRIVATE_KEY_PATH` | | Path to the App private key |
 | `GITHUB_TOKEN` | | PAT used when App id is unset |
 | `GITHUB_API_URL` | `https://api.github.com` | API root for GitHub Enterprise |
-| `DUREVIEW_UI_TOKEN` | | Enables the status page at `GET /` and `GET /ui`. Basic-auth password or bearer token. Unset leaves the page disabled. |
+| `DUREVIEW_UI_TOKEN` | | Enables the review pages at `GET /`, `GET /ui`, and `GET /ui/reviews/<id>`. Login-form token, Basic-auth password, or bearer token. Unset leaves the pages disabled. |
 
-`auth.json`, `session.sqlite`, and `reviews.json` live in the data directory. Checkouts live in `checkouts/<owner>/<repo>/<sha>`.
+`auth.json`, `session.sqlite`, `reviews.sqlite`, and `reviews.json` live in the data directory. Checkouts live in `checkouts/<owner>/<repo>/<sha>`.
 
 ## Development
 
@@ -236,7 +238,7 @@ npm test
 npm run e2e
 ```
 
-Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, the manual default when `.dureview.md` is missing or omits `trigger`, `DUREVIEW_DEFAULT_TRIGGER`, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, status-page authentication, and the recent-review log.
+Tests use pi-ai's faux model and an in-memory GitHub client. They cover webhook signatures, SHA dedupe, `/dureview` commands, trigger and draft rules, the manual default when `.dureview.md` is missing or omits `trigger`, `DUREVIEW_DEFAULT_TRIGGER`, base-branch config, idempotent posting, a crash between generation and posting, a crash after GitHub accepted the write, a webhook-to-comment pass over `test/fixtures/repo`, schema validation, confidence and path filtering, fingerprint dedupe and fixed marking, comment rendering in English and Chinese, summary-off posting, the Request changes fallback, inline-marker dedupe, review-thread resolution, review-page authentication, the review archive and its filters, diff comments placed on the live pull request files, and the recent-review log.
 
 Live Codex OAuth and a real GitHub App are not exercised here. Pi Durable is experimental and its API can change between releases. This repo pins `@earendil-works/pi-durable`, `@earendil-works/pi-ai`, and `@earendil-works/chord` at 1.1.0.
 

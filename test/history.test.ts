@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MAX_REVIEWS, ReviewLog } from "../src/review/history.js";
 import { readCodexLogin } from "../src/ui/status.js";
-import { formatUptime, pullRequestUrl, renderDashboard } from "../src/ui/page.js";
+import { formatUptime, pullRequestUrl, renderReviewList } from "../src/ui/page.js";
 import type { DashboardStatus } from "../src/ui/status.js";
+import type { ReviewSummary } from "../src/review/archive.js";
+import { sampleFinding } from "./support.js";
 import { authorizeUi } from "../src/ui/auth.js";
 import { assertServeConfig, configFromEnv } from "../src/config.js";
 
@@ -114,6 +116,33 @@ describe("review log", () => {
     const saved = await readFile(file, "utf8");
     expect(saved).not.toContain("access");
     expect(saved).not.toContain("secret");
+
+    await log.finish({
+      taskId: "11",
+      owner: "acme",
+      repo: "demo",
+      number: 9,
+      outcome: "completed",
+      verdict: "fix_recommended",
+      findingCount: 1,
+      title: "CANARY_TITLE",
+      findings: [sampleFinding({ body: "CANARY_FINDING_BODY" })],
+    });
+    const withFinding = await readFile(file, "utf8");
+    expect(withFinding).not.toContain("CANARY_FINDING_BODY");
+    expect(withFinding).not.toContain("CANARY_TITLE");
+
+    await log.finish({
+      taskId: "12",
+      owner: "acme",
+      repo: "demo",
+      number: 10,
+      outcome: "failed",
+      verdict: null,
+      findingCount: null,
+      error: "CANARY_ERROR_TEXT",
+    });
+    expect(await readFile(file, "utf8")).not.toContain("CANARY_ERROR_TEXT");
   });
 
   it("drops invalid rows and refuses to overwrite a corrupt file", async () => {
@@ -192,7 +221,7 @@ describe("review log", () => {
   });
 });
 
-describe("status page rendering", () => {
+describe("review list rendering", () => {
   it("escapes text and builds pull request links without credentials", () => {
     expect(formatUptime(0)).toBe("0s");
     expect(formatUptime(5_000)).toBe("5s");
@@ -217,30 +246,45 @@ describe("status page rendering", () => {
       codex: { present: true, expiresAt: "2030-01-02T03:04:05.000Z", unreadable: false },
       githubApp: true,
       githubToken: false,
-      reviews: [
-        {
-          taskId: "4",
-          owner: "acme",
-          repo: "demo",
-          number: 7,
-          trigger: "command",
-          startedAt: "2026-10-13T15:04:00.000Z",
-          finishedAt: "2026-10-13T15:05:00.000Z",
-          outcome: "completed",
-          verdict: "fix_recommended",
-          findingCount: 1,
-        },
-      ],
     };
-    const html = renderDashboard(status, "https://api.github.com");
+    const review: ReviewSummary = {
+      taskId: "4",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      title: "<script>alert(1)</script>",
+      trigger: "command",
+      startedAt: "2026-10-13T15:04:00.000Z",
+      finishedAt: "2026-10-13T15:05:00.000Z",
+      outcome: "completed",
+      verdict: "fix_recommended",
+      p0: 0,
+      p1: 1,
+      p2: 0,
+      p3: 0,
+      findingCount: 1,
+      countsKnown: true,
+    };
+    const html = renderReviewList({
+      status,
+      reviews: [review],
+      repos: ["acme/demo"],
+      total: 1,
+      form: { repo: "", result: "", since: "", from: "", to: "", q: "" },
+      now: Date.parse("2026-10-13T15:05:00.000Z"),
+    });
     expect(html).toContain("0.1.0");
     expect(html).toContain("1m 5s");
-    expect(html).toContain("signed in, access token expires 2030-01-02 03:04 UTC");
-    expect(html).toContain("<dt>GitHub App</dt><dd>yes</dd>");
-    expect(html).toContain("<dt>GitHub token</dt><dd>no</dd>");
-    expect(html).toContain("https://github.com/acme/demo/pull/7");
+    expect(html).toContain("access token expires ");
+    expect(html).toContain('datetime="2030-01-02T03:04:05.000Z"');
+    expect(html).toContain("2030-01-02 03:04 UTC");
+    expect(html).toContain("GitHub App <b>yes</b>");
+    expect(html).toContain("GitHub token <b>no</b>");
+    expect(html).toContain("/ui/reviews/4");
+    expect(html).toContain("acme/demo #7");
     expect(html).toContain("/dureview");
-    expect(html).toContain("fix recommended · 1 finding");
+    expect(html).toContain("P0/P1");
+    expect(html).toContain("1m");
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>alert");
     expect(html).not.toContain("secret");
