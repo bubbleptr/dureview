@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { LoginForm } from "../components/login-form.js";
 import { ReviewListView } from "../components/review-list.js";
-import { getReviewList } from "../ui/list-fn.js";
+import { loadHome } from "../ui/home-data.js";
 
 export const Route = createFileRoute("/")({
   server: {
@@ -14,12 +14,13 @@ export const Route = createFileRoute("/")({
       },
     },
   },
-  loader: ({ location }) => getReviewList({ data: { search: location.searchStr, next: location.pathname } }),
+  loader: async ({ location }) => ({ ...(await loadHome(location.searchStr, location.pathname)), search: location.searchStr }),
+  head: () => ({ meta: [{ title: "Overview · dureview" }] }),
   component: HomePage,
 });
 
 function HomePage() {
   const data = Route.useLoaderData();
-  if (data.kind === "login") return <LoginForm next={data.next} />;
-  return <ReviewListView model={data.model} />;
+  if (data.list.kind === "login") return <LoginForm next={data.list.next} />;
+  return <ReviewListView model={data.list.model} search={data.search} week={data.week} day={data.day} />;
 }

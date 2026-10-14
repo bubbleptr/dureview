@@ -3,31 +3,27 @@ import type { SettingsFieldView, SettingsPageModel } from "../settings/page.js";
 import { nearestThinking } from "../settings/thinking.js";
 import { formatTime } from "../ui/page.js";
 import { LocalTime } from "./local-time.js";
+import { AppShell, type ShellStatus } from "./app-shell.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card.js";
+import { Card, CardContent, CardDescription, CardHeader } from "./ui/card.js";
 import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
 import { NativeSelect } from "./ui/native-select.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table.js";
-import { UiNav } from "./ui-nav.js";
 
 const TRIGGERS = ["manual", "once", "auto"] as const;
 
-export function SettingsForm({ model }: { model: SettingsPageModel }) {
+export function SettingsForm({ model, status = null }: { model: SettingsPageModel; status?: ShellStatus | null }) {
   const [modelId, setModelId] = useState(model.form.model);
   const [thinking, setThinking] = useState<string>(model.form.thinking);
   const levels = levelsFor(model, modelId, thinking);
   const thinkingValue = levels.includes(thinking) ? thinking : (levels[0] ?? thinking);
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-6">
-      <Card>
+    <AppShell current="settings" title="Settings" status={status}>
+      <Card className="mx-auto w-full max-w-3xl">
         <CardHeader>
-          <div className="flex items-center justify-between gap-3">
-            <CardTitle>Settings</CardTitle>
-            <UiNav current="settings" />
-          </div>
           <CardDescription>
             Changes apply to new reviews. A review that is already running keeps the model and thinking it started with.
             An override wins over the environment variable, which wins over the built-in default.
@@ -72,7 +68,7 @@ export function SettingsForm({ model }: { model: SettingsPageModel }) {
           <Audit audit={model.audit} />
         </CardContent>
       </Card>
-    </div>
+    </AppShell>
   );
 }
 

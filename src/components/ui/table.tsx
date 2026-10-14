@@ -4,7 +4,7 @@ import { cn } from "../../lib/utils.js";
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
     <div className="relative w-full overflow-x-auto">
-      <table className={cn("w-full caption-bottom text-sm", className)} {...props} />
+      <table className={cn("w-full caption-bottom text-[13px]", className)} {...props} />
     </div>
   );
 }
@@ -18,20 +18,20 @@ function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
 }
 
 function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
-  return <tr className={cn("border-b transition-colors hover:bg-muted/40", className)} {...props} />;
+  return <tr className={cn("border-b transition-colors hover:bg-accent/60", className)} {...props} />;
 }
 
 function TableHead({ className, ...props }: React.ComponentProps<"th">) {
   return (
     <th
-      className={cn("text-muted-foreground h-10 px-3 text-left align-middle text-xs font-medium", className)}
+      className={cn("text-muted-foreground h-8 px-3 text-left align-middle text-xs font-medium", className)}
       {...props}
     />
   );
 }
 
 function TableCell({ className, ...props }: React.ComponentProps<"td">) {
-  return <td className={cn("p-3 align-middle", className)} {...props} />;
+  return <td className={cn("px-3 py-2 align-middle", className)} {...props} />;
 }
 
 export { Table, TableHeader, TableBody, TableRow, TableHead, TableCell };

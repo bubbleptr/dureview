@@ -1,6 +1,8 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+import type { ShellStatus } from "./app-shell.js";
 import type { StatsPageModel, StatsRankRow } from "../ui/stats-model.js";
-import { UiNav } from "./ui-nav.js";
+import { AppShell } from "./app-shell.js";
+import { ClientChart } from "./client-chart.js";
 import { Button } from "./ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card.js";
 import { Label } from "./ui/label.js";
@@ -14,59 +16,56 @@ const RANGES: Array<[string, string]> = [
   ["all", "All time"],
 ];
 
-type ChartsModule = typeof import("./stats-charts.js");
-
-export function StatsPage({ model }: { model: StatsPageModel }) {
+export function StatsPage({ model, status = null }: { model: StatsPageModel; status?: ShellStatus | null }) {
   return (
-    <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-4 p-6">
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
-          <div className="flex flex-col gap-1">
-            <CardTitle>Statistics</CardTitle>
-            <CardDescription>Review volume, duration, findings, and model tokens.</CardDescription>
-          </div>
-          <UiNav current="stats" />
-        </CardHeader>
-        <CardContent>
-          <form className="flex flex-wrap items-end gap-3" method="get" action="/ui/stats">
-            <Label className="flex flex-col gap-1">
-              Time range
-              <NativeSelect name="range" defaultValue={model.form.range}>
-                {RANGES.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </NativeSelect>
-            </Label>
-            <Label className="flex min-w-48 flex-col gap-1">
-              Repository
-              <NativeSelect name="repo" defaultValue={model.form.repo}>
-                <option value="">All repositories</option>
-                {model.repos.map((repo) => (
-                  <option key={repo} value={repo}>
-                    {repo}
-                  </option>
-                ))}
-              </NativeSelect>
-            </Label>
-            <TimezoneField tz={model.form.tz} />
-            <Button type="submit">Apply</Button>
-            {model.filtered ? (
-              <a className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui/stats">
-                Clear
-              </a>
-            ) : null}
-          </form>
-        </CardContent>
-      </Card>
+    <AppShell
+      current="stats"
+      title="Statistics"
+      status={status}
+      form={{ method: "get", action: "/ui/stats" }}
+      filters={
+        <>
+          <Label className="flex flex-col gap-1">
+            Time range
+            <NativeSelect name="range" defaultValue={model.form.range} className="h-8 text-xs" onChange={submitForm}>
+              {RANGES.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </NativeSelect>
+          </Label>
+          <Label className="flex min-w-40 flex-col gap-1">
+            Repository
+            <NativeSelect name="repo" defaultValue={model.form.repo} className="h-8 w-44 text-xs" onChange={submitForm}>
+              <option value="">All repositories</option>
+              {model.repos.map((repo) => (
+                <option key={repo} value={repo}>
+                  {repo}
+                </option>
+              ))}
+            </NativeSelect>
+          </Label>
+          <TimezoneField tz={model.form.tz} />
+          <Button type="submit" size="sm">
+            Apply
+          </Button>
+          {model.filtered ? (
+            <a className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui/stats">
+              Clear
+            </a>
+          ) : null}
+        </>
+      }
+    >
+      <p className="text-sm text-muted-foreground">Review volume, duration, findings, and model tokens.</p>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         {model.cards.map((card) => (
           <Card key={card.label}>
             <CardHeader className="p-4">
               <CardDescription>{card.label}</CardDescription>
-              <p className="text-2xl font-semibold tabular-nums">{card.value}</p>
+              <p className="font-mono text-2xl font-semibold tabular-nums">{card.value}</p>
               <p className="text-xs text-muted-foreground">{card.detail}</p>
             </CardHeader>
           </Card>
@@ -155,8 +154,12 @@ export function StatsPage({ model }: { model: StatsPageModel }) {
           />
         </RankCard>
       </div>
-    </div>
+    </AppShell>
   );
+}
+
+function submitForm(event: { currentTarget: { form: HTMLFormElement | null } }): void {
+  event.currentTarget.form?.requestSubmit();
 }
 
 function TimezoneField({ tz }: { tz: number }) {
@@ -168,21 +171,6 @@ function TimezoneField({ tz }: { tz: number }) {
     window.location.replace(url.toString());
   }, [tz]);
   return <input type="hidden" name="tz" defaultValue={tz} />;
-}
-
-function ClientChart({ render }: { render: (charts: ChartsModule) => ReactNode }) {
-  const [charts, setCharts] = useState<ChartsModule | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void import("./stats-charts.js").then((module) => {
-      if (!cancelled) setCharts(module);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  if (!charts) return <div className="h-56 animate-pulse rounded-md bg-muted/60" />;
-  return render(charts);
 }
 
 function ChartCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
