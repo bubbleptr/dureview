@@ -3,6 +3,7 @@ import type { ReviewListModel, ReviewRowView } from "../ui/list-model.js";
 import { LocalTime } from "./local-time.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
+import { UiNav } from "./ui-nav.js";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card.js";
 import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
@@ -32,7 +33,10 @@ export function ReviewListView({ model }: { model: ReviewListModel }) {
     <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-4 p-6">
       <Card>
         <CardHeader>
-          <CardTitle>dureview</CardTitle>
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle>dureview</CardTitle>
+            <UiNav current="reviews" />
+          </div>
           <StatusLine model={model} />
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -102,6 +106,8 @@ function StatusLine({ model }: { model: ReviewListModel }) {
       {" · "}
       {model.provider}/{model.model}
       {" · "}
+      {model.thinking}
+      {" · "}
       {model.codex.kind === "plain" ? (
         model.codex.text
       ) : (
@@ -152,7 +158,10 @@ function ReviewTable({ rows }: { rows: ReviewRowView[] }) {
                 {row.repoLabel}
               </a>
             </TableCell>
-            <TableCell className="max-w-xs whitespace-normal">{row.title}</TableCell>
+            <TableCell className="max-w-xs whitespace-normal">
+              <div>{row.title}</div>
+              {row.modelLine ? <p className="text-xs text-muted-foreground">{row.modelLine}</p> : null}
+            </TableCell>
             <TableCell>
               <span>{row.triggerLabel}</span>
             </TableCell>

@@ -19,6 +19,7 @@ export type ListContext = {
   dataDir?: string;
   provider: string;
   modelId: string;
+  thinking: string;
   githubApp: boolean;
   githubToken: boolean;
   startedAt: number;
@@ -47,6 +48,7 @@ export async function buildReviewList(
     uptime: formatUptime(status.uptimeSeconds * 1000),
     provider: status.provider,
     model: status.model,
+    thinking: ctx.thinking,
     codex: codexPhrase(status.codex, now),
     githubApp: status.githubApp,
     githubToken: status.githubToken,
@@ -87,7 +89,15 @@ function reviewRow(review: ReviewSummary, now: number): ReviewRowView {
     duration: durationText(review, now),
     whenIso,
     whenLabel: formatTime(whenIso),
+    modelLine: reviewModelLine(review),
   };
+}
+
+function reviewModelLine(review: ReviewSummary): string | null {
+  const name = [review.provider, review.model].filter((part) => part && part.length > 0).join("/");
+  if (name && review.thinking) return `${name} · ${review.thinking}`;
+  if (name) return name;
+  return review.thinking;
 }
 
 function durationText(review: ReviewSummary, now: number): string {

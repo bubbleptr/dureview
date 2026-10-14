@@ -7,6 +7,7 @@ import { gateGetPage, uiSession } from "./auth.js";
 import { reviewDetailResponse } from "./detail.js";
 import { htmlResponse, notFoundJson, redirectResponse, unauthorizedJson } from "./headers.js";
 import { loginPostResponse } from "./login.js";
+import { settingsGetResponse, settingsPostResponse } from "./settings.js";
 import { handleWebhookRequest } from "./webhook.js";
 
 export type DispatchContext = ListContext & {
@@ -25,6 +26,7 @@ export async function dispatch(ctx: DispatchContext, request: Request): Promise<
     return handleWebhookRequest(ctx.service, ctx.service.configuredWebhookSecret(), request);
   }
   if (pathname === "/ui/login") return loginDispatch(ctx, request);
+  if (pathname === "/ui/settings") return settingsDispatch(ctx, request);
   if (method === "GET" && (pathname === "/" || pathname === "/ui")) return listDispatch(ctx, request, pathname);
   const detail = method === "GET" ? /^\/ui\/reviews\/([A-Za-z0-9_-]{1,64})$/.exec(pathname) : null;
   const taskId = detail?.[1];
@@ -50,12 +52,22 @@ async function loginDispatch(ctx: DispatchContext, request: Request): Promise<Re
   return notFoundJson();
 }
 
+async function settingsDispatch(ctx: DispatchContext, request: Request): Promise<Response> {
+  if (request.method === "GET") return settingsGetResponse(ctx.service, ctx.uiToken, request);
+  if (request.method === "POST") return settingsPostResponse(ctx.service, ctx.uiToken, request);
+  return notFoundJson();
+}
+
 async function listDispatch(ctx: DispatchContext, request: Request, pathname: string): Promise<Response> {
   const gate = gateGetPage(request, ctx.uiToken);
   if (gate === "disabled") return notFoundJson();
   if (gate === "challenge") return unauthorizedJson();
   if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(pathname) }), 401);
-  const model = await buildReviewList(ctx, searchParamsFrom(new URL(request.url).search));
+  const live = ctx.service.effectiveConfig();
+  const model = await buildReviewList(
+    { ...ctx, provider: live.provider, modelId: live.modelId, thinking: live.thinking },
+    searchParamsFrom(new URL(request.url).search),
+  );
   return htmlResponse(renderListHtml(model));
 }
 

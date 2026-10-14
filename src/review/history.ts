@@ -40,6 +40,8 @@ export type ReviewFinished = {
   findings?: Finding[];
   provider?: string;
   modelId?: string;
+  /** Thinking level the review ran with. Not written to `reviews.json`. */
+  thinking?: string;
   /** Failure reason for the archive only. Not written to `reviews.json`. */
   error?: string;
 };

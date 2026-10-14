@@ -24,6 +24,8 @@ export type ReviewRowView = {
   duration: string;
   whenIso: string;
   whenLabel: string;
+  /** `provider/model · thinking` for the run, when the archive recorded it. */
+  modelLine: string | null;
 };
 
 /** Serializable list payload. No diff text, tokens, or filesystem paths. */
@@ -32,6 +34,7 @@ export type ReviewListModel = {
   uptime: string;
   provider: string;
   model: string;
+  thinking: string;
   codex: CodexView;
   githubApp: boolean;
   githubToken: boolean;

@@ -223,6 +223,7 @@ function detail(comments: StoredComment[]): ReviewDetail {
     checked: [],
     provider: "faux",
     model: "faux-1",
+    thinking: "off",
     policy: {
       profile: "default",
       trigger: "manual",

@@ -22,6 +22,7 @@
     "src/ui/list-fn.ts",
     "src/ui/detail-fn.ts",
     "src/ui/file-fn.ts",
+    "src/ui/settings-fn.ts",
     "src/routeTree.gen.ts",
     "src/components",
     "src/lib",

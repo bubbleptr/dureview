@@ -1,10 +1,11 @@
 import { join } from "node:path";
-import { assertServeConfig, configFromEnv, type Config } from "../config.js";
+import { assertServeConfig, configFromEnv, editableBaseline, type Config } from "../config.js";
 import { createReviewModels, resolveProvider } from "../auth/session.js";
 import { GithubRest } from "../github/client.js";
 import { log } from "../log.js";
 import { checkoutProtectionKey, cleanupCheckouts, GitCheckout } from "../review/checkout.js";
 import { DureviewService } from "../service.js";
+import { modelChoiceError } from "../settings/validate.js";
 import type { ListContext } from "../ui/list-data.js";
 
 export type AppRuntime = {
@@ -37,11 +38,13 @@ export async function closeRuntime(): Promise<void> {
 }
 
 export function listContext(runtime: AppRuntime): ListContext {
+  const effective = runtime.service.effectiveConfig();
   return {
     service: runtime.service,
     dataDir: runtime.config.dataDir,
-    provider: runtime.provider,
-    modelId: runtime.config.modelId,
+    provider: effective.provider,
+    modelId: effective.modelId,
+    thinking: effective.thinking,
     githubApp: Boolean(runtime.config.githubAppId && runtime.config.githubAppPrivateKey),
     githubToken: Boolean(runtime.config.githubToken),
     startedAt: runtime.startedAt,
@@ -66,20 +69,30 @@ async function openRuntime(): Promise<AppRuntime> {
     });
   }
   const github = new GithubRest(config);
+  let service: DureviewService | undefined;
   const checkout = new GitCheckout(
     github,
     join(config.dataDir, "checkouts"),
     (request, signal) => github.accessToken(request, signal),
-    { trigger: config.defaultTrigger },
+    () => ({ trigger: service?.effectiveConfig().defaultTrigger ?? config.defaultTrigger }),
   );
-  const service = await DureviewService.open({
+  service = await DureviewService.open({
     config,
     models,
     github,
     checkout,
     provider,
     modelId: config.modelId,
+    baseline: editableBaseline(),
   });
+  const effective = service.effectiveConfig();
+  if (modelChoiceError(models, provider, effective.modelId, effective.thinking)) {
+    log("warn", "settings override is not usable; fix it on the settings page", {
+      provider,
+      model: effective.modelId,
+      thinking: effective.thinking,
+    });
+  }
   const runtime: AppRuntime = { service, config, provider, startedAt: Date.now() };
   current = runtime;
   installShutdown();
@@ -87,7 +100,8 @@ async function openRuntime(): Promise<AppRuntime> {
   armCheckoutSweep(service, config);
   log("info", "dureview ready", {
     provider,
-    model: config.modelId,
+    model: effective.modelId,
+    thinking: effective.thinking,
     github: config.githubAppId ? "app" : "pat",
     ui: config.uiToken ? "enabled" : "disabled",
     dataDir: config.dataDir,
@@ -100,7 +114,7 @@ async function sweepCheckouts(service: DureviewService, config: Config): Promise
     const running = await service.runningCheckouts();
     const removed = await cleanupCheckouts({
       root: join(config.dataDir, "checkouts"),
-      ttlMs: config.checkoutTtlDays * 24 * 60 * 60 * 1000,
+      ttlMs: service.checkoutTtlMs(),
       protectedKeys: new Set(running.map((item) => checkoutProtectionKey(item.owner, item.repo, item.sha))),
     });
     if (removed.length > 0) log("info", "removed old checkouts", { count: removed.length });

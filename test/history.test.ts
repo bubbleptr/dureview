@@ -276,6 +276,9 @@ describe("review list rendering", () => {
       p3: 0,
       findingCount: 1,
       countsKnown: true,
+      provider: null,
+      model: null,
+      thinking: null,
     };
     const now = Date.parse("2026-10-13T15:05:00.000Z");
     const kind = reviewResult(review);
@@ -285,6 +288,7 @@ describe("review list rendering", () => {
       uptime: formatUptime(status.uptimeSeconds * 1000),
       provider: status.provider,
       model: status.model,
+      thinking: "medium",
       codex: codexPhrase(status.codex, now),
       githubApp: status.githubApp,
       githubToken: status.githubToken,
@@ -308,6 +312,7 @@ describe("review list rendering", () => {
           duration: formatDuration(reviewDurationMs(review.startedAt, review.finishedAt, now)),
           whenIso,
           whenLabel: formatTime(whenIso),
+          modelLine: null,
         },
       ],
       repos: ["acme/demo"],

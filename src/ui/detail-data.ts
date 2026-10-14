@@ -224,6 +224,7 @@ function settingsView(review: ReviewDetail): DetailSettings {
     { key: "max inline", value: String(policy.maxInline) },
   ];
   if (model) rows.push({ key: "model", value: model });
+  if (review.thinking) rows.push({ key: "thinking", value: review.thinking });
   if (review.baseRef) rows.push({ key: "base", value: review.baseRef });
   if (review.sha) rows.push({ key: "head", value: review.sha.slice(0, 7) });
   return { recorded: true, rows };

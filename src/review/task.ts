@@ -1,5 +1,5 @@
 import type { Context } from "@earendil-works/chord";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
   configure,
   defineExtension,
@@ -42,12 +42,17 @@ export type ReviewHooks = {
   afterCheckCreated?: (context: Context) => Promise<void>;
 };
 
-export type ReviewDeps = {
-  checkout: RepoCheckout;
-  github: GitHub;
+export type ReviewModelChoice = {
   provider: string;
   modelId: string;
   thinking: ModelThinkingLevel;
+};
+
+export type ReviewDeps = {
+  checkout: RepoCheckout;
+  github: GitHub;
+  /** Read at the start of a review and then frozen on that review's checkpoint. */
+  currentModel: () => ReviewModelChoice;
   hooks?: ReviewHooks;
   /** Records a terminal outcome for the status page. Failures here do not fail the review. */
   onFinished?: (event: ReviewFinished) => Promise<void>;
@@ -61,6 +66,7 @@ type Prepared = {
   policy: ReviewPolicy;
   provider: string;
   modelId: string;
+  thinking: ModelThinkingLevel;
   truncated: boolean;
 };
 
@@ -75,6 +81,13 @@ type CheckCheckpoint = {
   published?: PublishResult;
   /** Conclusion already chosen for the check. Completing the check retries this output. */
   checkOutput?: ReviewCheckOutput;
+  /**
+   * Model frozen on the first prepare step. Later checkpoints keep these fields
+   * so a settings change does not retarget a review that already started.
+   */
+  provider?: string;
+  modelId?: string;
+  thinking?: ModelThinkingLevel;
 };
 
 export type ReviewState =
@@ -125,6 +138,31 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             () => notifyFinished(deps, failedEvent(current, error)),
           );
         try {
+          let frozen = readFrozen(current.state.checkpoint);
+          if (!frozen) {
+            const choice = deps.currentModel();
+            const known = runtime.models.getModel(choice.provider, choice.modelId);
+            if (!known) {
+              await fail(new ReviewConfigError(`Unknown model ${choice.provider}/${choice.modelId}.`));
+              return;
+            }
+            const supported = getSupportedThinkingLevels(known);
+            if (!supported.includes(choice.thinking) || clampThinkingLevel(known, choice.thinking) !== choice.thinking) {
+              await fail(
+                new ReviewConfigError(
+                  `Thinking level ${choice.thinking} is not supported by ${choice.provider}/${choice.modelId}.`,
+                ),
+              );
+              return;
+            }
+            frozen = choice;
+            await runtime.commit(
+              () => ({ status: "running", checkpoint: { phase: "prepare", ...checkFields(slot), ...choice } }),
+              context,
+            );
+            return;
+          }
+          const modelChoice = frozen;
           if (slot.kind === "missing" || slot.kind === "retry") {
             const begun = await beginReviewCheck(deps.github, request, String(current.id), language, signal);
             if (context.abortSignal?.aborted) throw new Error("aborted");
@@ -135,7 +173,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             if (begun.status === "open") {
               slot = { kind: "open", checkRunId: begun.id };
               await runtime.commit(
-                () => ({ status: "running", checkpoint: { phase: "prepare", ...checkFields(slot) } }),
+                () => ({ status: "running", checkpoint: { phase: "prepare", ...checkFields(slot), ...modelChoice } }),
                 context,
               );
               return;
@@ -143,14 +181,14 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             if (begun.status === "skipped") {
               slot = { kind: "skipped" };
               await runtime.commit(
-                () => ({ status: "running", checkpoint: { phase: "prepare", checksSkipped: true } }),
+                () => ({ status: "running", checkpoint: { phase: "prepare", checksSkipped: true, ...modelChoice } }),
                 context,
               );
               return;
             }
             if (slot.kind !== "retry") {
               await runtime.commit(
-                () => ({ status: "running", checkpoint: { phase: "prepare", checkRetry: true } }),
+                () => ({ status: "running", checkpoint: { phase: "prepare", checkRetry: true, ...modelChoice } }),
                 context,
               );
               return;
@@ -159,9 +197,9 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
           }
           const prepared = await deps.checkout.prepare(request, signal);
           language = prepared.policy.language;
-          const model = runtime.models.getModel(deps.provider, deps.modelId);
+          const model = runtime.models.getModel(modelChoice.provider, modelChoice.modelId);
           if (!model) {
-            await fail(new ReviewConfigError(`Unknown model ${deps.provider}/${deps.modelId}.`));
+            await fail(new ReviewConfigError(`Unknown model ${modelChoice.provider}/${modelChoice.modelId}.`));
             return;
           }
           await runtime.commit(async (tx) => {
@@ -169,8 +207,8 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               ownership: { kind: "task", taskId: current.id },
             });
             await configure(tx, created.id, {
-              model: { provider: deps.provider, modelId: deps.modelId },
-              thinkingLevel: deps.thinking,
+              model: { provider: modelChoice.provider, modelId: modelChoice.modelId },
+              thinkingLevel: modelChoice.thinking,
               extensions: [extension],
               tools: [...reviewTools],
               cwd: prepared.dir,
@@ -183,8 +221,9 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               diff: prepared.diff,
               rules: prepared.rules,
               policy: prepared.policy,
-              provider: deps.provider,
-              modelId: deps.modelId,
+              provider: modelChoice.provider,
+              modelId: modelChoice.modelId,
+              thinking: modelChoice.thinking,
               truncated: prepared.truncated,
             };
             return { status: "running", checkpoint };
@@ -376,6 +415,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             findings: checkpoint.review.findings,
             provider: checkpoint.provider,
             modelId: checkpoint.modelId,
+            thinking: checkpoint.thinking,
           });
           await runtime.commit(
             () => ({
@@ -620,8 +660,17 @@ async function notifyFinished(deps: ReviewDeps, event: ReviewFinished): Promise<
   }
 }
 
-function failedEvent(current: { id: TaskId<ReviewResult>; input: ReviewRequest }, error: unknown): ReviewFinished {
+function readFrozen(checkpoint: ReviewState): ReviewModelChoice | undefined {
+  if (!checkpoint.provider || !checkpoint.modelId || !checkpoint.thinking) return undefined;
+  return { provider: checkpoint.provider, modelId: checkpoint.modelId, thinking: checkpoint.thinking };
+}
+
+function failedEvent(
+  current: { id: TaskId<ReviewResult>; input: ReviewRequest; state: { checkpoint: ReviewState } },
+  error: unknown,
+): ReviewFinished {
   const message = error instanceof Error ? error.message : String(error);
+  const frozen = readFrozen(current.state.checkpoint);
   return {
     taskId: String(current.id),
     owner: current.input.owner,
@@ -636,6 +685,9 @@ function failedEvent(current: { id: TaskId<ReviewResult>; input: ReviewRequest }
     baseSha: current.input.baseSha,
     baseRef: current.input.baseRef,
     installationId: current.input.installationId,
+    provider: frozen?.provider,
+    modelId: frozen?.modelId,
+    thinking: frozen?.thinking,
   };
 }
 
