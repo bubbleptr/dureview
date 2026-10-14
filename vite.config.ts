@@ -1,8 +1,12 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import { nitro } from "nitro/vite";
 import { defineConfig } from "vite";
+
+const rootDir = dirname(fileURLToPath(import.meta.url));
 
 const port = Number(process.env.DUREVIEW_PORT ?? 8787);
 const host = process.env.DUREVIEW_HOST ?? "0.0.0.0";
@@ -45,6 +49,7 @@ export default defineConfig({
         }),
         nitro({
           traceDeps: earendilRuntime.map((name) => `${name}*`),
+          plugins: [resolve(rootDir, "src/nitro/html-cache.ts")],
         }),
         tailwindcss(),
         viteReact(),

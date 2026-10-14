@@ -29,6 +29,7 @@
     "src/ui",
     "src/http",
     "src/app",
+    "src/nitro",
     "vite.config.ts"
   ]
 }

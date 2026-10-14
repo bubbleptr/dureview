@@ -1,6 +1,8 @@
 /**
  * Proves the Nitro server left @earendil-works external, then loads the Codex
  * provider and its OAuth derivation module from the built server's import path.
+ * Also proves every stylesheet or script URL baked into the SSR bundle exists
+ * under `.output/public` (client and SSR must hash global CSS the same way).
  * No network. Run from the repo root after `vite build`, and again after
  * `npm prune --omit=dev`.
  */
@@ -66,6 +68,31 @@ try {
   await import(pathToFileURL(probe).href);
 } finally {
   await rm(probe, { force: true });
+}
+
+const publicDir = join(root, ".output", "public");
+const assetRef = /["'`](\/assets\/[^"'`\s]+)["'`]/g;
+const checked = new Set();
+const missing = [];
+for (const file of serverSources(serverDir)) {
+  const text = readFileSync(file, "utf8");
+  for (const match of text.matchAll(assetRef)) {
+    const url = match[1];
+    if (!url || checked.has(url) || !isStylesheetOrScript(url)) continue;
+    checked.add(url);
+    if (!existsSync(join(publicDir, url.slice(1)))) missing.push(`${url} (${file})`);
+  }
+}
+if (missing.length > 0) {
+  throw new Error(
+    `SSR output references stylesheets or scripts missing from .output/public:\n${missing.join("\n")}`,
+  );
+}
+console.log(`SSR stylesheet and script hrefs (${checked.size}) all exist in .output/public.`);
+
+/** Hashed client bundles only. Skips route-rule globs such as `/assets/**`. */
+function isStylesheetOrScript(url) {
+  return /^\/assets\/[^?*{}]+?\.(?:css|js|mjs)$/.test(url);
 }
 
 function walk(dir, out = []) {
