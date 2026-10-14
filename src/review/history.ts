@@ -1,8 +1,10 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { log } from "../log.js";
+import type { RecordedFinding } from "./findings.js";
 import type { ReviewPolicy } from "./policy.js";
 import type { Finding } from "./schema.js";
+import type { ReviewUsage } from "./usage.js";
 
 /** How many reviews `reviews.json` keeps. Newest entries stay. */
 export const MAX_REVIEWS = 50;
@@ -44,6 +46,16 @@ export type ReviewFinished = {
   thinking?: string;
   /** Failure reason for the archive only. Not written to `reviews.json`. */
   error?: string;
+  /**
+   * Model spend from pi-ai. Absent when the conversation could not be read.
+   * Not written to `reviews.json`. A captured zero is different from absent.
+   */
+  usage?: ReviewUsage;
+  /**
+   * Every finding, including ones that were not posted. Not written to `reviews.json`.
+   * When absent, a completed review still stores `findings` with posting left unknown.
+   */
+  recordedFindings?: RecordedFinding[];
 };
 
 export type ReviewLogEntry = {

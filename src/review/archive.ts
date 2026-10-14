@@ -3,10 +3,13 @@ import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
 import { isThinkingLevel } from "../config.js";
 import { log } from "../log.js";
+import { fileFacts, isSkipReason, type RecordedFinding } from "./findings.js";
 import type { ReviewFinished } from "./history.js";
 import { ReviewLog } from "./history.js";
 import type { ReviewPolicy } from "./policy.js";
 import { findingFingerprint, normalizeRepoPath, type Finding, type Priority } from "./schema.js";
+import { queryReviewStats, type StatsQuery, type StatsSnapshot } from "./stats.js";
+import type { ReviewUsage } from "./usage.js";
 
 /** SQLite file in the data directory. Mode 0600. Diffs are not stored here. */
 export const REVIEWS_DB_FILE = "reviews.sqlite";
@@ -154,7 +157,14 @@ export class ReviewArchive {
         p3 INTEGER NOT NULL DEFAULT 0,
         finding_count INTEGER,
         counts_known INTEGER NOT NULL DEFAULT 1,
-        error TEXT
+        error TEXT,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        cache_read_tokens INTEGER,
+        reasoning_tokens INTEGER,
+        model_calls INTEGER,
+        cost_usd REAL,
+        thinking TEXT
       ) STRICT;
       CREATE TABLE IF NOT EXISTS comments (
         task_id TEXT NOT NULL,
@@ -175,7 +185,42 @@ export class ReviewArchive {
         PRIMARY KEY (task_id, ordinal),
         FOREIGN KEY (task_id) REFERENCES reviews(task_id) ON DELETE CASCADE
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS findings (
+        id INTEGER PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        sha TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        trigger_text TEXT NOT NULL,
+        priority INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        category TEXT NOT NULL,
+        cwe TEXT,
+        rule_ref TEXT,
+        confidence REAL NOT NULL,
+        path TEXT NOT NULL,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        extension TEXT,
+        language TEXT,
+        fingerprint TEXT NOT NULL,
+        posted INTEGER,
+        skip_reason TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES reviews(task_id) ON DELETE CASCADE
+      ) STRICT;
       CREATE INDEX IF NOT EXISTS reviews_started ON reviews(started_at DESC);
+      CREATE INDEX IF NOT EXISTS reviews_repo_started ON reviews(owner, repo, started_at);
+      CREATE INDEX IF NOT EXISTS findings_task ON findings(task_id);
+      CREATE INDEX IF NOT EXISTS findings_repo ON findings(owner, repo, number);
+      CREATE INDEX IF NOT EXISTS findings_category ON findings(category, priority);
+      CREATE INDEX IF NOT EXISTS findings_fingerprint ON findings(fingerprint);
+      CREATE INDEX IF NOT EXISTS findings_created ON findings(created_at);
+      CREATE INDEX IF NOT EXISTS findings_language ON findings(language);
+      CREATE INDEX IF NOT EXISTS findings_path ON findings(path);
     `);
     migrateReviews(db);
     this.#db = db;
@@ -248,9 +293,23 @@ export class ReviewArchive {
     const failed = event.outcome === "failed";
     const verdict = failed ? null : cleanVerdict(event.verdict);
     const comments = failed ? [] : cleanComments(event.findings);
-    const counts = countPriorities(comments);
-    const findingCount = failed ? null : comments.length > 0 ? comments.length : cleanCount(event.findingCount);
-    const countsKnown = failed ? 1 : event.findings ? 1 : 0;
+    const recorded = cleanRecorded(
+      event.recordedFindings ??
+        (!failed && event.findings
+          ? event.findings.map((finding) => ({ finding, posted: null, skipReason: null }))
+          : undefined),
+    );
+    const counts = recorded.length > 0 ? countRecorded(recorded) : countPriorities(comments);
+    const findingCount =
+      recorded.length > 0
+        ? recorded.length
+        : failed
+          ? null
+          : comments.length > 0
+            ? comments.length
+            : cleanCount(event.findingCount);
+    const countsKnown = recorded.length > 0 ? 1 : failed ? 1 : event.findings ? 1 : 0;
+    const usage = cleanUsage(event.usage);
     const verdictReason = failed ? null : clip(event.verdictReason ?? "", 300) || null;
     const overall = failed ? null : cleanConfidence(event.overallConfidence);
     const checked = JSON.stringify(cleanChecked(event.checked));
@@ -281,7 +340,13 @@ export class ReviewArchive {
               base_ref = CASE WHEN ? != '' THEN ? ELSE base_ref END,
               installation_id = COALESCE(?, installation_id),
               p0 = ?, p1 = ?, p2 = ?, p3 = ?, finding_count = ?, counts_known = ?,
-              error = ?
+              error = ?,
+              input_tokens = CASE WHEN ? = 1 THEN ? ELSE input_tokens END,
+              output_tokens = CASE WHEN ? = 1 THEN ? ELSE output_tokens END,
+              cache_read_tokens = CASE WHEN ? = 1 THEN ? ELSE cache_read_tokens END,
+              reasoning_tokens = CASE WHEN ? = 1 THEN ? ELSE reasoning_tokens END,
+              model_calls = CASE WHEN ? = 1 THEN ? ELSE model_calls END,
+              cost_usd = CASE WHEN ? = 1 THEN ? ELSE cost_usd END
             WHERE task_id = ?`,
           ).run(
             finishedAt,
@@ -310,6 +375,7 @@ export class ReviewArchive {
             findingCount,
             countsKnown,
             errorText,
+            ...usageParams(usage),
             identity.taskId,
           );
         } else {
@@ -317,8 +383,9 @@ export class ReviewArchive {
             `INSERT INTO reviews (
               task_id, owner, repo, number, title, sha, base_sha, base_ref, installation_id,
               trigger, started_at, finished_at, outcome, verdict, verdict_reason, overall_confidence,
-              checked_json, policy_json, provider, model, thinking, p0, p1, p2, p3, finding_count, counts_known, error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              checked_json, policy_json, provider, model, thinking, p0, p1, p2, p3, finding_count, counts_known, error,
+              input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, model_calls, cost_usd
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
             identity.taskId,
             identity.owner,
@@ -347,6 +414,12 @@ export class ReviewArchive {
             findingCount,
             countsKnown,
             errorText,
+            usage.inputTokens,
+            usage.outputTokens,
+            usage.cacheReadTokens,
+            usage.reasoningTokens,
+            usage.modelCalls,
+            usage.costUsd,
           );
         }
         db.prepare("DELETE FROM comments WHERE task_id = ?").run(identity.taskId);
@@ -375,12 +448,54 @@ export class ReviewArchive {
             JSON.stringify(comment.evidence),
           );
         }
+        const storedSha = sha || str(existing ?? {}, "sha");
+        db.prepare("DELETE FROM findings WHERE task_id = ?").run(identity.taskId);
+        const insertFinding = db.prepare(
+          `INSERT INTO findings (
+            task_id, owner, repo, number, sha, title, body, trigger_text, priority, kind, category,
+            cwe, rule_ref, confidence, path, start_line, end_line, extension, language, fingerprint,
+            posted, skip_reason, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const row of recorded) {
+          const facts = fileFacts(row.path);
+          insertFinding.run(
+            identity.taskId,
+            identity.owner,
+            identity.repo,
+            identity.number,
+            storedSha,
+            row.title,
+            row.body,
+            row.trigger,
+            row.priority,
+            row.kind,
+            row.category,
+            row.cwe,
+            row.ruleRef,
+            row.confidence,
+            row.path,
+            row.startLine,
+            row.endLine,
+            facts.extension,
+            facts.language,
+            row.fingerprint,
+            row.posted === null ? null : row.posted ? 1 : 0,
+            row.skipReason,
+            finishedAt,
+          );
+        }
         db.exec("COMMIT");
       } catch (error) {
         db.exec("ROLLBACK");
         throw error;
       }
     });
+  }
+
+  /** Aggregated counts for the statistics page. Finding text stays in the database. */
+  stats(filter: StatsQuery): Promise<StatsSnapshot> {
+    return this.#exclusive(() => queryReviewStats(this.#database(), filter));
   }
 
   list(filter: ReviewFilter): Promise<ReviewList> {
@@ -561,12 +676,25 @@ function resultPredicate(result: ReviewFilter["result"]): string | undefined {
   return undefined;
 }
 
-/** Existing archives gain columns that were added after the table was created. */
+/**
+ * Additive columns only, in the order they shipped: `error`, then the usage
+ * columns, then `thinking`. Existing rows keep NULL usage, which the statistics
+ * page shows as unknown rather than zero. A missing findings table is created on open.
+ */
 function migrateReviews(db: DatabaseSync): void {
   const columns = db.prepare("PRAGMA table_info(reviews)").all();
   const names = new Set(columns.map((row) => str(row, "name")));
-  if (!names.has("error")) db.exec("ALTER TABLE reviews ADD COLUMN error TEXT");
-  if (!names.has("thinking")) db.exec("ALTER TABLE reviews ADD COLUMN thinking TEXT");
+  const add = (name: string, ddl: string) => {
+    if (!names.has(name)) db.exec(`ALTER TABLE reviews ADD COLUMN ${ddl}`);
+  };
+  add("error", "error TEXT");
+  add("input_tokens", "input_tokens INTEGER");
+  add("output_tokens", "output_tokens INTEGER");
+  add("cache_read_tokens", "cache_read_tokens INTEGER");
+  add("reasoning_tokens", "reasoning_tokens INTEGER");
+  add("model_calls", "model_calls INTEGER");
+  add("cost_usd", "cost_usd REAL");
+  add("thinking", "thinking TEXT");
 }
 
 function cleanThinking(value: string | undefined): string | null {
@@ -681,6 +809,143 @@ function countPriorities(comments: StoredComment[]): { p0: number; p1: number; p
   const counts = { p0: 0, p1: 0, p2: 0, p3: 0 };
   for (const comment of comments) counts[`p${comment.priority}`] += 1;
   return counts;
+}
+
+type FindingRow = {
+  path: string;
+  startLine: number;
+  endLine: number;
+  priority: Priority;
+  kind: string;
+  category: string;
+  title: string;
+  body: string;
+  trigger: string;
+  confidence: number;
+  fingerprint: string;
+  cwe: string | null;
+  ruleRef: string | null;
+  posted: boolean | null;
+  skipReason: string | null;
+};
+
+function cleanRecorded(findings: RecordedFinding[] | undefined): FindingRow[] {
+  if (!findings) return [];
+  const rows: FindingRow[] = [];
+  const seen = new Set<string>();
+  for (const item of findings) {
+    if (rows.length >= MAX_FINDINGS) break;
+    const finding = item.finding;
+    let path: string;
+    try {
+      path = normalizeRepoPath(finding.path);
+    } catch {
+      path = clip(finding.path.replaceAll("\0", ""), 500);
+      if (!path) continue;
+    }
+    if (!Number.isInteger(finding.startLine) || finding.startLine < 1) continue;
+    if (!Number.isInteger(finding.endLine) || finding.endLine < finding.startLine) continue;
+    if (finding.priority !== 0 && finding.priority !== 1 && finding.priority !== 2 && finding.priority !== 3) continue;
+    const title = clip(finding.title, 80);
+    if (!title) continue;
+    const fingerprint = FINGERPRINT.test(finding.fingerprint)
+      ? finding.fingerprint
+      : findingFingerprint({ path, category: finding.category || "unknown", title });
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    const category = clip(finding.category, 40) || "unknown";
+    rows.push({
+      path,
+      startLine: finding.startLine,
+      endLine: finding.endLine,
+      priority: finding.priority,
+      kind: clip(finding.kind, 40) || "bug",
+      category,
+      title,
+      body: clip(finding.body, 8_000),
+      trigger: clip(finding.trigger, 2_000),
+      confidence: cleanConfidence(finding.confidence) ?? 0,
+      fingerprint,
+      cwe: finding.cwe ? clip(finding.cwe, 40) : null,
+      ruleRef: finding.ruleRef ? clip(finding.ruleRef, 200) : null,
+      posted: item.posted === true ? true : item.posted === false ? false : null,
+      skipReason: isSkipReason(item.skipReason) ? item.skipReason : null,
+    });
+  }
+  return rows;
+}
+
+function countRecorded(rows: FindingRow[]): { p0: number; p1: number; p2: number; p3: number } {
+  const counts = { p0: 0, p1: 0, p2: 0, p3: 0 };
+  for (const row of rows) counts[`p${row.priority}`] += 1;
+  return counts;
+}
+
+type CleanUsage = {
+  known: boolean;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  reasoningTokens: number | null;
+  modelCalls: number | null;
+  costUsd: number | null;
+};
+
+function cleanUsage(usage: ReviewUsage | undefined): CleanUsage {
+  if (!usage) {
+    return {
+      known: false,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      reasoningTokens: null,
+      modelCalls: null,
+      costUsd: null,
+    };
+  }
+  return {
+    known: true,
+    inputTokens: countOrZero(usage.inputTokens),
+    outputTokens: countOrZero(usage.outputTokens),
+    cacheReadTokens: countOrNull(usage.cacheReadTokens),
+    reasoningTokens: countOrNull(usage.reasoningTokens),
+    modelCalls: countOrZero(usage.modelCalls),
+    costUsd: costOrNull(usage.costUsd),
+  };
+}
+
+function usageParams(usage: CleanUsage): SQLInputValue[] {
+  const flag = usage.known ? 1 : 0;
+  return [
+    flag,
+    usage.inputTokens,
+    flag,
+    usage.outputTokens,
+    flag,
+    usage.cacheReadTokens,
+    flag,
+    usage.reasoningTokens,
+    flag,
+    usage.modelCalls,
+    flag,
+    usage.costUsd,
+  ];
+}
+
+function countOrZero(value: number | null | undefined): number {
+  return countOrNull(value) ?? 0;
+}
+
+function countOrNull(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  return Math.min(Math.round(value), 1_000_000_000_000);
+}
+
+function costOrNull(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return value;
 }
 
 function policyJson(policy: ReviewPolicy | null | undefined): string | null {

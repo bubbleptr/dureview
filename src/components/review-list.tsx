@@ -33,11 +33,13 @@ export function ReviewListView({ model }: { model: ReviewListModel }) {
     <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-4 p-6">
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between gap-3">
-            <CardTitle>dureview</CardTitle>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-1.5">
+              <CardTitle>dureview</CardTitle>
+              <StatusLine model={model} />
+            </div>
             <UiNav current="reviews" />
           </div>
-          <StatusLine model={model} />
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <form className="flex flex-wrap items-end gap-3" method="get" action="/ui">

@@ -43,7 +43,7 @@ Environment:
   GITHUB_APP_ID               GitHub App id
   GITHUB_APP_PRIVATE_KEY      GitHub App private key PEM, or a path to one
   GITHUB_TOKEN                Personal access token instead of a GitHub App
-  DUREVIEW_UI_TOKEN           Status page password. Unset disables GET /, GET /ui, and GET /ui/settings
+  DUREVIEW_UI_TOKEN           Status page password. Unset disables GET /, GET /ui, GET /ui/stats, and GET /ui/settings
                               Model, thinking, trigger, draft skip, and checkout TTL can be changed at /ui/settings
 `);
 }

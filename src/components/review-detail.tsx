@@ -68,6 +68,9 @@ export function ReviewDetailView({
         <Button variant="outline" size="sm" asChild>
           <a href={model.backHref}>Reviews</a>
         </Button>
+        <a className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui/stats">
+          Statistics
+        </a>
         <a className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui/settings">
           Settings
         </a>

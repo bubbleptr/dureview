@@ -372,6 +372,40 @@ describe("summary off", () => {
     expect(github.reviews[1]?.comments[0]?.body).not.toContain(FINDING.title);
     expect(github.reviewComments.filter((comment) => comment.body.includes(FINDING.fingerprint))).toHaveLength(1);
     expect(github.reviewComments.filter((comment) => comment.body.includes(added.fingerprint))).toHaveLength(1);
+    expect(first.postings.find((posting) => posting.fingerprint === FINDING.fingerprint)).toEqual({
+      fingerprint: FINDING.fingerprint,
+      posted: true,
+      skipReason: null,
+    });
+    expect(second.postings.find((posting) => posting.fingerprint === FINDING.fingerprint)).toEqual({
+      fingerprint: FINDING.fingerprint,
+      posted: true,
+      skipReason: null,
+    });
+  });
+
+  it("keeps another task's inline comment unposted for this run", async () => {
+    const github = new MemoryGitHub();
+    await github.createReview(reviewRequest(), {
+      sha: SHA_A,
+      body: "",
+      event: "COMMENT",
+      comments: [
+        {
+          path: "src/pay.ts",
+          line: 2,
+          body: `already posted\n${findingMarker(FINDING.fingerprint, "7")}`,
+        },
+      ],
+    });
+    const result = await publishReview(base(github, "41", "later", [FINDING], { summary: false }));
+    expect(result.reviewAction).toBe("skipped");
+    expect(github.reviews).toHaveLength(1);
+    expect(result.postings.find((posting) => posting.fingerprint === FINDING.fingerprint)).toEqual({
+      fingerprint: FINDING.fingerprint,
+      posted: false,
+      skipReason: "already_inlined",
+    });
   });
 });
 
