@@ -4,6 +4,13 @@ import type { DetailCommentView, DetailFileView } from "./detail-model.js";
 
 export const REVIEW_DIFF_THEME: ThemeTypes = "light";
 
+/**
+ * Pierre hides the "Expand all" control. Show it beside the up and down buttons
+ * so a collapsed gap can be opened in either direction or all at once.
+ */
+export const REVIEW_EXPAND_CSS =
+  "[data-expand-button][data-expand-all-button]{display:flex}[data-expand-index] [data-separator-wrapper][data-separator-multi-button]{grid-template-columns:32px 32px minmax(0,1fr) auto}";
+
 export type ReviewTreePreload = {
   id: string;
   shadowHtml: string;

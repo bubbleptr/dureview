@@ -427,6 +427,7 @@ export function testConfig(dataDir: string): Config {
     skipDrafts: false,
     uiToken: undefined,
     defaultTrigger: "manual",
+    checkoutTtlDays: 30,
   };
 }
 

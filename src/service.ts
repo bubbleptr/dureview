@@ -12,6 +12,7 @@ import { verifyGithubSignature } from "./github/signature.js";
 import { parseWebhook, type ReviewCommand } from "./github/webhook.js";
 import { log } from "./log.js";
 import { readBaseDureview, type RepoCheckout } from "./review/checkout.js";
+import { loadReviewFilePair, type ReviewFileContents } from "./ui/file-contents.js";
 import { ReviewArchive, REVIEWS_DB_FILE, type ReviewDetail, type ReviewFilter, type ReviewList } from "./review/archive.js";
 import type { PullFile } from "./github/client.js";
 import { ReviewLog, type ReviewLogEntry } from "./review/history.js";
@@ -157,6 +158,38 @@ export class DureviewService {
   /** True when this task is in the archive. Does not call GitHub. */
   reviewExists(taskId: string): Promise<boolean> {
     return this.archive.exists(taskId);
+  }
+
+  /** Owner, repo, and head SHA of reviews whose checkout must not be deleted. */
+  runningCheckouts(): Promise<Array<{ owner: string; repo: string; sha: string }>> {
+    return this.archive.runningCheckouts();
+  }
+
+  /**
+   * Full old and new text for one changed file.
+   * The local checkout is preferred. GitHub is used when that checkout is gone.
+   * Binary files, oversized files, and a failed lookup return `unavailable`.
+   */
+  async reviewFileContents(
+    taskId: string,
+    filePath: string,
+    previousPath: string | null,
+    signal: AbortSignal,
+  ): Promise<ReviewFileContents> {
+    const review = await this.archive.get(taskId);
+    if (!review) return { kind: "unavailable" };
+    return loadReviewFilePair({
+      checkoutRoot: join(this.config.dataDir, "checkouts"),
+      github: this.github,
+      owner: review.owner,
+      repo: review.repo,
+      installationId: review.installationId,
+      sha: review.sha,
+      baseSha: review.baseSha,
+      path: filePath,
+      previousPath,
+      signal,
+    });
   }
 
   /**

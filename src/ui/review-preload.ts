@@ -3,6 +3,7 @@ import { preloadFileTree } from "@pierre/trees/ssr";
 import type { ReviewDetailModel } from "./detail-model.js";
 import {
   REVIEW_DIFF_THEME,
+  REVIEW_EXPAND_CSS,
   parseReviewPatch,
   reviewAnnotations,
   reviewTreeOptions,
@@ -16,7 +17,15 @@ export async function preloadReviewPresentation(model: ReviewDetailModel): Promi
       if (!file.diffText || !parseReviewPatch(file.diffText)) return null;
       const preloaded = await preloadPatchDiff({
         patch: file.diffText,
-        options: { diffStyle: "unified", themeType: REVIEW_DIFF_THEME },
+        options: {
+          diffStyle: "unified",
+          themeType: REVIEW_DIFF_THEME,
+          unsafeCSS: REVIEW_EXPAND_CSS,
+          // Presence of a loader is what draws the expand controls. Contents load on click.
+          loadDiffFiles: async () => {
+            throw new Error("full file contents load when a hunk is expanded");
+          },
+        },
         annotations: reviewAnnotations(file),
       });
       return [file.anchor, preloaded.prerenderedHTML] as const;

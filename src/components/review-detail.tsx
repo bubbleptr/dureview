@@ -1,4 +1,5 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useState, type ReactNode } from "react";
+import type { FileDiffLoadedFiles, FileDiffMetadata } from "@pierre/diffs";
 import { FileDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { FileTree, useFileTree } from "@pierre/trees/react";
 import type {
@@ -9,8 +10,10 @@ import type {
   DetailSummary,
   ReviewDetailModel,
 } from "../ui/detail-model.js";
+import { toDiffFiles } from "../ui/diff-files.js";
 import {
   REVIEW_DIFF_THEME,
+  REVIEW_EXPAND_CSS,
   parseReviewPatch,
   reviewAnnotations,
   reviewTreeOptions,
@@ -53,9 +56,11 @@ const COUNT_TONE: Record<string, string> = {
 export function ReviewDetailView({
   model,
   presentation,
+  taskId,
 }: {
   model: ReviewDetailModel;
   presentation?: ReviewPresentation;
+  taskId?: string;
 }) {
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -97,7 +102,7 @@ export function ReviewDetailView({
           ) : null}
         </aside>
         <main className="min-h-0 overflow-auto border-b min-[960px]:border-r min-[960px]:border-b-0">
-          <DiffColumn model={model} presentation={presentation} />
+          <DiffColumn model={model} presentation={presentation} taskId={taskId} />
         </main>
         <aside className="min-h-0 overflow-x-hidden overflow-y-auto">
           <SummaryRail summary={model.summary} />
@@ -138,11 +143,14 @@ function ReviewTree({
 function DiffColumn({
   model,
   presentation,
+  taskId,
 }: {
   model: ReviewDetailModel;
   presentation?: ReviewPresentation;
+  taskId?: string;
 }) {
   const [diffStyle, setDiffStyle] = useState<"unified" | "split">("unified");
+  const loadDiffFiles = useLoadDiffFiles(taskId);
   const highlighted = model.files.some((file) => file.diffText != null && parseReviewPatch(file.diffText) != null);
   return (
     <div>
@@ -184,6 +192,7 @@ function DiffColumn({
           key={file.anchor}
           file={file}
           diffStyle={diffStyle}
+          loadDiffFiles={taskId ? loadDiffFiles : undefined}
           prerenderedHTML={diffStyle === "unified" ? presentation?.diffs[file.anchor] : undefined}
         />
       ))}
@@ -192,13 +201,32 @@ function DiffColumn({
   );
 }
 
+function useLoadDiffFiles(taskId: string | undefined) {
+  return useCallback(
+    async (fileDiff: FileDiffMetadata): Promise<FileDiffLoadedFiles> => {
+      if (!taskId) throw new Error("file contents unavailable");
+      const { getReviewFileContents } = await import("../ui/file-fn.js");
+      const result = await getReviewFileContents({
+        data: { taskId, path: fileDiff.name, previousPath: fileDiff.prevName ?? null },
+      });
+      if (result.kind !== "files") throw new Error("file contents unavailable");
+      const files = toDiffFiles(fileDiff, result);
+      if (!files) throw new Error("file contents unavailable");
+      return files;
+    },
+    [taskId],
+  );
+}
+
 function FileSection({
   file,
   diffStyle,
+  loadDiffFiles,
   prerenderedHTML,
 }: {
   file: DetailFileView;
   diffStyle: "unified" | "split";
+  loadDiffFiles?: (fileDiff: FileDiffMetadata) => Promise<FileDiffLoadedFiles>;
   prerenderedHTML?: string;
 }) {
   const parsed = file.diffText ? parseReviewPatch(file.diffText) : null;
@@ -208,7 +236,7 @@ function FileSection({
       {parsed && file.diffText ? (
         <FileDiff
           fileDiff={parsed}
-          options={{ diffStyle, themeType: REVIEW_DIFF_THEME }}
+          options={{ diffStyle, themeType: REVIEW_DIFF_THEME, unsafeCSS: REVIEW_EXPAND_CSS, loadDiffFiles }}
           lineAnnotations={annotations}
           prerenderedHTML={prerenderedHTML}
           disableWorkerPool

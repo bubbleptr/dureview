@@ -3,7 +3,7 @@ import { assertServeConfig, configFromEnv, type Config } from "../config.js";
 import { createReviewModels, resolveProvider } from "../auth/session.js";
 import { GithubRest } from "../github/client.js";
 import { log } from "../log.js";
-import { GitCheckout } from "../review/checkout.js";
+import { checkoutProtectionKey, cleanupCheckouts, GitCheckout } from "../review/checkout.js";
 import { DureviewService } from "../service.js";
 import type { ListContext } from "../ui/list-data.js";
 
@@ -17,6 +17,10 @@ export type AppRuntime = {
 let current: AppRuntime | undefined;
 let opening: Promise<AppRuntime> | undefined;
 let hooks = false;
+let checkoutTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Six hours. Startup runs one sweep immediately. */
+const CHECKOUT_SWEEP_MS = 6 * 60 * 60 * 1000;
 
 export function getRuntime(): Promise<AppRuntime> {
   if (current) return Promise.resolve(current);
@@ -25,6 +29,7 @@ export function getRuntime(): Promise<AppRuntime> {
 }
 
 export async function closeRuntime(): Promise<void> {
+  stopCheckoutSweep();
   const runtime = current;
   current = undefined;
   opening = undefined;
@@ -78,6 +83,8 @@ async function openRuntime(): Promise<AppRuntime> {
   const runtime: AppRuntime = { service, config, provider, startedAt: Date.now() };
   current = runtime;
   installShutdown();
+  await sweepCheckouts(service, config);
+  armCheckoutSweep(service, config);
   log("info", "dureview ready", {
     provider,
     model: config.modelId,
@@ -86,6 +93,34 @@ async function openRuntime(): Promise<AppRuntime> {
     dataDir: config.dataDir,
   });
   return runtime;
+}
+
+async function sweepCheckouts(service: DureviewService, config: Config): Promise<void> {
+  try {
+    const running = await service.runningCheckouts();
+    const removed = await cleanupCheckouts({
+      root: join(config.dataDir, "checkouts"),
+      ttlMs: config.checkoutTtlDays * 24 * 60 * 60 * 1000,
+      protectedKeys: new Set(running.map((item) => checkoutProtectionKey(item.owner, item.repo, item.sha))),
+    });
+    if (removed.length > 0) log("info", "removed old checkouts", { count: removed.length });
+  } catch (error) {
+    log("error", "checkout cleanup failed", { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+function armCheckoutSweep(service: DureviewService, config: Config): void {
+  stopCheckoutSweep();
+  checkoutTimer = setInterval(() => {
+    void sweepCheckouts(service, config);
+  }, CHECKOUT_SWEEP_MS);
+  checkoutTimer.unref();
+}
+
+function stopCheckoutSweep(): void {
+  if (!checkoutTimer) return;
+  clearInterval(checkoutTimer);
+  checkoutTimer = undefined;
 }
 
 function installShutdown(): void {
