@@ -13,7 +13,8 @@
   },
   "scripts": {
     "dev": "vite dev",
-    "build": "tsc -p tsconfig.json && vite build",
+    "build": "tsc -p tsconfig.json && vite build && node scripts/smoke-pi-ai-external.mjs",
+    "smoke:server": "node scripts/smoke-pi-ai-external.mjs",
     "test": "vitest run",
     "e2e": "vitest run test/e2e.test.ts",
     "start": "node dist/cli.js serve",

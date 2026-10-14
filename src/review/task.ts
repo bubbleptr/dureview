@@ -232,7 +232,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
           );
           const firstSettled = await first.wait(context);
           if (firstSettled.status !== "done") {
-            await fail(`Review run did not finish: ${firstSettled.reason}`);
+            await fail(unfinishedReviewMessage("run", firstSettled));
             return;
           }
           let draft = await runtime.snapshot(ReviewDraft, conversationId, context);
@@ -248,7 +248,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             );
             const nudged = await nudge.wait(context);
             if (nudged.status !== "done") {
-              await fail(`Review nudge did not finish: ${nudged.reason}`);
+              await fail(unfinishedReviewMessage("nudge", nudged));
               return;
             }
             draft = await runtime.snapshot(ReviewDraft, conversationId, context);
@@ -641,4 +641,36 @@ function failedEvent(current: { id: TaskId<ReviewResult>; input: ReviewRequest }
 
 function signalOf(context: Context): AbortSignal {
   return context.abortSignal ?? new AbortController().signal;
+}
+
+/** Settlement `detail` included in the failure text. Long model errors stay bounded. */
+const SETTLEMENT_DETAIL_MAX = 500;
+
+/**
+ * Failure text for a run or nudge that did not reach `done`.
+ * Check runs, the status-page error, and `review failed` logs all use this string.
+ */
+export function unfinishedReviewMessage(
+  kind: "run" | "nudge",
+  settled: { reason: string; detail?: unknown },
+): string {
+  const label = kind === "run" ? "Review run did not finish" : "Review nudge did not finish";
+  const detail = settlementDetailText(settled.detail);
+  return detail ? `${label}: ${settled.reason}: ${detail}` : `${label}: ${settled.reason}`;
+}
+
+function settlementDetailText(detail: unknown): string {
+  if (detail == null) return "";
+  let text: string;
+  if (typeof detail === "string") text = detail;
+  else {
+    try {
+      text = JSON.stringify(detail);
+    } catch {
+      return "";
+    }
+  }
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  return trimmed.length <= SETTLEMENT_DETAIL_MAX ? trimmed : trimmed.slice(0, SETTLEMENT_DETAIL_MAX);
 }
