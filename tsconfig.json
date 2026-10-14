@@ -3,7 +3,8 @@
     "target": "ES2023",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,
@@ -12,7 +13,15 @@
     "declaration": false,
     "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node"]
+    "types": ["node", "react"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": [
+    "src/routes",
+    "src/router.tsx",
+    "src/server-entry.ts",
+    "src/ui/list-fn.ts",
+    "src/routeTree.gen.ts",
+    "src/styles.css"
+  ]
 }

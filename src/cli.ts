@@ -30,7 +30,8 @@ function printHelp(): void {
 Usage:
   dureview login     Sign in with a ChatGPT subscription (Codex OAuth)
   dureview logout    Remove the stored Codex credential
-  dureview serve     Run the webhook service (default)
+  dureview serve     Run the built TanStack Start server (default)
+  npm run dev        Local development server with live reload
 
 Environment:
   DUREVIEW_DATA_DIR           Credential and session storage (default: ./data)
