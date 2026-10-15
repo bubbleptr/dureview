@@ -25,6 +25,7 @@ import {
   statesMatch,
 } from "./github/manifest.js";
 import { githubWebOrigin } from "./github/web.js";
+import { redirectResponse } from "./http/headers.js";
 import { ServerSettings, type EffectiveConfig, type SettingsWriteResult } from "./settings/effective.js";
 import type { ConsoleView, SettingsFormValues, SettingsPageModel } from "./settings/page.js";
 import type { GitHub } from "./github/client.js";
@@ -63,8 +64,11 @@ export type ServiceOptions = {
 
 export type WebhookResponse = { status: number; body: Record<string, unknown> };
 
+const GITHUB_SETUP_BUSY = "GitHub setup is already finishing. Start it again from settings.";
+
 export class DureviewService {
   #githubState: { state: string; expires: number } | null = null;
+  #githubExchange = false;
   #githubNotice: string | null = null;
 
   private constructor(
@@ -241,6 +245,9 @@ export class DureviewService {
   }
 
   beginGitHubSetup(origin: string, org: string): Response | null {
+    if (this.#githubExchange) {
+      return redirectResponse(`/ui/settings?problem=${encodeURIComponent(GITHUB_SETUP_BUSY)}`);
+    }
     const web = githubWebOrigin(this.config.githubApiUrl);
     const action = web ? manifestCreateUrl(this.config.githubApiUrl, org) : null;
     if (!web || !action) return null;
@@ -251,18 +258,26 @@ export class DureviewService {
   }
 
   async finishGitHubSetup(state: string, code: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (this.#githubExchange) {
+      return { ok: false, error: GITHUB_SETUP_BUSY };
+    }
     const expected = this.#githubState;
-    this.#githubState = null;
     if (!expected || expected.expires < Date.now() || !statesMatch(expected.state, state)) {
+      if (expected && expected.expires < Date.now()) this.#githubState = null;
       return { ok: false, error: "GitHub setup expired. Start it again from settings." };
     }
+    this.#githubExchange = true;
     try {
       const app = await exchangeAppManifest({ code, apiUrl: this.config.githubApiUrl });
       await this.githubApps.save(app);
       this.#githubNotice = "GitHub App saved.";
+      this.#githubState = null;
       return { ok: true };
     } catch (error) {
+      this.#githubState = null;
       return { ok: false, error: publicAuthError(error) };
+    } finally {
+      this.#githubExchange = false;
     }
   }
 
