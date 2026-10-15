@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
 import { isThinkingLevel } from "../config.js";
 import { log } from "../log.js";
+import type { PullFile } from "../github/client.js";
 import { fileFacts, isSkipReason, type RecordedFinding } from "./findings.js";
 import type { ReviewFinished } from "./history.js";
 import { ReviewLog } from "./history.js";
@@ -17,7 +18,7 @@ import {
 import { queryReviewStats, type StatsQuery, type StatsSnapshot } from "./stats.js";
 import type { ReviewUsage } from "./usage.js";
 
-/** SQLite file in the data directory. Mode 0600. Diffs are not stored here. */
+/** SQLite file in the data directory. Mode 0600. Finished reviews also store their pull file list. */
 export const REVIEWS_DB_FILE = "reviews.sqlite";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
@@ -122,8 +123,9 @@ export type ReviewList = {
 type Identity = { taskId: string; owner: string; repo: string; number: number };
 
 /**
- * Review metadata and structured comments (path + line range) in the data directory.
- * The pull request diff is not written here. Callers load it from GitHub when a review is opened.
+ * Review metadata, structured comments, and the file list of a finished review.
+ * A finished review is immutable at its head SHA, so that list is safe to reuse.
+ * A running review is not stored here: the pull request can still move.
  * Writes are serialized in-process.
  */
 export class ReviewArchive {
@@ -236,6 +238,13 @@ export class ReviewArchive {
       CREATE INDEX IF NOT EXISTS findings_created ON findings(created_at);
       CREATE INDEX IF NOT EXISTS findings_language ON findings(language);
       CREATE INDEX IF NOT EXISTS findings_path ON findings(path);
+      CREATE TABLE IF NOT EXISTS pull_snapshots (
+        task_id TEXT NOT NULL,
+        sha TEXT NOT NULL,
+        files_json TEXT NOT NULL,
+        PRIMARY KEY (task_id, sha),
+        FOREIGN KEY (task_id) REFERENCES reviews(task_id) ON DELETE CASCADE
+      ) STRICT;
     `);
     migrateReviews(db);
     migrateFindingColumns(db);
@@ -612,6 +621,45 @@ export class ReviewArchive {
         comments,
         error: str(row, "error") || null,
       };
+    });
+  }
+
+  /**
+   * File list captured for a finished review at `sha`.
+   * Null when nothing is stored or the stored JSON is not a file list.
+   */
+  readPullSnapshot(taskId: string, sha: string): Promise<PullFile[] | null> {
+    if (!TASK_ID.test(taskId) || sha.length === 0) return Promise.resolve(null);
+    return this.#exclusive(() => {
+      const row = this.#database()
+        .prepare("SELECT files_json FROM pull_snapshots WHERE task_id = ? AND sha = ?")
+        .get(taskId, sha);
+      if (!row) return null;
+      const files = parseStoredPullFiles(str(row, "files_json"));
+      if (files) return files;
+      log("error", "ignored unreadable pull snapshot", { taskId });
+      return null;
+    });
+  }
+
+  /** Replace any older snapshot for this task. The key is the review's head SHA. */
+  writePullSnapshot(taskId: string, sha: string, files: PullFile[]): Promise<void> {
+    if (!TASK_ID.test(taskId) || sha.length === 0) return Promise.resolve();
+    const payload = JSON.stringify(files.map(storedPullFile));
+    return this.#exclusive(() => {
+      const db = this.#database();
+      db.exec("BEGIN");
+      try {
+        db.prepare("DELETE FROM pull_snapshots WHERE task_id = ? AND sha != ?").run(taskId, sha);
+        db.prepare(
+          `INSERT INTO pull_snapshots (task_id, sha, files_json) VALUES (?, ?, ?)
+           ON CONFLICT(task_id, sha) DO UPDATE SET files_json = excluded.files_json`,
+        ).run(taskId, sha, payload);
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
     });
   }
 
@@ -1132,4 +1180,67 @@ function isIso(value: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const MAX_SNAPSHOT_FILES = 3_000;
+
+function storedPullFile(file: PullFile): PullFile {
+  return {
+    filename: file.filename,
+    status: file.status,
+    additions: file.additions,
+    deletions: file.deletions,
+    patch: file.patch,
+    previousFilename: file.previousFilename,
+  };
+}
+
+function parseStoredPullFiles(json: string): PullFile[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length > MAX_SNAPSHOT_FILES) return null;
+  const files: PullFile[] = [];
+  for (const row of parsed) {
+    const file = parseStoredPullFile(row);
+    if (!file) return null;
+    files.push(file);
+  }
+  return files;
+}
+
+function parseStoredPullFile(row: unknown): PullFile | null {
+  if (!isRecord(row)) return null;
+  const filename = repoPath(row.filename);
+  const previous = optionalRepoPath(row.previousFilename);
+  const status = typeof row.status === "string" && row.status.length > 0 && row.status.length <= 40 ? row.status : null;
+  if (!filename || !previous || !status) return null;
+  const additions = countField(row.additions);
+  const deletions = countField(row.deletions);
+  const patch = row.patch === null ? null : typeof row.patch === "string" ? row.patch : undefined;
+  if (additions === null || deletions === null || patch === undefined) return null;
+  return { filename, status, additions, deletions, patch, previousFilename: previous.path };
+}
+
+function optionalRepoPath(value: unknown): { path: string | null } | null {
+  if (value === null) return { path: null };
+  const path = repoPath(value);
+  if (!path) return null;
+  return { path };
+}
+
+function countField(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
+  return value;
+}
+
+/** Reject absolute paths and `..` so a corrupt snapshot cannot point outside the repo. */
+function repoPath(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1_024) return null;
+  const filename = value.replaceAll("\\", "/").replace(/^\.\//, "");
+  if (!filename || filename.startsWith("/") || filename.split("/").includes("..")) return null;
+  return filename;
 }

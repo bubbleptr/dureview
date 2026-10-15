@@ -9,7 +9,7 @@ import type { ReviewDetailModel } from "./detail-model.js";
 import type { ReviewListModel } from "./list-model.js";
 import type { ShellStatus } from "../components/app-shell.js";
 import type { StatsPageModel } from "./stats-model.js";
-import { preloadReviewPresentation } from "./review-preload.js";
+import { reviewTreePreload } from "./review-preload.js";
 
 export function renderLoginHtml(input: { next: string; error?: string }): string {
   return documentShell("登录 · dureview", renderToStaticMarkup(<LoginForm next={input.next} error={input.error} />));
@@ -23,11 +23,10 @@ export function renderSettingsHtml(model: SettingsPageModel): string {
   return documentShell("Settings · dureview", renderToStaticMarkup(<SettingsForm model={model} />));
 }
 
-export async function renderDetailHtml(model: ReviewDetailModel): Promise<string> {
-  const presentation = await preloadReviewPresentation(model);
+export function renderDetailHtml(model: ReviewDetailModel): string {
   return documentShell(
     model.pageTitle,
-    renderToStaticMarkup(<ReviewDetailView model={model} presentation={presentation} />),
+    renderToStaticMarkup(<ReviewDetailView model={model} tree={reviewTreePreload(model.files)} />),
   );
 }
 

@@ -139,7 +139,7 @@ describe("pull request diff placement", () => {
     expect(html).not.toMatch(/<script[\s>]/);
     expect(html).not.toContain("<b>xss</b>");
     const text = html.replace(/<[^>]+>/g, "");
-    const lineAt = text.indexOf("if (amount > 0) return { ok: true };");
+    const lineAt = text.indexOf("if (amount &gt; 0) return { ok: true };");
     expect(lineAt).toBeGreaterThanOrEqual(0);
     expect(text.indexOf("Positive amounts")).toBeGreaterThan(lineAt);
     expect(html).toContain("1 finding");

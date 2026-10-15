@@ -1,5 +1,4 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { FileDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { FileTree, useFileTree } from "@pierre/trees/react";
 import type {
   DetailCommentView,
@@ -7,6 +6,7 @@ import type {
   DetailLineView,
   DetailSettings,
   DetailSummary,
+  ReviewDetailHeader,
   ReviewDetailModel,
 } from "../ui/detail-model.js";
 import {
@@ -18,14 +18,7 @@ import {
   windowDiffText,
   type FocusSegment,
 } from "../ui/diff-focus.js";
-import {
-  parseReviewPatch,
-  reviewAnnotations,
-  reviewDiffOptions,
-  reviewFindingCount,
-  reviewTreeOptions,
-  type ReviewPresentation,
-} from "../ui/review-presentation.js";
+import { reviewFindingCount, reviewTreeOptions, type ReviewTreePreload } from "../ui/review-presentation.js";
 import { dragLimit, fitPanelWidths, SUMMARY_LIMIT, TREE_LIMIT } from "../ui/panel-widths.js";
 import { AppShell, type ShellStatus } from "./app-shell.js";
 import { useDiffStyle } from "./diff-style.js";
@@ -65,12 +58,11 @@ const SUMMARY_WIDTH_KEY = "dureview-summary-width";
 
 export function ReviewDetailView({
   model,
-  presentation,
+  tree = null,
   status = null,
 }: {
   model: ReviewDetailModel;
-  presentation?: ReviewPresentation;
-  taskId?: string;
+  tree?: ReviewTreePreload | null;
   status?: ShellStatus | null;
 }) {
   const [diffStyle] = useDiffStyle();
@@ -114,7 +106,7 @@ export function ReviewDetailView({
             {files.length === 0 ? (
               <p className="px-3 py-3 text-sm text-muted-foreground">No changed files.</p>
             ) : (
-              <ReviewTree files={files} preloaded={presentation?.tree ?? null} />
+              <ReviewTree files={files} preloaded={tree} />
             )}
             {model.hiddenFiles > 0 ? (
               <p className="px-3 py-2 text-sm text-muted-foreground">{model.hiddenFiles} more files are not shown.</p>
@@ -128,7 +120,7 @@ export function ReviewDetailView({
             onWidth={(requested) => setTreePref(clamp(requested, treeDrag.min, treeDrag.max))}
           />
           <div className="min-h-0 min-w-0 overflow-auto border-b min-[960px]:border-r min-[960px]:border-b-0">
-            <DiffColumn files={files} model={model} presentation={presentation} diffStyle={diffStyle} />
+            <DiffColumn files={files} model={model} diffStyle={diffStyle} />
           </div>
           <PanelHandle
             label="Resize summary"
@@ -148,7 +140,87 @@ export function ReviewDetailView({
   );
 }
 
-function ReviewMeta({ model }: { model: ReviewDetailModel }) {
+export function ReviewDetailPending({ header, status }: { header: ReviewDetailHeader; status?: ShellStatus | null }) {
+  return (
+    <ReviewFrame header={header} status={status}>
+      <LoadingColumn label="Loading changed files." />
+      <div className="panel-handle" aria-hidden="true" />
+      <LoadingColumn label="Loading the diff." />
+      <div className="panel-handle" aria-hidden="true" />
+      <LoadingColumn label="Loading the summary." />
+    </ReviewFrame>
+  );
+}
+
+export function ReviewDetailUnavailable({
+  header,
+  status,
+  message,
+}: {
+  header: ReviewDetailHeader;
+  status?: ShellStatus | null;
+  message: string;
+}) {
+  return (
+    <ReviewFrame header={header} status={status}>
+      <p role="alert" className="px-3 py-4 text-sm" style={{ gridColumn: "1 / -1" }}>
+        {message}
+      </p>
+    </ReviewFrame>
+  );
+}
+
+function ReviewFrame({
+  header,
+  status,
+  children,
+}: {
+  header: ReviewDetailHeader;
+  status?: ShellStatus | null;
+  children: ReactNode;
+}) {
+  return (
+    <AppShell
+      current="reviews"
+      title={header.heading}
+      status={status}
+      fill
+      crumbs={
+        <a className="shrink-0 text-sm text-muted-foreground hover:text-foreground" href={header.backHref}>
+          Reviews
+        </a>
+      }
+    >
+      <div className="flex h-full min-h-0 flex-col">
+        <ReviewMeta model={header} />
+        <div
+          className="review-columns min-h-0 flex-1"
+          style={{
+            ["--tree-width" as string]: `${TREE_LIMIT.fallback}px`,
+            ["--summary-width" as string]: `${SUMMARY_LIMIT.fallback}px`,
+          }}
+        >
+          {children}
+        </div>
+      </div>
+    </AppShell>
+  );
+}
+
+function LoadingColumn({ label }: { label: string }) {
+  return (
+    <div className="px-3 py-3" role="status" aria-busy="true">
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <div className="mt-3 space-y-2" aria-hidden="true">
+        <div className="h-3 w-3/4 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+        <div className="h-3 w-1/2 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+        <div className="h-3 w-2/3 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+      </div>
+    </div>
+  );
+}
+
+function ReviewMeta({ model }: { model: ReviewDetailHeader }) {
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2">
       {model.pullHref ? (
@@ -175,7 +247,7 @@ function ReviewTree({
   preloaded,
 }: {
   files: DetailFileView[];
-  preloaded: ReviewPresentation["tree"];
+  preloaded: ReviewTreePreload | null;
 }) {
   const { model } = useFileTree(
     reviewTreeOptions(files, (selected) => {
@@ -203,12 +275,10 @@ function ReviewTree({
 function DiffColumn({
   files,
   model,
-  presentation,
   diffStyle,
 }: {
   files: DetailFileView[];
   model: ReviewDetailModel;
-  presentation?: ReviewPresentation;
   diffStyle: "unified" | "split";
 }) {
   const diffTheme = useDiffTheme();
@@ -297,7 +367,6 @@ function DiffColumn({
           }
           diffStyle={diffStyle}
           diffTheme={diffTheme}
-          presentation={presentation}
         />
       ))}
       <CommentGroup title={model.outsideTitle} comments={model.outside} />
@@ -314,7 +383,6 @@ function FileBlock({
   onCollapse,
   diffStyle,
   diffTheme,
-  presentation,
 }: {
   file: DetailFileView;
   open: boolean;
@@ -324,7 +392,6 @@ function FileBlock({
   onCollapse: (key: string) => void;
   diffStyle: "unified" | "split";
   diffTheme: "light" | "dark";
-  presentation?: ReviewPresentation;
 }) {
   const findings = reviewFindingCount(file);
   const anchors = commentAnchorIndexes(file.lines);
@@ -363,7 +430,6 @@ function FileBlock({
               segment={segment}
               diffStyle={diffStyle}
               diffTheme={diffTheme}
-              presentation={presentation}
               wholeFile={anchors.length === 0}
               onExpand={() => onExpand(`${file.anchor}:${gapKey(segment.start, segment.end)}`)}
               onCollapse={() => onCollapse(`${file.anchor}:${gapKey(segment.start, segment.end)}`)}
@@ -382,7 +448,6 @@ function FocusSegmentView({
   segment,
   diffStyle,
   diffTheme,
-  presentation,
   wholeFile,
   onExpand,
   onCollapse,
@@ -391,7 +456,6 @@ function FocusSegmentView({
   segment: FocusSegment;
   diffStyle: "unified" | "split";
   diffTheme: "light" | "dark";
-  presentation?: ReviewPresentation;
   wholeFile: boolean;
   onExpand: () => void;
   onCollapse: () => void;
@@ -410,8 +474,6 @@ function FocusSegmentView({
   }
   const lines = sliceLines(file.lines, segment.start, segment.end);
   const patch = wholeFile ? file.diffText : windowDiffText(file, lines);
-  const parsed = patch ? parseReviewPatch(patch) : null;
-  const preloadKey = wholeFile ? `${file.anchor}:full` : `${file.anchor}:${segment.start}-${segment.end}`;
   return (
     <div>
       {segment.collapsible ? (
@@ -423,22 +485,73 @@ function FocusSegmentView({
           Collapse
         </button>
       ) : null}
-      {parsed ? (
-        <FileDiff
-          fileDiff={parsed}
-          options={reviewDiffOptions({ diffStyle, themeType: diffTheme, lines })}
-          lineAnnotations={reviewAnnotations({ ...file, lines })}
-          prerenderedHTML={
-            diffStyle === "unified" && diffTheme === "light" ? presentation?.diffs[preloadKey] : undefined
-          }
-          disableWorkerPool
-          renderAnnotation={renderFinding}
-        />
+      {patch ? (
+        <LazyPatch file={file} lines={lines} patch={patch} diffStyle={diffStyle} diffTheme={diffTheme} />
       ) : (
         <PlainLines lines={lines} />
       )}
     </div>
   );
+}
+
+type HighlightedPatch = typeof import("./review-diff.js").HighlightedPatch;
+
+function LazyPatch({
+  file,
+  lines,
+  patch,
+  diffStyle,
+  diffTheme,
+}: {
+  file: DetailFileView;
+  lines: DetailLineView[];
+  patch: string;
+  diffStyle: "unified" | "split";
+  diffTheme: "light" | "dark";
+}) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [Highlight, setHighlight] = useState<HighlightedPatch | null>(null);
+  useEffect(() => {
+    const node = hostRef.current;
+    if (!node) return;
+    let cancelled = false;
+    const load = () => {
+      void import("./review-diff.js").then((mod) => {
+        if (!cancelled) setHighlight(() => mod.HighlightedPatch);
+      });
+    };
+    if (typeof IntersectionObserver === "undefined") {
+      load();
+      return () => {
+        cancelled = true;
+      };
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        observer.disconnect();
+        load();
+      },
+      { rootMargin: "480px 0px" },
+    );
+    observer.observe(node);
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
+  }, []);
+  const highlighted = Highlight ? (
+    <Highlight
+      file={file}
+      lines={lines}
+      patch={patch}
+      diffStyle={diffStyle}
+      diffTheme={diffTheme}
+      renderComment={(comment) => <CommentCard comment={comment} inset />}
+      fallback={<PlainLines lines={lines} />}
+    />
+  ) : null;
+  return <div ref={hostRef}>{highlighted ?? <PlainLines lines={lines} />}</div>;
 }
 
 function useDiffTheme(): "light" | "dark" {
@@ -532,10 +645,6 @@ function PanelHandle({
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
-}
-
-function renderFinding(annotation: DiffLineAnnotation<DetailCommentView>): ReactNode {
-  return <CommentCard comment={annotation.metadata} inset />;
 }
 
 function PlainLines({ lines }: { lines: DetailLineView[] }) {

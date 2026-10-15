@@ -112,15 +112,116 @@ describe("review detail loader", () => {
     expect(serialized).not.toContain(BASE_SHA);
     expect(serialized).not.toContain("installationId");
 
+    github.pullFiles = [];
     github.pullFilesError = new Error("GitHub 500 TOKEN_SHOULD_NOT_LEAK");
-    const failedDiff = await loadReviewDetail(service, "https://api.github.com", "4");
-    expect(failedDiff?.diffUnavailable).toBe(true);
-    expect(failedDiff?.files).toEqual([]);
-    expect(failedDiff?.outside.map((comment) => comment.title)).toEqual(["<b>xss</b>"]);
-    expect(failedDiff?.outsideTitle).toBe("Other files");
-    expect(JSON.stringify(failedDiff)).not.toContain("TOKEN_SHOULD_NOT_LEAK");
+    const cached = await loadReviewDetail(service, "https://api.github.com", "4");
+    expect(github.pullFileRequests).toHaveLength(1);
+    expect(cached?.diffUnavailable).toBe(false);
+    expect(cached?.files.map((file) => file.filename)).toEqual(["src/pay.ts"]);
+    expect(JSON.stringify(cached)).not.toContain("TOKEN_SHOULD_NOT_LEAK");
     expect(await loadReviewDetail(service, "https://api.github.com", "missing")).toBeNull();
     expect(await loadReviewDetail(service, "https://api.github.com", "../secret")).toBeNull();
+  });
+
+  it("keeps a running review live and does not store a failed fetch", async () => {
+    const dataDir = await tempDataDir();
+    const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
+    await archive.open();
+    await archive.start({
+      taskId: "run",
+      owner: "acme",
+      repo: "demo",
+      number: 8,
+      title: "Still going",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+      trigger: "opened",
+    });
+    await archive.start({
+      taskId: "miss",
+      owner: "acme",
+      repo: "demo",
+      number: 9,
+      title: "Will fail closed",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+      trigger: "opened",
+    });
+    await archive.finish({
+      taskId: "miss",
+      owner: "acme",
+      repo: "demo",
+      number: 9,
+      outcome: "failed",
+      verdict: null,
+      findingCount: null,
+      title: "Will fail closed",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+      error: "clone failed",
+    });
+    archive.close();
+
+    const github = new MemoryGitHub();
+    github.pullFiles = [
+      {
+        filename: "src/pay.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -1 +1 @@\n-old\n+live\n",
+        previousFilename: null,
+      },
+    ];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    closers.push(() => service.close());
+
+    const first = await loadReviewDetail(service, "https://api.github.com", "run");
+    expect(first?.files.map((file) => file.filename)).toEqual(["src/pay.ts"]);
+    github.pullFiles = [
+      {
+        filename: "src/next.ts",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -0,0 +1 @@\n+next\n",
+        previousFilename: null,
+      },
+    ];
+    const second = await loadReviewDetail(service, "https://api.github.com", "run");
+    expect(second?.files.map((file) => file.filename)).toEqual(["src/next.ts"]);
+    expect(github.calls.filter((call) => call === "listPullFiles")).toHaveLength(2);
+
+    github.pullFilesError = new Error("GitHub 500 TOKEN_SHOULD_NOT_LEAK");
+    const missed = await loadReviewDetail(service, "https://api.github.com", "miss");
+    expect(missed?.diffUnavailable).toBe(true);
+    expect(missed?.files).toEqual([]);
+    expect(missed?.summary).toMatchObject({ mode: "incomplete", note: "clone failed" });
+    expect(JSON.stringify(missed)).not.toContain("TOKEN_SHOULD_NOT_LEAK");
+    github.pullFilesError = null;
+    github.pullFiles = [
+      {
+        filename: "src/pay.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -1 +1 @@\n-old\n+kept\n",
+        previousFilename: null,
+      },
+    ];
+    const recovered = await loadReviewDetail(service, "https://api.github.com", "miss");
+    expect(recovered?.diffUnavailable).toBe(false);
+    expect(recovered?.files[0]?.filename).toBe("src/pay.ts");
+    github.pullFilesError = new Error("later");
+    const stored = await loadReviewDetail(service, "https://api.github.com", "miss");
+    expect(stored?.files[0]?.filename).toBe("src/pay.ts");
+    expect(github.calls.filter((call) => call === "listPullFiles")).toHaveLength(4);
   });
 
   it("shows running, stuck, and a missing error reason without priority counts", () => {

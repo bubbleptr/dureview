@@ -231,27 +231,9 @@ export class DureviewService {
     }
     const review = await this.archive.get(taskId);
     if (!review) return { kind: "rejected", status: 404 };
-    let files: PullFile[];
-    try {
-      files = await this.github.listPullFiles(
-        {
-          owner: review.owner,
-          repo: review.repo,
-          number: review.number,
-          installationId: review.installationId,
-        },
-        signal,
-      );
-    } catch (error) {
-      if (signal.aborted) throw error;
-      log("error", "could not load pull request diff", {
-        repo: `${review.owner}/${review.repo}`,
-        pr: review.number,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return { kind: "rejected", status: 404 };
-    }
-    const matched = matchReviewedFile(files, filePath, previousPath);
+    const loaded = await this.#pullFiles(review, signal);
+    if (loaded.diffUnavailable) return { kind: "rejected", status: 404 };
+    const matched = matchReviewedFile(loaded.files, filePath, previousPath);
     if (matched.kind === "rejected") return matched;
     return loadReviewFilePair({
       checkoutRoot: join(this.config.dataDir, "checkouts"),
@@ -267,9 +249,16 @@ export class DureviewService {
     });
   }
 
+  /** Saved review row. Does not call GitHub. */
+  savedReview(taskId: string): Promise<ReviewDetail | null> {
+    return this.archive.get(taskId);
+  }
+
   /**
-   * One saved review plus the pull request files fetched now.
-   * The diff is not read from disk. A GitHub error leaves the saved comments in place.
+   * One saved review plus its pull request files.
+   * A finished review reuses the file list stored for its head SHA.
+   * A running review always asks GitHub, because the pull request can still move.
+   * A GitHub error leaves the saved comments in place.
    */
   async reviewForUi(
     taskId: string,
@@ -277,6 +266,19 @@ export class DureviewService {
   ): Promise<{ review: ReviewDetail; files: PullFile[]; diffUnavailable: boolean } | null> {
     const review = await this.archive.get(taskId);
     if (!review) return null;
+    const loaded = await this.#pullFiles(review, signal);
+    return { review, files: loaded.files, diffUnavailable: loaded.diffUnavailable };
+  }
+
+  async #pullFiles(
+    review: ReviewDetail,
+    signal: AbortSignal,
+  ): Promise<{ files: PullFile[]; diffUnavailable: boolean }> {
+    const frozen = review.outcome !== "running" && review.sha.length > 0;
+    if (frozen) {
+      const cached = await this.archive.readPullSnapshot(review.taskId, review.sha);
+      if (cached) return { files: cached, diffUnavailable: false };
+    }
     try {
       const files = await this.github.listPullFiles(
         {
@@ -287,14 +289,29 @@ export class DureviewService {
         },
         signal,
       );
-      return { review, files, diffUnavailable: false };
+      if (frozen) await this.#storePullSnapshot(review, files);
+      return { files, diffUnavailable: false };
     } catch (error) {
+      if (signal.aborted) throw error;
       log("error", "could not load pull request diff", {
         repo: `${review.owner}/${review.repo}`,
         pr: review.number,
         error: error instanceof Error ? error.message : String(error),
       });
-      return { review, files: [], diffUnavailable: true };
+      return { files: [], diffUnavailable: true };
+    }
+  }
+
+  async #storePullSnapshot(review: ReviewDetail, files: PullFile[]): Promise<void> {
+    try {
+      await this.archive.writePullSnapshot(review.taskId, review.sha, files);
+    } catch (error) {
+      log("error", "could not store pull snapshot", {
+        repo: `${review.owner}/${review.repo}`,
+        pr: review.number,
+        taskId: review.taskId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

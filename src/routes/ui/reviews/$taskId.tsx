@@ -1,7 +1,13 @@
-import { createFileRoute, notFound } from "@tanstack/react-router";
+import { Suspense } from "react";
+import { Await, createFileRoute, notFound } from "@tanstack/react-router";
 import { LoginForm } from "../../../components/login-form.js";
-import { ReviewDetailView } from "../../../components/review-detail.js";
-import { getReviewDetail } from "../../../ui/detail-fn.js";
+import {
+  ReviewDetailPending,
+  ReviewDetailUnavailable,
+  ReviewDetailView,
+} from "../../../components/review-detail.js";
+import { getReviewDetail, getReviewHeader } from "../../../ui/detail-fn.js";
+import type { DetailPayload } from "../../../ui/detail-data.js";
 import { getShellStatus } from "../../../ui/shell-fn.js";
 
 export const Route = createFileRoute("/ui/reviews/$taskId")({
@@ -16,20 +22,39 @@ export const Route = createFileRoute("/ui/reviews/$taskId")({
     },
   },
   loader: async ({ params }) => {
-    const data = await getReviewDetail({ data: { taskId: params.taskId } });
-    if (data.kind === "missing") throw notFound();
-    const status = data.kind === "detail" ? await getShellStatus() : null;
-    return { ...data, status };
+    const [header, status] = await Promise.all([
+      getReviewHeader({ data: { taskId: params.taskId } }),
+      getShellStatus(),
+    ]);
+    if (header.kind === "missing") throw notFound();
+    if (header.kind === "login") return header;
+    const detail: Promise<DetailPayload> = getReviewDetail({ data: { taskId: params.taskId } }).catch(() => ({
+      kind: "error",
+    }));
+    return { kind: "detail" as const, header: header.header, status, detail };
   },
   head: ({ loaderData }) => ({
-    meta: [{ title: loaderData?.kind === "detail" ? loaderData.model.pageTitle : "登录 · dureview" }],
+    meta: [{ title: loaderData?.kind === "detail" ? loaderData.header.pageTitle : "登录 · dureview" }],
   }),
   component: ReviewDetailPage,
 });
 
 function ReviewDetailPage() {
   const data = Route.useLoaderData();
-  const { taskId } = Route.useParams();
   if (data.kind === "login") return <LoginForm next={data.next} />;
-  return <ReviewDetailView model={data.model} presentation={data.presentation} taskId={taskId} status={data.status} />;
+  return (
+    <Suspense fallback={<ReviewDetailPending header={data.header} status={data.status} />}>
+      <Await promise={data.detail}>
+        {(detail) => {
+          if (detail.kind === "detail") {
+            return <ReviewDetailView model={detail.model} tree={detail.tree} status={data.status} />;
+          }
+          if (detail.kind === "login") return <LoginForm next={detail.next} />;
+          const message =
+            detail.kind === "missing" ? "This review is no longer available." : "The review could not be loaded.";
+          return <ReviewDetailUnavailable header={data.header} status={data.status} message={message} />;
+        }}
+      </Await>
+    </Suspense>
+  );
 }

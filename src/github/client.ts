@@ -119,7 +119,6 @@ export interface GitHub {
   reactToComment(request: GitHubRepo, commentId: number, signal: AbortSignal): Promise<void>;
   /**
    * Changed files for a pull request, including each file's patch when GitHub sends one.
-   * Callers fetch this when a review is opened. It is not stored.
    */
   listPullFiles(request: GitHubRepo & { number: number }, signal: AbortSignal): Promise<PullFile[]>;
   /**
