@@ -291,7 +291,7 @@ export class DureviewService {
     return active.kind === "app" ? "app" : active.kind;
   }
 
-  saveSettings(input: SettingsFormValues, actor: string): Promise<SettingsWriteResult> {
+  saveSettings(input: Partial<SettingsFormValues>, actor: string): Promise<SettingsWriteResult> {
     return this.settings.save(input, actor);
   }
 

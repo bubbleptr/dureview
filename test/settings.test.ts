@@ -404,6 +404,127 @@ describe("settings at runtime", () => {
     const missing = await fetch(`${http.url}/ui/settings/nope`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
     expect(missing.status).toBe(404);
   });
+
+  it("updates only the fields a section submits", async () => {
+    const dataDir = await tempDataDir();
+    const { service } = await openTestService({
+      dataDir,
+      github: new MemoryGitHub(),
+      fauxModels: TWO_MODELS,
+      thinking: "low",
+      responses: [],
+    });
+    const http = await startHttp(service, {
+      host: "127.0.0.1",
+      port: 0,
+      uiToken: UI_TOKEN,
+      dataDir,
+      provider: "faux",
+      modelId: "faux-1",
+      githubToken: true,
+    });
+    closers.push(async () => {
+      await http.close();
+      await service.close();
+    });
+    const auth = { authorization: `Bearer ${UI_TOKEN}` };
+
+    const modelsHtml = await (await fetch(`${http.url}/ui/settings/models`, { headers: auth })).text();
+    expect(modelsHtml).toContain('name="model"');
+    expect(modelsHtml).not.toContain('name="defaultTrigger"');
+    expect(modelsHtml).not.toContain('name="skipDrafts"');
+    expect(modelsHtml).not.toContain('name="checkoutTtlDays"');
+
+    const reviewHtml = await (await fetch(`${http.url}/ui/settings/review`, { headers: auth })).text();
+    expect(reviewHtml).toContain('name="defaultTrigger"');
+    expect(reviewHtml).toContain('name="skipDrafts" value="false"');
+    expect(reviewHtml).not.toContain('name="model"');
+    expect(reviewHtml).not.toContain('name="thinking"');
+    expect(reviewHtml).not.toContain('name="provider"');
+
+    const modelSave = await fetch(`${http.url}/ui/settings/models`, {
+      method: "POST",
+      redirect: "manual",
+      headers: settingsHeaders(http.url),
+      body: new URLSearchParams({
+        section: "models",
+        provider: "faux",
+        model: "faux-2",
+        thinking: "high",
+        save: "1",
+        csrf: settingsCsrfToken(UI_TOKEN),
+      }),
+    });
+    expect(modelSave.status).toBe(303);
+    expect(modelSave.headers.get("location")).toBe("/ui/settings/models?saved=1");
+
+    const reviewSave = await fetch(`${http.url}/ui/settings/review`, {
+      method: "POST",
+      redirect: "manual",
+      headers: settingsHeaders(http.url),
+      body: new URLSearchParams({
+        section: "review",
+        defaultTrigger: "auto",
+        skipDrafts: "false",
+        checkoutTtlDays: "9",
+        save: "1",
+        csrf: settingsCsrfToken(UI_TOKEN),
+      }),
+    });
+    expect(reviewSave.status).toBe(303);
+    expect(service.effectiveConfig()).toMatchObject({
+      modelId: "faux-2",
+      thinking: "high",
+      defaultTrigger: "auto",
+      skipDrafts: false,
+      checkoutTtlDays: 9,
+    });
+
+    const checked = await fetch(`${http.url}/ui/settings/review`, {
+      method: "POST",
+      redirect: "manual",
+      headers: settingsHeaders(http.url),
+      body: new URLSearchParams([
+        ["section", "review"],
+        ["defaultTrigger", "once"],
+        ["skipDrafts", "false"],
+        ["skipDrafts", "true"],
+        ["checkoutTtlDays", "4"],
+        ["save", "1"],
+        ["csrf", settingsCsrfToken(UI_TOKEN)],
+      ]),
+    });
+    expect(checked.status).toBe(303);
+    expect(service.effectiveConfig()).toMatchObject({
+      modelId: "faux-2",
+      thinking: "high",
+      defaultTrigger: "once",
+      skipDrafts: true,
+      checkoutTtlDays: 4,
+    });
+
+    const modelAgain = await fetch(`${http.url}/ui/settings/models`, {
+      method: "POST",
+      redirect: "manual",
+      headers: settingsHeaders(http.url),
+      body: new URLSearchParams({
+        section: "models",
+        provider: "faux",
+        model: "faux-1",
+        thinking: "low",
+        save: "1",
+        csrf: settingsCsrfToken(UI_TOKEN),
+      }),
+    });
+    expect(modelAgain.status).toBe(303);
+    expect(service.effectiveConfig()).toMatchObject({
+      modelId: "faux-1",
+      thinking: "low",
+      defaultTrigger: "once",
+      skipDrafts: true,
+      checkoutTtlDays: 4,
+    });
+  });
 });
 
 function settingsHeaders(url: string): Record<string, string> {

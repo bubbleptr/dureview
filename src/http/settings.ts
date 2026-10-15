@@ -81,14 +81,15 @@ export function settingsActor(request: Request): string {
   return ip ? `ui@${ip}` : "ui";
 }
 
-function formValues(form: URLSearchParams): SettingsFormValues {
-  const skip = form.get("skipDrafts");
-  return {
-    model: form.get("model") ?? "",
-    thinking: (form.get("thinking") ?? "") as ModelThinkingLevel,
-    defaultTrigger: (form.get("defaultTrigger") ?? "") as ReviewTrigger,
-    skipDrafts: skip === "true" || skip === "on" || skip === "1",
-    checkoutTtlDays: form.get("checkoutTtlDays") ?? "",
-    provider: form.get("provider") ?? "",
-  };
+function formValues(form: URLSearchParams): Partial<SettingsFormValues> {
+  const values: Partial<SettingsFormValues> = {};
+  if (form.has("provider")) values.provider = form.get("provider") ?? "";
+  if (form.has("model")) values.model = form.get("model") ?? "";
+  if (form.has("thinking")) values.thinking = (form.get("thinking") ?? "") as ModelThinkingLevel;
+  if (form.has("defaultTrigger")) values.defaultTrigger = (form.get("defaultTrigger") ?? "") as ReviewTrigger;
+  if (form.has("skipDrafts")) {
+    values.skipDrafts = form.getAll("skipDrafts").some((value) => value === "true" || value === "on" || value === "1");
+  }
+  if (form.has("checkoutTtlDays")) values.checkoutTtlDays = form.get("checkoutTtlDays") ?? "";
+  return values;
 }

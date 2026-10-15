@@ -152,9 +152,6 @@ function ModelsSection({
       <form method="post" action="/ui/settings">
         <CsrfField token={model.csrf} />
         <SectionField section={section} />
-        <input type="hidden" name="defaultTrigger" value={model.form.defaultTrigger} />
-        <input type="hidden" name="skipDrafts" value={model.form.skipDrafts ? "true" : "false"} />
-        <input type="hidden" name="checkoutTtlDays" value={model.form.checkoutTtlDays} />
         <SettingsCard title={settingsCopy.modelCard.title} description={settingsCopy.modelCard.description}>
           <ProviderField
             field={model.fields.provider}
@@ -197,9 +194,6 @@ function ReviewSection({ model, section }: { model: SettingsPageModel; section: 
     <form className="flex flex-col gap-8" method="post" action="/ui/settings">
       <CsrfField token={model.csrf} />
       <SectionField section={section} />
-      <input type="hidden" name="provider" value={model.form.provider || model.provider} />
-      <input type="hidden" name="model" value={model.form.model} />
-      <input type="hidden" name="thinking" value={model.form.thinking} />
       <SettingsCard title={copy.card} description={copy.cardDescription}>
         <TriggerField field={model.fields.defaultTrigger} value={model.form.defaultTrigger} />
         <SkipDraftsField field={model.fields.skipDrafts} checked={model.form.skipDrafts} />
@@ -442,6 +436,7 @@ function TriggerField({ field, value }: { field: SettingsFieldView; value: strin
 function SkipDraftsField({ field, checked }: { field: SettingsFieldView; checked: boolean }) {
   return (
     <SettingRow title={field.label} description={field.help} htmlFor={field.key}>
+      <input type="hidden" name="skipDrafts" value="false" />
       <input id={field.key} className="size-4 accent-foreground" type="checkbox" name="skipDrafts" value="true" defaultChecked={checked} />
     </SettingRow>
   );
