@@ -138,14 +138,20 @@ export function parseManifestCode(value: string | null): string | undefined {
   return value;
 }
 
+const MANIFEST_EXCHANGE_MS = 20_000;
+
 export async function exchangeAppManifest(input: {
   code: string;
   apiUrl: string;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<StoredGitHubApp> {
   const fetchImpl = input.fetchImpl ?? fetch;
+  const deadline = AbortSignal.timeout(MANIFEST_EXCHANGE_MS);
+  const signal = input.signal ? AbortSignal.any([input.signal, deadline]) : deadline;
   const response = await fetchImpl(`${input.apiUrl}/app-manifests/${input.code}/conversions`, {
     method: "POST",
+    signal,
     headers: {
       accept: "application/vnd.github+json",
       "content-type": "application/json",

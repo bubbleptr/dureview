@@ -311,6 +311,38 @@ describe("GitHub setup exchange", () => {
     }
   });
 
+  it("releases the setup lock when the manifest body never finishes", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('{"id":');
+    });
+    const port = await listen(server);
+    try {
+      const dataDir = await tempDataDir();
+      const { service } = await openTestService({
+        dataDir,
+        github: new MemoryGitHub(),
+        responses: [],
+        githubApiUrl: `http://127.0.0.1:${port}`,
+      });
+      try {
+        const state = setupState(service.beginGitHubSetup("http://127.0.0.1", ""));
+        const started = Date.now();
+        const failed = await service.finishGitHubSetup(state, "firstcode", AbortSignal.timeout(200));
+        expect(Date.now() - started).toBeLessThan(2_000);
+        expect(failed.ok).toBe(false);
+        const restarted = service.beginGitHubSetup("http://127.0.0.1", "");
+        expect(restarted?.status).toBe(200);
+        expect(setupState(restarted)).not.toBe(state);
+      } finally {
+        await service.close();
+      }
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+    }
+  });
+
   it("clears a failed exchange so setup can start again", async () => {
     const server = createServer((_req, res) => {
       res.writeHead(422).end("nope");

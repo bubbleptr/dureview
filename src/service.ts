@@ -257,7 +257,7 @@ export class DureviewService {
     return handoffResponse(manifestHandoffPage(action, manifest), githubSetupCookie(state), web);
   }
 
-  async finishGitHubSetup(state: string, code: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  async finishGitHubSetup(state: string, code: string, signal?: AbortSignal): Promise<{ ok: true } | { ok: false; error: string }> {
     if (this.#githubExchange) {
       return { ok: false, error: GITHUB_SETUP_BUSY };
     }
@@ -268,7 +268,7 @@ export class DureviewService {
     }
     this.#githubExchange = true;
     try {
-      const app = await exchangeAppManifest({ code, apiUrl: this.config.githubApiUrl });
+      const app = await exchangeAppManifest({ code, apiUrl: this.config.githubApiUrl, signal });
       await this.githubApps.save(app);
       this.#githubNotice = "GitHub App saved.";
       this.#githubState = null;
