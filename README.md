@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/dureview-logo.png" alt="dureview" width="128"></p>
+
 # dureview
 
 Self-hosted pull request review bot. Comment `/dureview` on a pull request and it posts P0–P3 inline findings plus a check run named `dureview`.
