@@ -1,8 +1,7 @@
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, XAxis, YAxis } from "recharts";
+import { seriesColor } from "../ui/chart-palette.js";
 import type { StatsPageModel } from "../ui/stats-model.js";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "./ui/chart.js";
-
-const PALETTE = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
 
 /** Recharts draws a line over 1500ms, so a load or screenshot shows a stroke that stops early. Keep the series complete on first paint, including when the user prefers reduced motion. */
 export function trendLineAnimationActive(reducedMotion: boolean): boolean {
@@ -16,9 +15,9 @@ function prefersReducedMotion(): boolean {
 
 export function TokenTrendChart({ trend }: { trend: StatsPageModel["trend"] }) {
   const config: ChartConfig = {};
-  trend.models.forEach((model, index) => {
-    config[model] = { label: model, color: PALETTE[index % PALETTE.length] };
-  });
+  for (const model of trend.models) {
+    config[model] = { label: model, color: seriesColor(model) };
+  }
   return (
     <ChartContainer config={config} className="h-72">
       <LineChart data={trend.points} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
@@ -27,13 +26,13 @@ export function TokenTrendChart({ trend }: { trend: StatsPageModel["trend"] }) {
         <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={compact} />
         <ChartTooltip content={<ChartTooltipContent />} />
         {trend.models.length > 1 ? <Legend /> : null}
-        {trend.models.map((model, index) => (
+        {trend.models.map((model) => (
           <Line
             key={model}
             type="monotone"
             dataKey={model}
             name={model}
-            stroke={PALETTE[index % PALETTE.length]}
+            stroke={seriesColor(model)}
             strokeWidth={2}
             dot={false}
             connectNulls={false}
@@ -45,14 +44,9 @@ export function TokenTrendChart({ trend }: { trend: StatsPageModel["trend"] }) {
   );
 }
 
-export function DistributionChart({
-  rows,
-  color,
-}: {
-  rows: StatsPageModel["priorities"];
-  color?: string;
-}) {
-  const config: ChartConfig = { count: { label: "Findings", color: color ?? "var(--chart-1)" } };
+export function DistributionChart({ rows }: { rows: StatsPageModel["priorities"] }) {
+  const config: ChartConfig = {};
+  for (const row of rows) config[row.name] = { label: row.name, color: seriesColor(row.name) };
   return (
     <ChartContainer config={config} className="h-56">
       <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -61,8 +55,8 @@ export function DistributionChart({
         <YAxis tickLine={false} axisLine={false} width={32} allowDecimals={false} />
         <ChartTooltip content={<ChartTooltipContent />} />
         <Bar dataKey="count" radius={4}>
-          {rows.map((row, index) => (
-            <Cell key={row.name} fill={color ?? PALETTE[index % PALETTE.length]} />
+          {rows.map((row) => (
+            <Cell key={row.name} fill={seriesColor(row.name)} />
           ))}
         </Bar>
       </BarChart>
@@ -71,7 +65,8 @@ export function DistributionChart({
 }
 
 export function FailureChart({ rows }: { rows: StatsPageModel["failures"] }) {
-  const config: ChartConfig = { count: { label: "Failures", color: "var(--chart-1)" } };
+  const config: ChartConfig = {};
+  for (const row of rows) config[row.name] = { label: row.name, color: seriesColor(row.name) };
   return (
     <ChartContainer config={config} className="h-56">
       <BarChart data={rows} layout="vertical" margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
@@ -79,7 +74,11 @@ export function FailureChart({ rows }: { rows: StatsPageModel["failures"] }) {
         <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
         <YAxis type="category" dataKey="name" width={160} tickLine={false} axisLine={false} />
         <ChartTooltip content={<ChartTooltipContent />} />
-        <Bar dataKey="count" fill="var(--chart-1)" radius={4} />
+        <Bar dataKey="count" radius={4}>
+          {rows.map((row) => (
+            <Cell key={row.name} fill={seriesColor(row.name)} />
+          ))}
+        </Bar>
       </BarChart>
     </ChartContainer>
   );

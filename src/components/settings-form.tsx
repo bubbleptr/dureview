@@ -2,14 +2,15 @@ import { useState, type ReactNode } from "react";
 import type { SettingsFieldView, SettingsPageModel } from "../settings/page.js";
 import { nearestThinking } from "../settings/thinking.js";
 import { formatTime } from "../ui/page.js";
+import type { ShellStatus } from "../ui/shell-status.js";
 import { LocalTime } from "./local-time.js";
-import { AppShell, type ShellStatus } from "./app-shell.js";
+import { AppShell } from "./app-shell.js";
 import { DiffStyleControl } from "./diff-style.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
+import { FormSelect } from "./ui/form-select.js";
 import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
-import { NativeSelect } from "./ui/native-select.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table.js";
 
 const TRIGGERS = ["manual", "once", "auto"] as const;
@@ -21,8 +22,9 @@ export function SettingsForm({ model, status = null }: { model: SettingsPageMode
   const thinkingValue = levels.includes(thinking) ? thinking : (levels[0] ?? thinking);
 
   return (
-    <AppShell current="settings" title="Settings" status={status}>
+    <AppShell current="settings" title="Settings">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+        {status ? <RuntimeStatus status={status} /> : null}
         <p className="max-w-prose text-sm leading-6 text-muted-foreground">
           Changes apply to new reviews. A review that is already running keeps the model and thinking it started with.
           An override wins over the environment variable, which wins over the built-in default.
@@ -83,13 +85,14 @@ function ModelField({
   const choices = options.includes(value) ? options : [value, ...options];
   return (
     <FieldShell field={field}>
-      <NativeSelect id={field.key} name="model" value={value} onChange={(event) => onChange(event.target.value)}>
-        {choices.map((id) => (
-          <option key={id} value={id}>
-            {id}
-          </option>
-        ))}
-      </NativeSelect>
+      <FormSelect
+        id={field.key}
+        name="model"
+        value={value}
+        options={choices.map((id) => ({ value: id, label: id }))}
+        onValueChange={onChange}
+        variant="combobox"
+      />
     </FieldShell>
   );
 }
@@ -108,13 +111,13 @@ function ThinkingField({
   const choices = levels.includes(value) ? levels : [value, ...levels];
   return (
     <FieldShell field={field}>
-      <NativeSelect id={field.key} name="thinking" value={value} onChange={(event) => onChange(event.target.value)}>
-        {choices.map((level) => (
-          <option key={level} value={level}>
-            {level}
-          </option>
-        ))}
-      </NativeSelect>
+      <FormSelect
+        id={field.key}
+        name="thinking"
+        value={value}
+        options={choices.map((level) => ({ value: level, label: level }))}
+        onValueChange={onChange}
+      />
     </FieldShell>
   );
 }
@@ -122,13 +125,7 @@ function ThinkingField({
 function TriggerField({ field, value }: { field: SettingsFieldView; value: string }) {
   return (
     <FieldShell field={field}>
-      <NativeSelect id={field.key} name="defaultTrigger" defaultValue={value}>
-        {TRIGGERS.map((trigger) => (
-          <option key={trigger} value={trigger}>
-            {trigger}
-          </option>
-        ))}
-      </NativeSelect>
+      <FormSelect id={field.key} name="defaultTrigger" defaultValue={value} options={TRIGGERS.map((trigger) => ({ value: trigger, label: trigger }))} />
     </FieldShell>
   );
 }
@@ -186,6 +183,40 @@ function FieldShell({ field, children }: { field: SettingsFieldView; children: R
         </div>
       ) : null}
     </div>
+  );
+}
+
+function RuntimeStatus({ status }: { status: ShellStatus }) {
+  return (
+    <section className="flex flex-col gap-1 border-b pb-5 text-sm leading-6">
+      <h2 className="text-sm font-medium">Runtime</h2>
+      <p className="text-muted-foreground">
+        <span className="font-mono">{status.version}</span>
+        {" · "}
+        up {status.uptime}
+      </p>
+      <p>
+        {status.provider}/<span className="font-mono">{status.model}</span>
+        {" · "}
+        {status.thinking}
+      </p>
+      <p>
+        {status.codex.kind === "plain" ? (
+          status.codex.text
+        ) : (
+          <>
+            {status.codex.lead}
+            <LocalTime iso={status.codex.iso} label={status.codex.label} />
+          </>
+        )}
+      </p>
+      <p>
+        GitHub App <b>{status.githubApp ? "yes" : "no"}</b>
+      </p>
+      <p>
+        GitHub token <b>{status.githubToken ? "yes" : "no"}</b>
+      </p>
+    </section>
   );
 }
 

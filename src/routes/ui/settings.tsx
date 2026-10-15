@@ -16,8 +16,9 @@ export const Route = createFileRoute("/ui/settings")({
       POST: async ({ request }) => {
         const { getRuntime } = await import("../../app/runtime.js");
         const { settingsPostResponse } = await import("../../http/settings.js");
+        const { getShellStatus } = await import("../../ui/shell-fn.js");
         const runtime = await getRuntime();
-        return settingsPostResponse(runtime.service, runtime.config.uiToken, request);
+        return settingsPostResponse(runtime.service, runtime.config.uiToken, request, await getShellStatus());
       },
     },
   },

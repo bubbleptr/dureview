@@ -10,6 +10,17 @@ function mobileCss(): string {
   return next === -1 ? rest : rest.slice(0, next);
 }
 
+describe("dashboard viewport", () => {
+  it("keeps the document from scrolling", () => {
+    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    expect(css).toMatch(/html,\s*body\s*\{[^}]*height:\s*100dvh/);
+    expect(css).toMatch(/html,\s*body\s*\{[^}]*overflow:\s*hidden/);
+    expect(css).toMatch(/#main\s*\{[^}]*position:\s*relative/);
+    expect(css).toMatch(/--chart-1:\s*oklch\(0\.62 0\.17 48\)/);
+    expect(css).toMatch(/\.dark\s*\{[^}]*--chart-1:\s*oklch\(0\.78 0\.15 50\)/);
+  });
+});
+
 describe("mobile sidebar", () => {
   const css = mobileCss();
 

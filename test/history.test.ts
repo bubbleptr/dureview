@@ -16,7 +16,9 @@ import {
   resultLabel,
   reviewDurationMs,
 } from "../src/ui/page.js";
-import { renderListHtml } from "../src/ui/render-react.js";
+import { renderListHtml, renderSettingsHtml } from "../src/ui/render-react.js";
+import type { SettingsPageModel } from "../src/settings/page.js";
+import type { ShellStatus } from "../src/ui/shell-status.js";
 import type { DashboardStatus } from "../src/ui/status.js";
 import type { ReviewSummary } from "../src/review/archive.js";
 import { sampleFinding } from "./support.js";
@@ -324,14 +326,28 @@ describe("review list rendering", () => {
       empty: null,
     };
     const html = renderListHtml(model);
-    expect(html).toContain("0.1.0");
-    expect(html).toContain("1m 5s");
-    expect(html).toContain("access token expires ");
-    expect(html).toContain('datetime="2030-01-02T03:04:05.000Z"');
-    expect(html).toContain("2030-01-02 03:04 UTC");
-    expect(html).toContain("GitHub App <b>yes</b>");
-    expect(html).toContain("GitHub token <b>no</b>");
+    expect(html).not.toContain("GitHub App");
     expect(html).toContain("/ui/reviews/4");
+    const runtime: ShellStatus = {
+      version: status.version,
+      uptime: formatUptime(status.uptimeSeconds * 1000),
+      provider: status.provider,
+      model: status.model,
+      thinking: "medium",
+      codex: codexPhrase(status.codex, now),
+      githubApp: status.githubApp,
+      githubToken: status.githubToken,
+    };
+    const settingsHtml = renderSettingsHtml(settingsFixture(), runtime);
+    expect(settingsHtml).toContain("0.1.0");
+    expect(settingsHtml).toContain("1m 5s");
+    expect(settingsHtml).toContain("access token expires ");
+    expect(settingsHtml).toContain('datetime="2030-01-02T03:04:05.000Z"');
+    expect(settingsHtml).toContain("2030-01-02 03:04 UTC");
+    expect(settingsHtml).toContain("GitHub App <b>yes</b>");
+    expect(settingsHtml).toContain("GitHub token <b>no</b>");
+    expect(settingsHtml).toContain("&lt;script&gt;");
+    expect(settingsHtml).not.toContain("<script>alert");
     expect(html).toContain("acme/demo #7");
     expect(html).toContain("/dureview");
     expect(html).toContain("P0/P1");
@@ -341,3 +357,41 @@ describe("review list rendering", () => {
     expect(html).not.toContain("secret");
   });
 });
+
+function settingsFixture(): SettingsPageModel {
+  const field = (key: SettingsPageModel["fields"]["model"]["key"], label: string, envName: string, value: string) => ({
+    key,
+    label,
+    envName,
+    value,
+    source: "default" as const,
+    sourceLabel: "Default",
+    builtin: value,
+    env: null,
+    canReset: false,
+    help: "",
+  });
+  return {
+    provider: "openai-codex",
+    modelOptions: ["gpt-5.5"],
+    thinkingByModel: { "gpt-5.5": ["medium"] },
+    fields: {
+      model: field("model", "Model", "DUREVIEW_MODEL", "gpt-5.5"),
+      thinking: field("thinking", "Thinking", "DUREVIEW_THINKING", "medium"),
+      defaultTrigger: field("defaultTrigger", "Trigger", "DUREVIEW_DEFAULT_TRIGGER", "manual"),
+      skipDrafts: field("skipDrafts", "Drafts", "DUREVIEW_SKIP_DRAFTS", "false"),
+      checkoutTtlDays: field("checkoutTtlDays", "Checkout TTL", "DUREVIEW_CHECKOUT_TTL_DAYS", "30"),
+    },
+    form: {
+      model: "gpt-5.5",
+      thinking: "medium",
+      defaultTrigger: "manual",
+      skipDrafts: false,
+      checkoutTtlDays: "30",
+    },
+    problems: [],
+    audit: [],
+    error: null,
+    saved: false,
+  };
+}

@@ -57,11 +57,12 @@
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.25 0 0);
-  --chart-2: oklch(0.4 0 0);
-  --chart-3: oklch(0.55 0 0);
-  --chart-4: oklch(0.7 0 0);
-  --chart-5: oklch(0.68 0 0);
+  /* Orange, magenta, blue, gold, teal. Separated in hue so the series stay distinct without red versus green. */
+  --chart-1: oklch(0.62 0.17 48);
+  --chart-2: oklch(0.55 0.2 350);
+  --chart-3: oklch(0.52 0.15 264);
+  --chart-4: oklch(0.58 0.13 85);
+  --chart-5: oklch(0.55 0.11 175);
 }
 
 .dark {
@@ -82,16 +83,25 @@
   --border: oklch(0.28 0 0);
   --input: oklch(0.28 0 0);
   --ring: oklch(0.55 0 0);
-  --chart-1: oklch(0.93 0 0);
-  --chart-2: oklch(0.78 0 0);
-  --chart-3: oklch(0.64 0 0);
-  --chart-4: oklch(0.5 0 0);
-  --chart-5: oklch(0.38 0 0);
+  --chart-1: oklch(0.78 0.15 50);
+  --chart-2: oklch(0.76 0.16 350);
+  --chart-3: oklch(0.75 0.12 264);
+  --chart-4: oklch(0.84 0.13 90);
+  --chart-5: oklch(0.8 0.1 175);
 }
 
 @layer base {
   * {
     border-color: var(--border);
+  }
+  html,
+  body {
+    height: 100dvh;
+    overflow: hidden;
+  }
+  /* Visually hidden chart tables use position:absolute. Without a containing block they attach to the viewport and scroll the document. */
+  #main {
+    position: relative;
   }
   body {
     background: var(--background);
@@ -156,7 +166,6 @@ html[data-sidebar="collapsed"] .app-sidebar {
 }
 html[data-sidebar="collapsed"] .nav-label,
 html[data-sidebar="collapsed"] .brand-name,
-html[data-sidebar="collapsed"] .sidebar-footer-detail,
 html[data-sidebar="collapsed"] .sidebar-theme-label {
   display: none;
 }
@@ -189,7 +198,6 @@ html[data-sidebar="collapsed"] .nav-link {
   }
   html[data-sidebar="collapsed"] .nav-label,
   html[data-sidebar="collapsed"] .brand-name,
-  html[data-sidebar="collapsed"] .sidebar-footer-detail,
   html[data-sidebar="collapsed"] .sidebar-theme-label {
     display: revert;
   }
@@ -217,9 +225,22 @@ html[data-sidebar="collapsed"] .nav-link {
 .review-columns {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 .review-columns > .panel-handle {
   display: none;
+}
+.review-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+@media (max-width: 959px) {
+  .review-columns > .review-panel {
+    flex: 1 1 0;
+  }
 }
 @media (min-width: 960px) {
   .review-columns {

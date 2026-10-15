@@ -304,8 +304,10 @@ describe("settings at runtime", () => {
     expect(html).toContain("DUREVIEW_MODEL");
     expect(html).toContain("Environment");
     expect(html).toContain("faux-1");
-    expect(html).toContain("faux-2");
+    expect(html).toContain('data-ui="combobox"');
     expect(html).toContain(">low<");
+    expect(html).toContain("faux/");
+    expect(html).toContain(" · low");
     expect(html).not.toContain(UI_TOKEN);
     expect(html).not.toContain(SECRET);
     expect(html).not.toContain("test-token");
@@ -314,7 +316,7 @@ describe("settings at runtime", () => {
     const list = await fetch(`${http.url}/ui`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
     const listHtml = await list.text();
     expect(listHtml).toContain('href="/ui/settings"');
-    expect(listHtml).toContain("faux/faux-1 · low");
+    expect(listHtml).not.toContain("faux/faux-1");
 
     const bad = await fetch(`${http.url}/ui/settings`, {
       method: "POST",
@@ -375,8 +377,11 @@ describe("settings at runtime", () => {
     expect(service.effectiveConfig().modelId).toBe("faux-1");
     expect(service.effectiveConfig().thinking).toBe("high");
 
-    const listed = await fetch(`${http.url}/ui`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
-    expect(await listed.text()).toContain("faux/faux-1 · high");
+    const listed = await fetch(`${http.url}/ui/settings`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    const listedHtml = await listed.text();
+    expect(listedHtml).toContain("faux/");
+    expect(listedHtml).toContain("faux-1");
+    expect(listedHtml).toContain(" · high");
   });
 });
 

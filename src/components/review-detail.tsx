@@ -20,7 +20,7 @@ import {
 } from "../ui/diff-focus.js";
 import { reviewFindingCount, reviewTreeOptions, type ReviewTreePreload } from "../ui/review-presentation.js";
 import { dragLimit, fitPanelWidths, SUMMARY_LIMIT, TREE_LIMIT } from "../ui/panel-widths.js";
-import { AppShell, type ShellStatus } from "./app-shell.js";
+import { AppShell } from "./app-shell.js";
 import { useDiffStyle } from "./diff-style.js";
 import { LocalTime } from "./local-time.js";
 import { Badge } from "./ui/badge.js";
@@ -59,11 +59,9 @@ const SUMMARY_WIDTH_KEY = "dureview-summary-width";
 export function ReviewDetailView({
   model,
   tree = null,
-  status = null,
 }: {
   model: ReviewDetailModel;
   tree?: ReviewTreePreload | null;
-  status?: ShellStatus | null;
 }) {
   const [diffStyle] = useDiffStyle();
   const [treePref, setTreePref] = useStoredWidth(TREE_WIDTH_KEY, TREE_LIMIT.fallback, TREE_LIMIT.max);
@@ -87,7 +85,6 @@ export function ReviewDetailView({
     <AppShell
       current="reviews"
       title={model.heading}
-      status={status}
       fill
       crumbs={
         <a className="shrink-0 text-sm text-muted-foreground hover:text-foreground" href={model.backHref}>
@@ -102,7 +99,7 @@ export function ReviewDetailView({
           className="review-columns min-h-0 flex-1"
           style={{ ["--tree-width" as string]: `${shown.tree}px`, ["--summary-width" as string]: `${shown.summary}px` }}
         >
-          <aside className="flex max-h-72 min-h-0 flex-col overflow-hidden border-b min-[960px]:max-h-none min-[960px]:border-r min-[960px]:border-b-0">
+          <aside className="review-panel flex flex-col border-b min-[960px]:border-r min-[960px]:border-b-0">
             {files.length === 0 ? (
               <p className="px-3 py-3 text-sm text-muted-foreground">No changed files.</p>
             ) : (
@@ -119,7 +116,7 @@ export function ReviewDetailView({
             max={treeDrag.max}
             onWidth={(requested) => setTreePref(clamp(requested, treeDrag.min, treeDrag.max))}
           />
-          <div className="min-h-0 min-w-0 overflow-auto border-b min-[960px]:border-r min-[960px]:border-b-0">
+          <div className="review-panel border-b min-[960px]:border-r min-[960px]:border-b-0">
             <DiffColumn files={files} model={model} diffStyle={diffStyle} />
           </div>
           <PanelHandle
@@ -130,7 +127,7 @@ export function ReviewDetailView({
             invert
             onWidth={(requested) => setSummaryPref(clamp(requested, summaryDrag.min, summaryDrag.max))}
           />
-          <aside className="min-h-0 overflow-x-hidden overflow-y-auto">
+          <aside className="review-panel">
             <SummaryRail summary={model.summary} />
             <ReviewConfig settings={model.settings} />
           </aside>
@@ -140,9 +137,9 @@ export function ReviewDetailView({
   );
 }
 
-export function ReviewDetailPending({ header, status }: { header: ReviewDetailHeader; status?: ShellStatus | null }) {
+export function ReviewDetailPending({ header }: { header: ReviewDetailHeader }) {
   return (
-    <ReviewFrame header={header} status={status}>
+    <ReviewFrame header={header}>
       <LoadingColumn label="Loading changed files." />
       <div className="panel-handle" aria-hidden="true" />
       <LoadingColumn label="Loading the diff." />
@@ -154,16 +151,14 @@ export function ReviewDetailPending({ header, status }: { header: ReviewDetailHe
 
 export function ReviewDetailUnavailable({
   header,
-  status,
   message,
 }: {
   header: ReviewDetailHeader;
-  status?: ShellStatus | null;
   message: string;
 }) {
   return (
-    <ReviewFrame header={header} status={status}>
-      <p role="alert" className="px-3 py-4 text-sm" style={{ gridColumn: "1 / -1" }}>
+    <ReviewFrame header={header}>
+      <p role="alert" className="review-panel px-3 py-4 text-sm" style={{ gridColumn: "1 / -1" }}>
         {message}
       </p>
     </ReviewFrame>
@@ -172,18 +167,15 @@ export function ReviewDetailUnavailable({
 
 function ReviewFrame({
   header,
-  status,
   children,
 }: {
   header: ReviewDetailHeader;
-  status?: ShellStatus | null;
   children: ReactNode;
 }) {
   return (
     <AppShell
       current="reviews"
       title={header.heading}
-      status={status}
       fill
       crumbs={
         <a className="shrink-0 text-sm text-muted-foreground hover:text-foreground" href={header.backHref}>
@@ -209,7 +201,7 @@ function ReviewFrame({
 
 function LoadingColumn({ label }: { label: string }) {
   return (
-    <div className="px-3 py-3" role="status" aria-busy="true">
+    <div className="review-panel px-3 py-3" role="status" aria-busy="true">
       <p className="text-sm text-muted-foreground">{label}</p>
       <div className="mt-3 space-y-2" aria-hidden="true">
         <div className="h-3 w-3/4 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
@@ -266,8 +258,7 @@ function ReviewTree({
     <FileTree
       model={model}
       preloadedData={preloaded ?? undefined}
-      className="h-full min-h-48"
-      style={{ height: "100%", minHeight: "12rem" }}
+      className="min-h-0"
     />
   );
 }

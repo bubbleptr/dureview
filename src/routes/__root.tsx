@@ -22,12 +22,12 @@ function RootComponent() {
     applySavedAppearance();
   }, []);
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className="h-dvh overflow-hidden" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
         <HeadContent />
       </head>
-      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
+      <body className="h-dvh overflow-hidden bg-background font-sans text-foreground antialiased">
         <Outlet />
         <Scripts />
       </body>

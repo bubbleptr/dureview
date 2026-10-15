@@ -28,6 +28,8 @@
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@pierre/diffs": "1.5.2",
     "@pierre/trees": "1.0.0-beta.6",
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-slot": "1.5.0",
     "@tanstack/react-router": "1.170.44",
     "@tanstack/react-start": "1.169.1",

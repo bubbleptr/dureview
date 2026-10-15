@@ -132,7 +132,7 @@ The review list is one row per review: repository and pull request number, title
 
 The overview is counts (reviews, average and p95 duration, findings, average tokens, estimated cost), a daily token chart split by model, bar charts for priority, type, category, verdict, and failure reasons, then tables for the most expensive pull requests, the busiest repositories, and the pull requests with the most findings. Day buckets follow the browser's timezone via a `tz` offset in minutes. Aggregates run in SQL.
 
-The sidebar links to the overview, the review list, and settings. Its footer shows the version, uptime, provider and model, thinking level, whether `auth.json` has a Codex login and when that access token expires, and yes or no for GitHub App and GitHub token.
+The sidebar links to the overview, the review list, and settings. Its footer is the theme control. The settings page shows the version, uptime, provider and model, thinking level, whether `auth.json` has a Codex login and when that access token expires, and yes or no for GitHub App and GitHub token.
 
 The model dropdown is the pi-ai catalog for the provider the process already selected. The thinking dropdown lists the levels that model supports. `gpt-5.6-sol` includes `max`. The server rejects an unknown model and a thinking level outside that list. The default trigger and draft skip are read when the next webhook arrives. The checkout TTL is read on the next sweep.
 

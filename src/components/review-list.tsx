@@ -1,13 +1,13 @@
 import type { ReactNode } from "react";
 import type { ReviewListModel, ReviewRowView } from "../ui/list-model.js";
 import { compareReviewRows } from "../ui/list-sort.js";
-import { AppShell, type ShellStatus } from "./app-shell.js";
+import { AppShell } from "./app-shell.js";
 import { LocalTime } from "./local-time.js";
 import { Badge } from "./ui/badge.js";
 import { Button, buttonVariants } from "./ui/button.js";
+import { FormSelect } from "./ui/form-select.js";
 import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
-import { NativeSelect } from "./ui/native-select.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table.js";
 
 const PAGE_SIZE = 10;
@@ -32,20 +32,10 @@ const SORT_KEYS = ["repo", "title", "trigger", "result", "p0", "p1", "p2", "p3",
 type SortKey = (typeof SORT_KEYS)[number];
 
 export function ReviewListView({ model, search = "" }: { model: ReviewListModel; search?: string }) {
-  const status: ShellStatus = {
-    version: model.version,
-    uptime: model.uptime,
-    provider: model.provider,
-    model: model.model,
-    thinking: model.thinking,
-    codex: model.codex,
-    githubApp: model.githubApp,
-    githubToken: model.githubToken,
-  };
   const view = pageRows(model.reviews, search);
   const count = model.total === model.shown ? `${model.shown} shown` : `${model.shown} shown of ${model.total}`;
   return (
-    <AppShell current="reviews" title="Reviews" status={status} form={{ method: "get", action: "/ui/reviews" }}>
+    <AppShell current="reviews" title="Reviews" form={{ method: "get", action: "/ui/reviews" }}>
       <section className="flex flex-col gap-4">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <p className="max-w-prose text-sm leading-6 text-muted-foreground">Latest reviews. Open a row for the diff.</p>
@@ -53,32 +43,31 @@ export function ReviewListView({ model, search = "" }: { model: ReviewListModel;
         </div>
         <div className="flex flex-wrap items-end gap-3 border-b pb-4">
             <Filter label="Repository">
-              <NativeSelect name="repo" defaultValue={model.form.repo} className="h-8 w-44 text-xs" onChange={submitForm}>
-                <option value="">All repositories</option>
-                {model.repos.map((repo) => (
-                  <option key={repo} value={repo}>
-                    {repo}
-                  </option>
-                ))}
-              </NativeSelect>
+              <FormSelect
+                name="repo"
+                defaultValue={model.form.repo}
+                options={[{ value: "", label: "All repositories" }, ...model.repos.map((repo) => ({ value: repo, label: repo }))]}
+                submitOnChange
+                className="h-8 w-44 text-xs"
+              />
             </Filter>
             <Filter label="Time">
-              <NativeSelect name="since" defaultValue={model.form.since} className="h-8 text-xs" onChange={submitForm}>
-                {SINCE.map(([value, label]) => (
-                  <option key={value || "any"} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </NativeSelect>
+              <FormSelect
+                name="since"
+                defaultValue={model.form.since}
+                options={SINCE.map(([value, label]) => ({ value, label }))}
+                submitOnChange
+                className="h-8 text-xs"
+              />
             </Filter>
             <Filter label="Result">
-              <NativeSelect name="result" defaultValue={model.form.result} className="h-8 text-xs" onChange={submitForm}>
-                {RESULTS.map(([value, label]) => (
-                  <option key={value || "all"} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </NativeSelect>
+              <FormSelect
+                name="result"
+                defaultValue={model.form.result}
+                options={RESULTS.map(([value, label]) => ({ value, label }))}
+                submitOnChange
+                className="h-8 text-xs"
+              />
             </Filter>
             <Filter label="From">
               <Input type="date" name="from" defaultValue={model.form.from} className="h-8 w-36 text-xs" onChange={submitForm} />

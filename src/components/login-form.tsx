@@ -6,7 +6,7 @@ import { Label } from "./ui/label.js";
 
 export function LoginForm({ next, error }: { next: string; error?: string }) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-background p-6">
+    <div className="relative flex h-full min-h-0 items-center justify-center overflow-auto bg-background p-6">
       <div className="absolute top-3 right-3">
         <ThemeToggle />
       </div>

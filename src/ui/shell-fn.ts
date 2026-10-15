@@ -1,9 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
-import type { ShellStatus } from "../components/app-shell.js";
+import type { ShellStatus } from "./shell-status.js";
 
 export type { ShellStatus };
 
-/** Public status line already shown on the review list. Tokens stay in auth.json. */
+/** Runtime facts for the settings page. Tokens stay in auth.json. */
 export const getShellStatus = createServerFn({ method: "GET" }).handler(async (): Promise<ShellStatus | null> => {
   const { getRequest } = await import("@tanstack/react-start/server");
   const { getRuntime, listContext } = await import("../app/runtime.js");

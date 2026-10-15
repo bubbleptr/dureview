@@ -31,15 +31,24 @@ SaaS landing page. This is an operator console for pull-request review.
   login form, or a real content split such as the review file tree and diff.
 - Charts are figures with a heading and a caption that says what the reader
   should notice and what the chart does not establish. Give chart data a
-  semantic table alternative. Use one gray for a single series. Use distinct
-  grays only when a chart has more than one series. Bar length encodes the
-  value on a shared scale.
+  semantic table alternative. Series use `--chart-1` through `--chart-5`:
+  orange, magenta, blue, gold, and teal. Light and dark each have their own
+  values so a thin line stays readable on that background. The hues stay apart
+  without using red versus green. The same name always uses the same token:
+  P0, Bug, and Block are `--chart-1`; P1, Flag, and Fix recommended are
+  `--chart-2`; P2 and Security are `--chart-3`; P3 and Unknown are `--chart-4`;
+  Clean is `--chart-5`. A model, category, or failure reason that is not in
+  that list hashes to one token and keeps it when other series appear or
+  disappear. Bar length still encodes the value on a shared scale. Chart color
+  names the series. It does not say that a number is favorable, expensive, or
+  large.
 - Tables are for lookup. Text columns and their headers align left. Numeric
   columns and their headers align right. Use tabular numerals. A wide ledger
   may scroll inside the table instead of shrinking the page.
-- Color is reserved for review state, and it is always paired with text:
-  pass, suggest, blocker (P0/P1), error, and running. Priority labels P0–P3
-  may use the same restrained hues. Do not color a number merely because it is
+- Color on labels is reserved for review state, and it is always paired with
+  text: pass, suggest, blocker (P0/P1), error, and running. Priority labels
+  P0–P3 may use the same restrained hues. Chart series use the chart palette
+  above, not these label hues. Do not color a number merely because it is
   favorable, expensive, or large.
 - Dashboard copy is English and sentence case. The login form stays Chinese:
   the title and submit button are `登录`, and a bad token says `token 不正确`.
@@ -50,16 +59,23 @@ SaaS landing page. This is an operator console for pull-request review.
   stored in `localStorage` and applied before first paint. The canonical guide
   prefers an implicit theme; dureview keeps the control so operators can work
   in either theme without a flash on reload.
+- The dashboard fits the viewport. `html` and `body` are `100dvh` and do not
+  scroll. Overview, reviews, and settings scroll in the main region. That
+  region is a containing block, so visually hidden chart tables stay inside it.
+  A wide table scrolls inside the table. On a review, the file tree, the diff,
+  and the summary each scroll inside their own panel.
 - The sidebar lists Overview, Reviews, and Settings. Overview is `/ui` and is
   only metrics: the counts, charts, token usage, and findings distribution that
   used to live on `/ui/stats`. `GET /ui/stats` redirects to `/ui`. Reviews is
   `/ui/reviews` and is only the review list. Settings is only settings, including
-  the unified or split diff view saved in the browser. The
-  sidebar collapses on a wide screen and becomes a sheet on a narrow one. Its
-  footer keeps the theme control, version, uptime, model, ChatGPT login expiry,
-  and GitHub credential status. Repo and time-range filters sit in the page
-  they apply to, not in the top bar. The top bar is the sidebar control, the
+  the unified or split diff view saved in the browser, plus version, uptime,
+  provider, model, thinking, Codex login expiry, and GitHub credential status.
+  The sidebar collapses on a wide screen and becomes a sheet on a narrow one.
+  Its footer is only the theme control. Repo and time-range filters sit in the
+  page they apply to, not in the top bar. The top bar is the sidebar control, the
   page title, and a breadcrumb when the review detail page has one.
+  Dropdowns use the shadcn Select. A list of eight or more options, and the
+  model catalog, use a combobox with a filter.
 - Keep URL filters (`repo`, `result`, `since`, `from`, `to`, `q` on the review
   list; `range`, `repo`, and `tz` on the overview), auth, and server functions.
   Client-only `sort`, `dir`, and `page` must not change those queries' meaning.

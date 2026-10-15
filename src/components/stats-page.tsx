@@ -1,13 +1,12 @@
 import type { ReactNode } from "react";
-import type { ShellStatus } from "./app-shell.js";
 import { TimezoneField } from "./timezone-field.js";
 import type { StatsPageModel, StatsRankRow } from "../ui/stats-model.js";
 import { AppShell } from "./app-shell.js";
 import { ClientChart } from "./client-chart.js";
 import { BarDataTable, FigureBlock, StatStrip, TrendDataTable } from "./stat-strip.js";
 import { Button } from "./ui/button.js";
+import { FormSelect } from "./ui/form-select.js";
 import { Label } from "./ui/label.js";
-import { NativeSelect } from "./ui/native-select.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table.js";
 
 const RANGES: Array<[string, string]> = [
@@ -17,32 +16,25 @@ const RANGES: Array<[string, string]> = [
   ["all", "All time"],
 ];
 
-export function OverviewPage({ model, status = null }: { model: StatsPageModel; status?: ShellStatus | null }) {
+export function OverviewPage({ model }: { model: StatsPageModel }) {
   return (
-    <AppShell current="overview" title="Overview" status={status} form={{ method: "get", action: "/ui" }}>
+    <AppShell current="overview" title="Overview" form={{ method: "get", action: "/ui" }}>
       <div className="flex flex-col gap-2">
         <p className="max-w-prose text-sm leading-6 text-muted-foreground">Counts and token totals for the selected range.</p>
         <div className="flex flex-wrap items-end gap-3 border-b pb-4">
           <Label className="flex flex-col gap-1 text-xs">
             Time range
-            <NativeSelect name="range" defaultValue={model.form.range} className="h-8 text-xs" onChange={submitForm}>
-              {RANGES.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </NativeSelect>
+            <FormSelect name="range" defaultValue={model.form.range} options={RANGES.map(([value, label]) => ({ value, label }))} submitOnChange className="h-8 text-xs" />
           </Label>
           <Label className="flex min-w-40 flex-col gap-1 text-xs">
             Repository
-            <NativeSelect name="repo" defaultValue={model.form.repo} className="h-8 w-44 text-xs" onChange={submitForm}>
-              <option value="">All repositories</option>
-              {model.repos.map((repo) => (
-                <option key={repo} value={repo}>
-                  {repo}
-                </option>
-              ))}
-            </NativeSelect>
+            <FormSelect
+              name="repo"
+              defaultValue={model.form.repo}
+              options={[{ value: "", label: "All repositories" }, ...model.repos.map((repo) => ({ value: repo, label: repo }))]}
+              submitOnChange
+              className="h-8 w-44 text-xs"
+            />
           </Label>
           <TimezoneField tz={model.form.tz} />
           <Button type="submit" size="sm">
@@ -60,7 +52,7 @@ export function OverviewPage({ model, status = null }: { model: StatsPageModel; 
 
       <FigureBlock
         title="Tokens by day"
-        caption="Each line is one model. Days use this browser's time zone. Length and position show token volume, not cost."
+        caption="Each line is one model, and that model keeps its color. Days use this browser's time zone. Position shows token volume, not cost."
       >
         {model.trend.points.length === 0 ? (
           <Empty>No token usage in this range.</Empty>
@@ -72,37 +64,37 @@ export function OverviewPage({ model, status = null }: { model: StatsPageModel; 
       </FigureBlock>
 
       <div className="grid grid-cols-1 gap-10 lg:grid-cols-2">
-        <FigureBlock title="Priority" caption="Share of stored findings. Bar length is the count.">
-          <ClientChart render={(charts) => <charts.DistributionChart rows={model.priorities} color="var(--chart-1)" />} />
+        <FigureBlock title="Priority" caption="Share of stored findings. Color marks P0 through P3. Bar length is the count.">
+          <ClientChart render={(charts) => <charts.DistributionChart rows={model.priorities} />} />
           <BarDataTable caption="Findings by priority" rows={model.priorities} />
         </FigureBlock>
-        <FigureBlock title="Type" caption="Bug, flag, and security. Unknown was stored before types existed. Bar length is the count.">
+        <FigureBlock title="Type" caption="Bug, flag, and security. Unknown was stored before types existed. Color marks the type. Bar length is the count.">
           {model.types.every((row) => row.count === 0) ? (
             <Empty>No findings in this range.</Empty>
           ) : (
-            <ClientChart render={(charts) => <charts.DistributionChart rows={model.types} color="var(--chart-1)" />} />
+            <ClientChart render={(charts) => <charts.DistributionChart rows={model.types} />} />
           )}
           <BarDataTable caption="Findings by type" rows={model.types} />
         </FigureBlock>
-        <FigureBlock title="Category" caption="Includes findings that were not posted. Bar length is the count.">
+        <FigureBlock title="Category" caption="Includes findings that were not posted. Color marks the category. Bar length is the count.">
           {model.categories.length === 0 ? (
             <Empty>No findings in this range.</Empty>
           ) : (
-            <ClientChart render={(charts) => <charts.DistributionChart rows={model.categories} color="var(--chart-1)" />} />
+            <ClientChart render={(charts) => <charts.DistributionChart rows={model.categories} />} />
           )}
           <BarDataTable caption="Findings by category" rows={model.categories} />
         </FigureBlock>
-        <FigureBlock title="Verdict" caption="Completed reviews only. Bar length is the count.">
+        <FigureBlock title="Verdict" caption="Completed reviews only. Color marks the verdict. Bar length is the count.">
           {model.verdicts.every((row) => row.count === 0) ? (
             <Empty>No completed reviews in this range.</Empty>
           ) : (
-            <ClientChart render={(charts) => <charts.DistributionChart rows={model.verdicts} color="var(--chart-1)" />} />
+            <ClientChart render={(charts) => <charts.DistributionChart rows={model.verdicts} />} />
           )}
           <BarDataTable caption="Completed reviews by verdict" rows={model.verdicts} />
         </FigureBlock>
       </div>
 
-      <FigureBlock title="Failure reasons" caption="Grouped by the error recorded for the run. Bar length is the failure count.">
+      <FigureBlock title="Failure reasons" caption="Grouped by the error recorded for the run. Color marks the reason. Bar length is the failure count.">
         {model.failures.length === 0 ? (
           <Empty>No failed reviews in this range.</Empty>
         ) : (
@@ -144,10 +136,6 @@ export function OverviewPage({ model, status = null }: { model: StatsPageModel; 
       </RankBlock>
     </AppShell>
   );
-}
-
-function submitForm(event: { currentTarget: { form: HTMLFormElement | null } }): void {
-  event.currentTarget.form?.requestSubmit();
 }
 
 function RankBlock({ title, description, children }: { title: string; description: string; children: ReactNode }) {
