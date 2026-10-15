@@ -81,6 +81,7 @@ export function ReviewDetailView({
   const treeDrag = dragLimit(shown.summary, containerWidth, TREE_LIMIT.min, TREE_LIMIT.max);
   const summaryDrag = dragLimit(shown.tree, containerWidth, SUMMARY_LIMIT.min, SUMMARY_LIMIT.max);
   const files = useMemo(() => orderCommentedFirst(model.files, reviewFindingCount), [model.files]);
+  const theme = useDiffTheme();
   return (
     <AppShell
       current="reviews"
@@ -103,7 +104,7 @@ export function ReviewDetailView({
             {files.length === 0 ? (
               <p className="px-3 py-3 text-sm text-muted-foreground">No changed files.</p>
             ) : (
-              <ReviewTree files={files} preloaded={tree} />
+              <ReviewTree files={files} preloaded={tree} theme={theme} />
             )}
             {model.hiddenFiles > 0 ? (
               <p className="px-3 py-2 text-sm text-muted-foreground">{model.hiddenFiles} more files are not shown.</p>
@@ -117,7 +118,7 @@ export function ReviewDetailView({
             onWidth={(requested) => setTreePref(clamp(requested, treeDrag.min, treeDrag.max))}
           />
           <div className="review-panel border-b min-[960px]:border-r min-[960px]:border-b-0">
-            <DiffColumn files={files} model={model} diffStyle={diffStyle} />
+            <DiffColumn files={files} model={model} diffStyle={diffStyle} theme={theme} />
           </div>
           <PanelHandle
             label="Resize summary"
@@ -237,9 +238,11 @@ function ReviewMeta({ model }: { model: ReviewDetailHeader }) {
 function ReviewTree({
   files,
   preloaded,
+  theme,
 }: {
   files: DetailFileView[];
   preloaded: ReviewTreePreload | null;
+  theme: "light" | "dark";
 }) {
   const { model } = useFileTree(
     reviewTreeOptions(files, (selected) => {
@@ -259,6 +262,7 @@ function ReviewTree({
       model={model}
       preloadedData={preloaded ?? undefined}
       className="min-h-0"
+      data-theme={theme}
     />
   );
 }
@@ -267,12 +271,13 @@ function DiffColumn({
   files,
   model,
   diffStyle,
+  theme,
 }: {
   files: DetailFileView[];
   model: ReviewDetailModel;
   diffStyle: "unified" | "split";
+  theme: "light" | "dark";
 }) {
-  const diffTheme = useDiffTheme();
   const [openFiles, setOpenFiles] = useState<Record<string, boolean>>({});
   const [expandedGaps, setExpandedGaps] = useState<Record<string, true>>({});
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
@@ -357,7 +362,7 @@ function DiffColumn({
             })
           }
           diffStyle={diffStyle}
-          diffTheme={diffTheme}
+          diffTheme={theme}
         />
       ))}
       <CommentGroup title={model.outsideTitle} comments={model.outside} />
@@ -502,6 +507,10 @@ function LazyPatch({
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [Highlight, setHighlight] = useState<HighlightedPatch | null>(null);
+  useLayoutEffect(() => {
+    const host = hostRef.current?.querySelector("diffs-container");
+    if (host instanceof HTMLElement) host.setAttribute("data-theme", diffTheme);
+  }, [diffTheme, Highlight]);
   useEffect(() => {
     const node = hostRef.current;
     if (!node) return;
@@ -547,7 +556,7 @@ function LazyPatch({
 
 function useDiffTheme(): "light" | "dark" {
   const [theme, setTheme] = useState<"light" | "dark">("light");
-  useEffect(() => {
+  useLayoutEffect(() => {
     const sync = () => setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
     sync();
     const observer = new MutationObserver(sync);

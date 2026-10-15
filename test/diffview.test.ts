@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { reviewResult, type ReviewDetail, type StoredComment } from "../src/review/archive.js";
 import { buildReviewDetail } from "../src/ui/detail-data.js";
 import { gitDiffText, parsePatch, placeReview } from "../src/ui/diff.js";
-import { parseReviewPatch } from "../src/ui/review-presentation.js";
+import { parseReviewPatch, reviewDiffOptions, reviewTreeOptions } from "../src/ui/review-presentation.js";
 import type { ReviewListModel } from "../src/ui/list-model.js";
 import { displayTrigger, formatTime, resultLabel, runningLabel, STUCK_AFTER_MS } from "../src/ui/page.js";
 import { renderDetailHtml, renderListHtml } from "../src/ui/render-react.js";
@@ -148,6 +148,41 @@ describe("pull request diff placement", () => {
     expect(html).toContain('datetime="2026-10-13T15:05:00.000Z"');
     expect(html).toContain(">P0<");
     expect(html).toContain("P0/P1");
+  });
+
+  it("pins the file tree and diff to the page theme tokens", () => {
+    const tree = reviewTreeOptions([
+      {
+        filename: "src/pay.ts",
+        status: "modified",
+        statusMark: "M",
+        anchor: "file-pay",
+        stats: "+1",
+        patchMissing: false,
+        patchTruncated: false,
+        diffText: PATCH,
+        lines: [],
+        unanchored: [],
+      },
+    ]).unsafeCSS;
+    expect(tree).toContain("--trees-bg-override:var(--background)");
+    expect(tree).toContain("--trees-border-color-override:var(--border)");
+    expect(tree).toContain("--trees-fg-override:var(--foreground)");
+    expect(tree).toContain("--trees-bg-muted-override:var(--accent)");
+    expect(tree).toContain("--trees-selected-bg-override:var(--accent)");
+    expect(tree).toContain("--trees-search-bg-override:var(--background)");
+    expect(tree).toContain("[data-icon-token]{color:var(--muted-foreground)}");
+    expect(tree).toContain(":host([data-theme=dark]){color-scheme:dark}");
+    expect(tree).toContain(":host([data-theme=light]){color-scheme:light}");
+    expect(tree).not.toContain(":host-context(");
+    expect(tree).not.toContain("#e5e5e5");
+
+    const diff = reviewDiffOptions({ diffStyle: "unified", themeType: "dark", lines: [] }).unsafeCSS;
+    expect(diff).toContain("--diffs-light-bg:var(--background)");
+    expect(diff).toContain("--diffs-dark-bg:var(--background)");
+    expect(diff).toContain("--diffs-light:var(--foreground)");
+    expect(diff).toContain(":host([data-theme=dark]){color-scheme:dark}");
+    expect(diff).not.toContain(":host-context(");
   });
 
   it("shows status instead of zero counts, and one tag when kind and category match", async () => {
