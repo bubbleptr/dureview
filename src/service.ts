@@ -693,11 +693,16 @@ function namedTimeout(value: unknown): boolean {
   return "cause" in value && namedTimeout(value.cause);
 }
 
+function cappedOutputTokens(model: { maxTokens?: number }, configured: number): number {
+  const limit = model.maxTokens;
+  return typeof limit === "number" && limit > 0 ? Math.min(configured, limit) : configured;
+}
+
 function withMaxOutputTokens(models: Models, maxOutputTokens: () => number): Models {
   const streamSimple: Models["streamSimple"] = (model, context, options) =>
-    models.streamSimple(model, context, { ...options, maxTokens: maxOutputTokens() });
+    models.streamSimple(model, context, { ...options, maxTokens: cappedOutputTokens(model, maxOutputTokens()) });
   const completeSimple: Models["completeSimple"] = (model, context, options) =>
-    models.completeSimple(model, context, { ...options, maxTokens: maxOutputTokens() });
+    models.completeSimple(model, context, { ...options, maxTokens: cappedOutputTokens(model, maxOutputTokens()) });
   return new Proxy(models, {
     get(target, property, receiver) {
       if (property === "streamSimple") return streamSimple;

@@ -52,4 +52,24 @@ describe("output token cap", () => {
     const later = logged.mock.calls.map((call) => String(call[0])).filter((line) => line.includes("output token cap"));
     expect(later).toHaveLength(1);
   });
+
+  it("clamps the cap to the model's own output limit", async () => {
+    const caps: Array<number | undefined> = [];
+    const note = (step: FauxResponseStep): FauxResponseStep => (context, options, state, model) => {
+      caps.push(options?.maxTokens);
+      return typeof step === "function" ? step(context, options, state, model) : step;
+    };
+    const { service } = await openTestService({
+      dataDir: await tempDataDir(),
+      github: new MemoryGitHub(),
+      fauxModels: [{ id: "faux-1", maxTokens: 4096 }],
+      responses: scriptedReview("Nothing to change.", []).map(note),
+    });
+    closers.push(() => service.close());
+
+    const queued = await service.enqueue(reviewRequest());
+    expect((await service.wait(queued.taskId)).state.outcome.status).toBe("completed");
+    expect(caps.length).toBeGreaterThan(0);
+    expect(new Set(caps)).toEqual(new Set([4096]));
+  });
 });
