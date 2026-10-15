@@ -45,8 +45,9 @@ export function SettingsForm({ model, status = null }: { model: SettingsPageMode
             {problem}
           </p>
         ))}
-        <Connections console={model.console} />
+        <Connections console={model.console} csrf={model.csrf} />
         <form className="flex flex-col gap-5" method="post" action="/ui/settings">
+          <CsrfField token={model.csrf} />
           <h2 className="text-sm font-medium">Review settings</h2>
           <ProviderField
             field={model.fields.provider}
@@ -79,7 +80,7 @@ export function SettingsForm({ model, status = null }: { model: SettingsPageMode
             </Button>
           </div>
         </form>
-        <Audit audit={model.audit} />
+        <Audit audit={model.audit} csrf={model.csrf} />
       </div>
     </AppShell>
   );
@@ -263,7 +264,11 @@ function RuntimeStatus({ status }: { status: ShellStatus }) {
   );
 }
 
-function Audit({ audit }: { audit: SettingsPageModel["audit"] }) {
+function CsrfField({ token }: { token: string }) {
+  return <input type="hidden" name="csrf" value={token} />;
+}
+
+function Audit({ audit, csrf }: { audit: SettingsPageModel["audit"]; csrf: string }) {
   return (
     <section className="flex flex-col gap-2">
       <h2 className="text-sm font-medium">Recent changes</h2>
@@ -294,7 +299,9 @@ function Audit({ audit }: { audit: SettingsPageModel["audit"] }) {
           </TableBody>
         </Table>
       ) : null}
-      <form id="settings-reset" method="post" action="/ui/settings" />
+      <form id="settings-reset" method="post" action="/ui/settings">
+        <CsrfField token={csrf} />
+      </form>
     </section>
   );
 }

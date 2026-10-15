@@ -160,6 +160,7 @@ export class ServerSettings {
       error: extra.error ?? null,
       notice: extra.notice ?? null,
       saved: extra.saved === true,
+      csrf: "",
     };
   }
 

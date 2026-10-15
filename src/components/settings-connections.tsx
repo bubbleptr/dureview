@@ -7,17 +7,21 @@ import { Button } from "./ui/button.js";
 import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
 
-export function Connections({ console: consoleView }: { console: ConsoleView }) {
+export function Connections({ console: consoleView, csrf }: { console: ConsoleView; csrf: string }) {
   return (
     <div className="flex flex-col gap-8">
-      <Subscriptions rows={consoleView.subscriptions} logins={consoleView.logins} />
-      <ApiKeys rows={consoleView.apiKeys} />
-      <GitHubSetup github={consoleView.github} />
+      <Subscriptions rows={consoleView.subscriptions} logins={consoleView.logins} csrf={csrf} />
+      <ApiKeys rows={consoleView.apiKeys} csrf={csrf} />
+      <GitHubSetup github={consoleView.github} csrf={csrf} />
     </div>
   );
 }
 
-function Subscriptions({ rows, logins }: { rows: SubscriptionView[]; logins: LoginView[] }) {
+function CsrfField({ token }: { token: string }) {
+  return <input type="hidden" name="csrf" value={token} />;
+}
+
+function Subscriptions({ rows, logins, csrf }: { rows: SubscriptionView[]; logins: LoginView[]; csrf: string }) {
   const [live, setLive] = useState(logins);
   const pending = live.some((login) => login.phase === "starting" || login.phase === "code");
   useEffect(() => {
@@ -55,13 +59,13 @@ function Subscriptions({ rows, logins }: { rows: SubscriptionView[]; logins: Log
         </p>
       </div>
       {rows.map((row) => (
-        <SubscriptionRow key={row.provider} row={row} login={live.find((login) => login.provider === row.provider) ?? null} />
+        <SubscriptionRow key={row.provider} row={row} login={live.find((login) => login.provider === row.provider) ?? null} csrf={csrf} />
       ))}
     </section>
   );
 }
 
-function SubscriptionRow({ row, login }: { row: SubscriptionView; login: LoginView | null }) {
+function SubscriptionRow({ row, login, csrf }: { row: SubscriptionView; login: LoginView | null; csrf: string }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -100,6 +104,7 @@ function SubscriptionRow({ row, login }: { row: SubscriptionView; login: LoginVi
       {login && (login.phase === "starting" || login.phase === "code") ? <DeviceCode login={login} /> : null}
       <div className="flex flex-wrap items-end gap-2">
         <form className="flex flex-wrap items-end gap-2" method="post" action="/ui/settings">
+          <CsrfField token={csrf} />
           <input type="hidden" name="action" value="login" />
           <input type="hidden" name="provider" value={row.provider} />
           {row.provider === "github-copilot" ? (
@@ -112,6 +117,7 @@ function SubscriptionRow({ row, login }: { row: SubscriptionView; login: LoginVi
         </form>
         {row.present ? (
           <form method="post" action="/ui/settings">
+            <CsrfField token={csrf} />
             <input type="hidden" name="action" value="logout" />
             <input type="hidden" name="provider" value={row.provider} />
             <Button type="submit" variant="outline">
@@ -154,7 +160,7 @@ function DeviceCode({ login }: { login: LoginView }) {
   );
 }
 
-function ApiKeys({ rows }: { rows: ApiKeyView[] }) {
+function ApiKeys({ rows, csrf }: { rows: ApiKeyView[]; csrf: string }) {
   return (
     <section className="flex flex-col gap-4">
       <div className="flex flex-col gap-1">
@@ -173,6 +179,7 @@ function ApiKeys({ rows }: { rows: ApiKeyView[] }) {
           </div>
           <p className="text-sm text-muted-foreground">{apiKeySentence(row)}</p>
           <form className="flex flex-wrap items-end gap-2" method="post" action="/ui/settings">
+            <CsrfField token={csrf} />
             <input type="hidden" name="action" value="api-key" />
             <input type="hidden" name="provider" value={row.provider} />
             <div className="flex min-w-48 flex-1 flex-col gap-1">
@@ -183,6 +190,7 @@ function ApiKeys({ rows }: { rows: ApiKeyView[] }) {
           </form>
           {row.stored ? (
             <form method="post" action="/ui/settings">
+              <CsrfField token={csrf} />
               <input type="hidden" name="action" value="api-key-clear" />
               <input type="hidden" name="provider" value={row.provider} />
               <Button type="submit" variant="outline" size="sm">
@@ -196,7 +204,7 @@ function ApiKeys({ rows }: { rows: ApiKeyView[] }) {
   );
 }
 
-function GitHubSetup({ github }: { github: ConsoleView["github"] }) {
+function GitHubSetup({ github, csrf }: { github: ConsoleView["github"]; csrf: string }) {
   const listed = github.installations?.length ?? 0;
   const extra = github.installationCount === null ? 0 : github.installationCount - listed;
   return (
@@ -243,6 +251,7 @@ function GitHubSetup({ github }: { github: ConsoleView["github"] }) {
       ) : null}
       {github.kind === "environment-app" ? null : (
         <form className="flex flex-wrap items-end gap-2" method="post" action="/ui/settings">
+          <CsrfField token={csrf} />
           <input type="hidden" name="action" value="github-manifest" />
           <div className="flex min-w-48 flex-1 flex-col gap-1">
             <Label htmlFor="github-org">Organization</Label>
@@ -253,6 +262,7 @@ function GitHubSetup({ github }: { github: ConsoleView["github"] }) {
       )}
       {github.saved ? (
         <form method="post" action="/ui/settings">
+          <CsrfField token={csrf} />
           <input type="hidden" name="action" value="github-clear" />
           <Button type="submit" variant="outline" size="sm">
             Remove saved app

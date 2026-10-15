@@ -398,5 +398,6 @@ function settingsFixture(): SettingsPageModel {
     error: null,
     notice: null,
     saved: false,
+    csrf: "",
   };
 }

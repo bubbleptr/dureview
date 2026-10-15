@@ -16,6 +16,7 @@ import { assertServeConfig, configFromEnv, editableBaseline } from "../src/confi
 import { activeGitHub, activeWebhookSecret, githubSetupView } from "../src/github/access.js";
 import { GitHubAppFile } from "../src/github/app-file.js";
 import { exchangeAppManifest, manifestCreateUrl, manifestHandoffPage } from "../src/github/manifest.js";
+import { postIsSameOrigin, settingsCsrfToken } from "../src/http/csrf.js";
 import { REVIEWS_DB_FILE } from "../src/review/archive.js";
 import { ServerSettings } from "../src/settings/effective.js";
 import { startHttp } from "../src/server.js";
@@ -347,12 +348,7 @@ describe("settings console HTTP", () => {
     });
     expect(denied.status).toBe(401);
 
-    const saved = await fetch(`${http.url}/ui/settings`, {
-      method: "POST",
-      headers: { ...auth, "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ action: "api-key", provider: "openai", key: KEY }),
-      redirect: "manual",
-    });
+    const saved = await settingsPost(http.url, UI_TOKEN, { action: "api-key", provider: "openai", key: KEY });
     expect(saved.status).toBe(303);
     expect(saved.headers.get("location")).toBe("/ui/settings?key=saved");
 
@@ -363,6 +359,7 @@ describe("settings console HTTP", () => {
     expect(html).not.toContain("CANARYPREFIX");
     expect(html).not.toContain(UI_TOKEN);
     expect(html).not.toContain(KEY);
+    expect(html).toContain(`name="csrf" value="${settingsCsrfToken(UI_TOKEN)}"`);
 
     const live = await fetch(`${http.url}/ui/settings?poll=1`, { headers: auth });
     expect(live.status).toBe(200);
@@ -370,11 +367,7 @@ describe("settings console HTTP", () => {
     expect(body).not.toContain("CANARYPREFIX");
     expect(body).not.toContain("9f3a");
 
-    const handoff = await fetch(`${http.url}/ui/settings`, {
-      method: "POST",
-      headers: { ...auth, "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ action: "github-manifest", org: "" }),
-    });
+    const handoff = await settingsPost(http.url, UI_TOKEN, { action: "github-manifest", org: "" });
     expect(handoff.status).toBe(200);
     expect(handoff.headers.get("content-security-policy")).toContain("form-action https://github.com");
     const handoffHtml = await handoff.text();
@@ -383,7 +376,7 @@ describe("settings console HTTP", () => {
     const state = /dureview_github_setup=([a-f0-9]{64})/.exec(handoff.headers.get("set-cookie") ?? "")?.[1];
     expect(state).toBeTruthy();
     const mismatch = await fetch(`${http.url}/ui/settings?setup=github&state=${"ab".repeat(32)}&code=abcdefghij`, {
-      headers: { ...auth, cookie: `dureview_github_setup=${state}` },
+      headers: { ...auth, cookie: `dureview_github_setup=${state}`, origin: "https://github.com", "sec-fetch-site": "cross-site" },
       redirect: "manual",
     });
     expect(mismatch.status).toBe(303);
@@ -392,12 +385,7 @@ describe("settings console HTTP", () => {
     const failed = await fetch(`${http.url}${mismatch.headers.get("location")}`, { headers: auth });
     expect(await failed.text()).toContain("GitHub setup did not finish");
 
-    const invalid = await fetch(`${http.url}/ui/settings`, {
-      method: "POST",
-      headers: { ...auth, "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ action: "api-key", provider: "openai", key: "short" }),
-      redirect: "manual",
-    });
+    const invalid = await settingsPost(http.url, UI_TOKEN, { action: "api-key", provider: "openai", key: "short" });
     expect(invalid.status).toBe(303);
     const problem = invalid.headers.get("location") ?? "";
     expect(problem).toContain("problem=");
@@ -426,11 +414,7 @@ describe("settings console HTTP", () => {
       await http.close();
       await service.close();
     });
-    const handoff = await fetch(`${http.url}/ui/settings`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${UI_TOKEN}`, "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ action: "github-manifest", org: "acme" }),
-    });
+    const handoff = await settingsPost(http.url, UI_TOKEN, { action: "github-manifest", org: "acme" });
     expect(handoff.status).toBe(200);
     expect(handoff.headers.get("content-security-policy")).toContain("form-action https://ghe.example.com");
     expect(handoff.headers.get("content-security-policy")).not.toContain("form-action https://github.com");
@@ -438,7 +422,98 @@ describe("settings console HTTP", () => {
     expect(html).toContain("https://ghe.example.com/organizations/acme/settings/apps/new");
     expect(html).not.toContain("https://github.com/settings/apps/new");
   });
+
+  it("rejects a cross-site credential post even when HTTP Basic and the form token are present", async () => {
+    const dataDir = await tempDataDir();
+    const { service } = await openTestService({ dataDir, github: new MemoryGitHub(), responses: [] });
+    const http = await startHttp(service, { host: "127.0.0.1", port: 0, uiToken: UI_TOKEN, dataDir });
+    closers.push(async () => {
+      await http.close();
+      await service.close();
+    });
+    const basic = Buffer.from(`operator:${UI_TOKEN}`).toString("base64");
+    const token = settingsCsrfToken(UI_TOKEN);
+    const attack = await fetch(`${http.url}/ui/settings`, {
+      method: "POST",
+      redirect: "manual",
+      headers: {
+        authorization: `Basic ${basic}`,
+        "content-type": "application/x-www-form-urlencoded",
+        origin: "https://evil.example",
+        "sec-fetch-site": "cross-site",
+      },
+      body: new URLSearchParams({ action: "api-key", provider: "openai", key: KEY, csrf: token }),
+    });
+    expect(attack.status).toBe(403);
+    const bare = await fetch(`${http.url}/ui/settings`, {
+      method: "POST",
+      redirect: "manual",
+      headers: {
+        authorization: `Bearer ${UI_TOKEN}`,
+        "content-type": "application/x-www-form-urlencoded",
+        origin: new URL(http.url).origin,
+        "sec-fetch-site": "same-origin",
+      },
+      body: new URLSearchParams({ action: "api-key", provider: "openai", key: KEY }),
+    });
+    expect(bare.status).toBe(403);
+    const forged = await settingsPost(http.url, UI_TOKEN, { action: "api-key", provider: "openai", key: KEY }, { "sec-fetch-site": "same-site" });
+    expect(forged.status).toBe(403);
+    const page = await fetch(`${http.url}/ui/settings`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    expect(await page.text()).not.toContain("9f3a");
+
+    const request = new Request("https://review.example/ui/settings", {
+      method: "POST",
+      headers: { origin: "https://review.example", "sec-fetch-site": "same-origin" },
+    });
+    expect(postIsSameOrigin(request)).toBe(true);
+    expect(postIsSameOrigin(new Request("http://127.0.0.1/ui/settings", { method: "POST" }))).toBe(false);
+    expect(
+      postIsSameOrigin(
+        new Request("http://127.0.0.1/ui/settings", {
+          method: "POST",
+          headers: { origin: "https://review.example", "x-forwarded-proto": "https", "x-forwarded-host": "review.example" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      postIsSameOrigin(
+        new Request("http://127.0.0.1/ui/settings", {
+          method: "POST",
+          headers: {
+            origin: "https://evil.example",
+            "sec-fetch-site": "cross-site",
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "evil.example",
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      postIsSameOrigin(
+        new Request("https://review.example/ui/settings", {
+          method: "POST",
+          headers: { origin: "https://evil.example", "sec-fetch-site": "same-origin" },
+        }),
+      ),
+    ).toBe(false);
+  });
 });
+
+function settingsPost(url: string, token: string, fields: Record<string, string>, headers: Record<string, string> = {}): Promise<Response> {
+  return fetch(`${url}/ui/settings`, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/x-www-form-urlencoded",
+      origin: new URL(url).origin,
+      "sec-fetch-site": "same-origin",
+      ...headers,
+    },
+    body: new URLSearchParams({ ...fields, csrf: settingsCsrfToken(token) }),
+  });
+}
 
 function selectPrompt(): AuthPrompt {
   return {

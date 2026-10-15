@@ -96,7 +96,7 @@ export type ConsoleView = {
   github: GitHubSetupView;
 };
 
-/** Serializable settings page. Tokens, keys, and secrets are not on this object. */
+/** Serializable settings page. The console token, API keys, and private keys are not on this object. */
 export type SettingsPageModel = {
   provider: string;
   modelOptions: string[];
@@ -117,6 +117,7 @@ export type SettingsPageModel = {
   error: string | null;
   notice: string | null;
   saved: boolean;
+  csrf: string;
 };
 
 export function emptyConsole(): ConsoleView {
