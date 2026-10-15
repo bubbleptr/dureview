@@ -1,6 +1,9 @@
 import * as React from "react";
 import * as RechartsPrimitive from "recharts";
 import { cn } from "../../lib/utils.js";
+import { formatCount } from "../../ui/format.js";
+import { useI18n } from "../../ui/i18n.js";
+import type { Locale } from "../../ui/locale.js";
 
 export type ChartConfig = Record<string, { label?: string; color?: string }>;
 
@@ -51,6 +54,23 @@ type TooltipItem = {
   payload?: { fill?: string };
 };
 
+export function chartTooltipEntries(
+  config: ChartConfig,
+  label: string | number | undefined,
+  payload: readonly TooltipItem[],
+): { heading: string | null; rows: Array<{ key: string; name: string; value: number | string | undefined; color?: string }> } {
+  const headingKey = label === undefined || label === "" ? null : String(label);
+  const heading = headingKey === null ? null : (config[headingKey]?.label ?? headingKey);
+  const rows = payload.map((item) => {
+    const key = String(item.dataKey ?? item.name ?? "");
+    const named = item.name === undefined ? undefined : config[String(item.name)]?.label;
+    const name = config[key]?.label ?? named ?? item.name ?? key;
+    const color = item.color ?? item.payload?.fill ?? config[key]?.color;
+    return { key, name: String(name), value: item.value, color };
+  });
+  return { heading, rows };
+}
+
 export function ChartTooltipContent({
   active,
   payload,
@@ -61,28 +81,25 @@ export function ChartTooltipContent({
   label?: string | number;
 }) {
   const config = useChartConfig();
+  const { locale } = useI18n();
   if (!active || !payload || payload.length === 0) return null;
+  const tip = chartTooltipEntries(config, label, payload);
   return (
     <div className="grid min-w-32 gap-1 rounded-lg border bg-background px-2.5 py-1.5 text-xs shadow-sm">
-      {label !== undefined && label !== "" ? <div className="font-medium">{label}</div> : null}
-      {payload.map((item) => {
-        const key = String(item.dataKey ?? item.name ?? "");
-        const name = config[key]?.label ?? item.name ?? key;
-        const color = item.color ?? item.payload?.fill ?? config[key]?.color;
-        return (
-          <div key={key} className="flex items-center gap-2">
-            <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: color }} />
-            <span className="text-muted-foreground">{name}</span>
-            <span className="ml-auto tabular-nums">{formatTooltipValue(item.value)}</span>
-          </div>
-        );
-      })}
+      {tip.heading ? <div className="font-medium">{tip.heading}</div> : null}
+      {tip.rows.map((row) => (
+        <div key={row.key} className="flex items-center gap-2">
+          <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: row.color }} />
+          <span className="text-muted-foreground">{row.name}</span>
+          <span className="ml-auto tabular-nums">{formatTooltipValue(row.value, locale)}</span>
+        </div>
+      ))}
     </div>
   );
 }
 
-function formatTooltipValue(value: number | string | undefined): string {
-  if (typeof value === "number" && Number.isFinite(value)) return new Intl.NumberFormat("en-US").format(value);
+function formatTooltipValue(value: number | string | undefined, locale: Locale): string {
+  if (typeof value === "number" && Number.isFinite(value)) return formatCount(value, locale);
   if (typeof value === "string") return value;
   return "—";
 }

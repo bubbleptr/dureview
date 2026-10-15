@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { settingsCopy } from "../ui/settings-copy.js";
+import { useSettingsCopy } from "../ui/i18n.js";
 import { Button } from "./ui/button.js";
 
 export const DIFF_STYLE_KEY = "dureview-diff-style";
@@ -31,7 +31,7 @@ export function useDiffStyle(): [DiffStyle, (value: DiffStyle) => void] {
 
 export function DiffStyleControl() {
   const [style, setStyle] = useDiffStyle();
-  const copy = settingsCopy.review;
+  const copy = useSettingsCopy().review;
   return (
     <div className="flex gap-1" role="group" aria-label={copy.diffGroup}>
       <Button type="button" size="sm" variant={style === "unified" ? "default" : "outline"} aria-pressed={style === "unified"} onClick={() => setStyle("unified")}>

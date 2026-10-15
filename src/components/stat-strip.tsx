@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { useI18n } from "../ui/i18n.js";
+import { seriesLabel } from "../ui/messages.js";
 import type { StatsBar, StatsPageModel } from "../ui/stats-model.js";
 
 export function StatStrip({
@@ -34,13 +36,14 @@ export function FigureBlock({ title, caption, children }: { title: string; capti
 }
 
 export function TrendDataTable({ trend }: { trend: StatsPageModel["trend"] }) {
+  const { m } = useI18n();
   if (trend.points.length === 0) return null;
   return (
     <table className="sr-only">
-      <caption>Tokens by day and model</caption>
+      <caption>{m.overview.trendTable}</caption>
       <thead>
         <tr>
-          <th scope="col">Day</th>
+          <th scope="col">{m.overview.day}</th>
           {trend.models.map((model) => (
             <th key={model} scope="col">
               {model}
@@ -62,21 +65,30 @@ export function TrendDataTable({ trend }: { trend: StatsPageModel["trend"] }) {
   );
 }
 
-export function BarDataTable({ caption, rows }: { caption: string; rows: StatsBar[] }) {
+export function BarDataTable({
+  caption,
+  rows,
+  translateNames = true,
+}: {
+  caption: string;
+  rows: StatsBar[];
+  translateNames?: boolean;
+}) {
+  const { locale, m } = useI18n();
   return (
     <table className="sr-only">
       <caption>{caption}</caption>
       <thead>
         <tr>
-          <th scope="col">Name</th>
-          <th scope="col">Count</th>
-          <th scope="col">Share</th>
+          <th scope="col">{m.overview.name}</th>
+          <th scope="col">{m.overview.count}</th>
+          <th scope="col">{m.overview.share}</th>
         </tr>
       </thead>
       <tbody>
         {rows.map((row) => (
           <tr key={row.name}>
-            <th scope="row">{row.name}</th>
+            <th scope="row">{translateNames ? seriesLabel(row.name, locale) : row.name}</th>
             <td>{row.count}</td>
             <td>{row.share}</td>
           </tr>

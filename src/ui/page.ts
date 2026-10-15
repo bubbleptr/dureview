@@ -1,5 +1,7 @@
 import { githubWebOrigin } from "../github/web.js";
 import type { ReviewResultKind } from "../review/archive.js";
+import type { Locale } from "./locale.js";
+import { messages } from "./messages.js";
 import type { DashboardStatus } from "./status.js";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
@@ -25,9 +27,21 @@ export function formatUptime(ms: number): string {
   return `${secs}s`;
 }
 
-export function formatTime(iso: string): string {
+export function formatTime(iso: string, locale: Locale = "en"): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
+  if (locale === "zh-CN") {
+    const formatted = new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone: "UTC",
+    }).format(date);
+    return `${formatted} UTC`;
+  }
   const y = date.getUTCFullYear();
   const m = String(date.getUTCMonth() + 1).padStart(2, "0");
   const d = String(date.getUTCDate()).padStart(2, "0");
@@ -39,11 +53,12 @@ export function formatTime(iso: string): string {
 /** A review still marked running after this long is shown as stuck, not as a growing duration. */
 export const STUCK_AFTER_MS = 30 * 60 * 1000;
 
-export function runningLabel(startedAt: string, now: number): "进行中" | "疑似卡住" {
+export function runningLabel(startedAt: string, now: number, locale: Locale = "en"): string {
+  const copy = messages[locale].status;
   const start = Date.parse(startedAt);
-  if (Number.isNaN(start)) return "进行中";
-  if (now - start >= STUCK_AFTER_MS) return "疑似卡住";
-  return "进行中";
+  if (Number.isNaN(start)) return copy.inProgress;
+  if (now - start >= STUCK_AFTER_MS) return copy.stuck;
+  return copy.inProgress;
 }
 
 export function formatDuration(ms: number | null): string {
@@ -67,20 +82,21 @@ export function reviewDurationMs(startedAt: string, finishedAt: string | null, n
 }
 
 /** Automatic pull request events are `auto`. A comment command is `/dureview`. */
-export function displayTrigger(trigger: string): string {
+export function displayTrigger(trigger: string, locale: Locale = "en"): string {
   if (trigger === "command") return "/dureview";
   if (trigger === "opened" || trigger === "synchronize" || trigger === "reopened" || trigger === "ready_for_review") {
-    return "auto";
+    return messages[locale].status.auto;
   }
   return "—";
 }
 
-export function resultLabel(kind: ReviewResultKind): string {
-  if (kind === "pass") return "Pass";
-  if (kind === "suggest") return "Suggestions";
-  if (kind === "blocker") return "P0/P1";
-  if (kind === "error") return "Error";
-  return "Running";
+export function resultLabel(kind: ReviewResultKind, locale: Locale = "en"): string {
+  const copy = messages[locale].status;
+  if (kind === "pass") return copy.pass;
+  if (kind === "suggest") return copy.suggest;
+  if (kind === "blocker") return copy.blocker;
+  if (kind === "error") return copy.error;
+  return copy.running;
 }
 
 export type CodexPhrase =
@@ -88,13 +104,14 @@ export type CodexPhrase =
   | { kind: "timed"; lead: string; iso: string; label: string };
 
 /** Same wording the status line uses for the Codex credential. `label` is the UTC timestamp. */
-export function codexPhrase(codex: DashboardStatus["codex"], now = Date.now()): CodexPhrase {
-  if (codex.unreadable) return { kind: "plain", text: "Codex login unreadable" };
-  if (!codex.present) return { kind: "plain", text: "Codex not signed in" };
-  if (!codex.expiresAt) return { kind: "plain", text: "Codex signed in" };
-  const label = formatTime(codex.expiresAt);
+export function codexPhrase(codex: DashboardStatus["codex"], now = Date.now(), locale: Locale = "en"): CodexPhrase {
+  const copy = messages[locale].status;
+  if (codex.unreadable) return { kind: "plain", text: copy.codexUnreadable };
+  if (!codex.present) return { kind: "plain", text: copy.codexSignedOut };
+  if (!codex.expiresAt) return { kind: "plain", text: copy.codexSignedIn };
+  const label = formatTime(codex.expiresAt, locale);
   const expiry = Date.parse(codex.expiresAt);
-  if (Number.isNaN(expiry) || label === "") return { kind: "plain", text: "Codex signed in" };
-  if (expiry <= now) return { kind: "timed", lead: "Codex signed in, access token expired ", iso: codex.expiresAt, label };
-  return { kind: "timed", lead: "Codex signed in, access token expires ", iso: codex.expiresAt, label };
+  if (Number.isNaN(expiry) || label === "") return { kind: "plain", text: copy.codexSignedIn };
+  if (expiry <= now) return { kind: "timed", lead: copy.codexExpired, iso: codex.expiresAt, label };
+  return { kind: "timed", lead: copy.codexExpires, iso: codex.expiresAt, label };
 }

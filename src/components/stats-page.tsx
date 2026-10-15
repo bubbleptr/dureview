@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { TimezoneField } from "./timezone-field.js";
+import { useI18n } from "../ui/i18n.js";
 import type { StatsPageModel, StatsRankRow } from "../ui/stats-model.js";
 import { AppShell } from "./app-shell.js";
 import { ClientChart } from "./client-chart.js";
@@ -9,40 +10,38 @@ import { FormSelect } from "./ui/form-select.js";
 import { Label } from "./ui/label.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table.js";
 
-const RANGES: Array<[string, string]> = [
-  ["24h", "Last 24 hours"],
-  ["7d", "Last 7 days"],
-  ["30d", "Last 30 days"],
-  ["all", "All time"],
-];
+const RANGE_KEYS = ["24h", "7d", "30d", "all"] as const;
 
 export function OverviewPage({ model }: { model: StatsPageModel }) {
+  const { m } = useI18n();
+  const copy = m.overview;
+  const ranges = RANGE_KEYS.map((value) => ({ value, label: copy.ranges[value] }));
   return (
-    <AppShell current="overview" title="Overview" form={{ method: "get", action: "/ui" }}>
+    <AppShell current="overview" title={m.shell.overview} form={{ method: "get", action: "/ui" }}>
       <div className="flex flex-col gap-2">
-        <p className="max-w-prose text-sm leading-6 text-muted-foreground">Counts and token totals for the selected range.</p>
+        <p className="max-w-prose text-sm leading-6 text-muted-foreground">{copy.lede}</p>
         <div className="flex flex-wrap items-end gap-3 border-b pb-4">
           <Label className="flex flex-col gap-1 text-xs">
-            Time range
-            <FormSelect name="range" defaultValue={model.form.range} options={RANGES.map(([value, label]) => ({ value, label }))} submitOnChange className="h-8 text-xs" />
+            {copy.timeRange}
+            <FormSelect name="range" defaultValue={model.form.range} options={ranges} submitOnChange className="h-8 text-xs" />
           </Label>
           <Label className="flex min-w-40 flex-col gap-1 text-xs">
-            Repository
+            {copy.repository}
             <FormSelect
               name="repo"
               defaultValue={model.form.repo}
-              options={[{ value: "", label: "All repositories" }, ...model.repos.map((repo) => ({ value: repo, label: repo }))]}
+              options={[{ value: "", label: copy.allRepos }, ...model.repos.map((repo) => ({ value: repo, label: repo }))]}
               submitOnChange
               className="h-8 w-44 text-xs"
             />
           </Label>
           <TimezoneField tz={model.form.tz} />
           <Button type="submit" size="sm">
-            Apply
+            {copy.apply}
           </Button>
           {model.filtered ? (
             <a className="mb-1 text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui">
-              Clear
+              {copy.clear}
             </a>
           ) : null}
         </div>
@@ -50,12 +49,9 @@ export function OverviewPage({ model }: { model: StatsPageModel }) {
 
       <StatStrip stats={model.cards} columns={6} />
 
-      <FigureBlock
-        title="Tokens by day"
-        caption="Each line is one model, and that model keeps its color. Days use this browser's time zone. Position shows token volume, not cost."
-      >
+      <FigureBlock title={copy.tokensTitle} caption={copy.tokensCaption}>
         {model.trend.points.length === 0 ? (
-          <Empty>No token usage in this range.</Empty>
+          <Empty>{copy.emptyTokens}</Empty>
         ) : (
           <ClientChart className="h-72" render={(charts) => <charts.TokenTrendChart trend={model.trend} />} />
         )}
@@ -64,73 +60,76 @@ export function OverviewPage({ model }: { model: StatsPageModel }) {
       </FigureBlock>
 
       <div className="grid grid-cols-1 gap-10 lg:grid-cols-2">
-        <FigureBlock title="Priority" caption="Share of stored findings. Color marks P0 through P3. Bar length is the count.">
+        <FigureBlock title={copy.priorityTitle} caption={copy.priorityCaption}>
           <ClientChart render={(charts) => <charts.DistributionChart rows={model.priorities} />} />
-          <BarDataTable caption="Findings by priority" rows={model.priorities} />
+          <BarDataTable caption={copy.priorityTable} rows={model.priorities} />
         </FigureBlock>
-        <FigureBlock title="Type" caption="Bug, flag, and security. Unknown was stored before types existed. Color marks the type. Bar length is the count.">
+        <FigureBlock title={copy.typeTitle} caption={copy.typeCaption}>
           {model.types.every((row) => row.count === 0) ? (
-            <Empty>No findings in this range.</Empty>
+            <Empty>{copy.emptyFindings}</Empty>
           ) : (
             <ClientChart render={(charts) => <charts.DistributionChart rows={model.types} />} />
           )}
-          <BarDataTable caption="Findings by type" rows={model.types} />
+          <BarDataTable caption={copy.typeTable} rows={model.types} />
         </FigureBlock>
-        <FigureBlock title="Category" caption="Includes findings that were not posted. Color marks the category. Bar length is the count.">
+        <FigureBlock title={copy.categoryTitle} caption={copy.categoryCaption}>
           {model.categories.length === 0 ? (
-            <Empty>No findings in this range.</Empty>
+            <Empty>{copy.emptyFindings}</Empty>
           ) : (
             <ClientChart render={(charts) => <charts.DistributionChart rows={model.categories} />} />
           )}
-          <BarDataTable caption="Findings by category" rows={model.categories} />
+          <BarDataTable caption={copy.categoryTable} rows={model.categories} />
         </FigureBlock>
-        <FigureBlock title="Verdict" caption="Completed reviews only. Color marks the verdict. Bar length is the count.">
+        <FigureBlock title={copy.verdictTitle} caption={copy.verdictCaption}>
           {model.verdicts.every((row) => row.count === 0) ? (
-            <Empty>No completed reviews in this range.</Empty>
+            <Empty>{copy.emptyCompleted}</Empty>
           ) : (
             <ClientChart render={(charts) => <charts.DistributionChart rows={model.verdicts} />} />
           )}
-          <BarDataTable caption="Completed reviews by verdict" rows={model.verdicts} />
+          <BarDataTable caption={copy.verdictTable} rows={model.verdicts} />
         </FigureBlock>
       </div>
 
-      <FigureBlock title="Failure reasons" caption="Grouped by the error recorded for the run. Color marks the reason. Bar length is the failure count.">
+      <FigureBlock title={copy.failureTitle} caption={copy.failureCaption}>
         {model.failures.length === 0 ? (
-          <Empty>No failed reviews in this range.</Empty>
+          <Empty>{copy.emptyFailures}</Empty>
         ) : (
           <ClientChart render={(charts) => <charts.FailureChart rows={model.failures} />} />
         )}
-        <BarDataTable caption="Failed reviews by error" rows={model.failures} />
+        <BarDataTable caption={copy.failureTable} rows={model.failures} translateNames={false} />
       </FigureBlock>
 
-      <RankBlock title="Most expensive pull requests" description="Ranked by pi-ai cost, then by tokens.">
+      <RankBlock title={copy.expensiveTitle} description={copy.expensiveDescription}>
         <RankTable
+          empty={copy.emptyRank}
           rows={model.expensive}
           columns={[
-            ["Pull request", "label"],
-            ["Reviews", "reviews"],
-            ["Tokens", "tokens"],
-            ["Cost", "cost"],
+            [copy.columns.pull, "label"],
+            [copy.columns.reviews, "reviews"],
+            [copy.columns.tokens, "tokens"],
+            [copy.columns.cost, "cost"],
           ]}
         />
       </RankBlock>
-      <RankBlock title="Repositories" description="By review count, with finding totals.">
+      <RankBlock title={copy.reposTitle} description={copy.reposDescription}>
         <RankTable
+          empty={copy.emptyRank}
           rows={model.topRepos}
           columns={[
-            ["Repository", "label"],
-            ["Reviews", "reviews"],
-            ["Findings", "findings"],
+            [copy.columns.repository, "label"],
+            [copy.columns.reviews, "reviews"],
+            [copy.columns.findings, "findings"],
           ]}
         />
       </RankBlock>
-      <RankBlock title="Pull requests" description="By finding count.">
+      <RankBlock title={copy.pullsTitle} description={copy.pullsDescription}>
         <RankTable
+          empty={copy.emptyRank}
           rows={model.topPulls}
           columns={[
-            ["Pull request", "label"],
-            ["Reviews", "reviews"],
-            ["Findings", "findings"],
+            [copy.columns.pull, "label"],
+            [copy.columns.reviews, "reviews"],
+            [copy.columns.findings, "findings"],
           ]}
         />
       </RankBlock>
@@ -153,11 +152,13 @@ function RankBlock({ title, description, children }: { title: string; descriptio
 function RankTable({
   rows,
   columns,
+  empty,
 }: {
   rows: StatsRankRow[];
   columns: Array<[string, keyof StatsRankRow]>;
+  empty: string;
 }) {
-  if (rows.length === 0) return <Empty>Nothing in this range.</Empty>;
+  if (rows.length === 0) return <Empty>{empty}</Empty>;
   return (
     <Table>
       <caption className="sr-only">{columns.map(([label]) => label).join(", ")}</caption>

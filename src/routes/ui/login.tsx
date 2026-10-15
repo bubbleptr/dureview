@@ -1,5 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useLocation } from "@tanstack/react-router";
 import { LoginForm } from "../../components/login-form.js";
+import { localeFromMatches } from "../../ui/locale.js";
+import { messages } from "../../ui/messages.js";
+import { loginNextFromSearch } from "../../ui/next-path.js";
 
 export const Route = createFileRoute("/ui/login")({
   server: {
@@ -25,9 +28,11 @@ export const Route = createFileRoute("/ui/login")({
       },
     },
   },
+  head: ({ matches }) => ({ meta: [{ title: messages[localeFromMatches(matches)].login.documentTitle }] }),
   component: LoginPage,
 });
 
 function LoginPage() {
-  return <LoginForm next="/ui" />;
+  const search = useLocation({ select: (location) => location.searchStr });
+  return <LoginForm next={loginNextFromSearch(search)} />;
 }

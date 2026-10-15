@@ -13,6 +13,7 @@ export const getStats = createServerFn({ method: "GET" })
     const { getRequest } = await import("@tanstack/react-start/server");
     const { getRuntime } = await import("../app/runtime.js");
     const { uiSession } = await import("../http/auth.js");
+    const { resolveLocale } = await import("./locale.js");
     const { buildStatsPage } = await import("./stats-data.js");
     const { searchParamsFrom } = await import("./list-data.js");
     const runtime = await getRuntime();
@@ -20,6 +21,6 @@ export const getStats = createServerFn({ method: "GET" })
     if (uiSession(request, runtime.config.uiToken) !== "ok") {
       return { kind: "login", next: data.next };
     }
-    const model = await buildStatsPage(runtime.service, searchParamsFrom(data.search));
+    const model = await buildStatsPage(runtime.service, searchParamsFrom(data.search), Date.now(), resolveLocale(request));
     return { kind: "stats", model };
   });

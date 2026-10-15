@@ -2,6 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { LoginForm } from "../../../components/login-form.js";
 import { ReviewListView } from "../../../components/review-list.js";
 import { getReviewList } from "../../../ui/list-fn.js";
+import { localeFromMatches } from "../../../ui/locale.js";
+import { messages } from "../../../ui/messages.js";
 
 export const Route = createFileRoute("/ui/reviews/")({
   server: {
@@ -18,7 +20,7 @@ export const Route = createFileRoute("/ui/reviews/")({
     const list = await getReviewList({ data: { search: location.searchStr, next: location.pathname } });
     return { list, search: location.searchStr };
   },
-  head: () => ({ meta: [{ title: "Reviews · dureview" }] }),
+  head: ({ matches }) => ({ meta: [{ title: messages[localeFromMatches(matches)].reviews.documentTitle }] }),
   component: ReviewsPage,
 });
 

@@ -1,5 +1,6 @@
 import { reviewResult, type ReviewSummary } from "../review/archive.js";
 import type { DureviewService } from "../service.js";
+import type { Locale } from "./locale.js";
 import { loadDashboard } from "./status.js";
 import {
   codexPhrase,
@@ -30,6 +31,7 @@ export async function buildReviewList(
   ctx: ListContext,
   searchParams: URLSearchParams,
   now = Date.now(),
+  locale: Locale = "en",
 ): Promise<ReviewListModel> {
   const query = reviewFilterFromSearch(searchParams, now);
   const [listed, status] = await Promise.all([
@@ -49,10 +51,10 @@ export async function buildReviewList(
     provider: status.provider,
     model: status.model,
     thinking: ctx.thinking,
-    codex: codexPhrase(status.codex, now),
+    codex: codexPhrase(status.codex, now, locale),
     githubApp: status.githubApp,
     githubToken: status.githubToken,
-    reviews: listed.reviews.map((review) => reviewRow(review, now)),
+    reviews: listed.reviews.map((review) => reviewRow(review, now, locale)),
     repos: listedRepos(listed.repos, query.form.repo),
     total: listed.total,
     shown: listed.reviews.length,
@@ -67,7 +69,7 @@ export function searchParamsFrom(search: string): URLSearchParams {
   return new URLSearchParams(raw);
 }
 
-function reviewRow(review: ReviewSummary, now: number): ReviewRowView {
+function reviewRow(review: ReviewSummary, now: number, locale: Locale): ReviewRowView {
   const kind = reviewResult(review);
   const whenIso = review.finishedAt ?? review.startedAt;
   return {
@@ -75,9 +77,9 @@ function reviewRow(review: ReviewSummary, now: number): ReviewRowView {
     href: `/ui/reviews/${encodeURIComponent(review.taskId)}`,
     repoLabel: `${review.owner}/${review.repo} #${review.number}`,
     title: review.title || "—",
-    triggerLabel: displayTrigger(review.trigger),
+    triggerLabel: displayTrigger(review.trigger, locale),
     resultKind: kind,
-    resultText: resultLabel(kind),
+    resultText: resultLabel(kind, locale),
     p0: countText(review.p0, review.countsKnown),
     p1: countText(review.p1, review.countsKnown),
     p2: countText(review.p2, review.countsKnown),
@@ -86,10 +88,10 @@ function reviewRow(review: ReviewSummary, now: number): ReviewRowView {
     p1On: review.countsKnown && review.p1 > 0,
     p2On: review.countsKnown && review.p2 > 0,
     p3On: review.countsKnown && review.p3 > 0,
-    duration: durationText(review, now),
+    duration: durationText(review, now, locale),
     durationMs: review.outcome === "running" ? null : reviewDurationMs(review.startedAt, review.finishedAt, now),
     whenIso,
-    whenLabel: formatTime(whenIso),
+    whenLabel: formatTime(whenIso, locale),
     modelLine: reviewModelLine(review),
   };
 }
@@ -101,8 +103,8 @@ function reviewModelLine(review: ReviewSummary): string | null {
   return review.thinking;
 }
 
-function durationText(review: ReviewSummary, now: number): string {
-  if (review.outcome === "running") return runningLabel(review.startedAt, now);
+function durationText(review: ReviewSummary, now: number, locale: Locale): string {
+  if (review.outcome === "running") return runningLabel(review.startedAt, now, locale);
   return formatDuration(reviewDurationMs(review.startedAt, review.finishedAt, now));
 }
 

@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as HealthRouteImport } from './routes/health'
 import { Route as WebhookRouteImport } from './routes/webhook'
 import { Route as UiIndexRouteImport } from './routes/ui/index'
+import { Route as UiLocaleRouteImport } from './routes/ui/locale'
 import { Route as UiLoginRouteImport } from './routes/ui/login'
 import { Route as UiStatsRouteImport } from './routes/ui/stats'
 import { Route as UiReviewsIndexRouteImport } from './routes/ui/reviews/index'
@@ -38,6 +39,11 @@ const WebhookRoute = WebhookRouteImport.update({
 const UiIndexRoute = UiIndexRouteImport.update({
   id: '/ui/',
   path: '/ui/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UiLocaleRoute = UiLocaleRouteImport.update({
+  id: '/ui/locale',
+  path: '/ui/locale',
   getParentRoute: () => rootRouteImport,
 } as any)
 const UiLoginRoute = UiLoginRouteImport.update({
@@ -75,6 +81,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/health': typeof HealthRoute
   '/webhook': typeof WebhookRoute
+  '/ui/locale': typeof UiLocaleRoute
   '/ui/login': typeof UiLoginRoute
   '/ui/stats': typeof UiStatsRoute
   '/ui/': typeof UiIndexRoute
@@ -87,6 +94,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/health': typeof HealthRoute
   '/webhook': typeof WebhookRoute
+  '/ui/locale': typeof UiLocaleRoute
   '/ui/login': typeof UiLoginRoute
   '/ui/stats': typeof UiStatsRoute
   '/ui': typeof UiIndexRoute
@@ -100,6 +108,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/health': typeof HealthRoute
   '/webhook': typeof WebhookRoute
+  '/ui/locale': typeof UiLocaleRoute
   '/ui/login': typeof UiLoginRoute
   '/ui/stats': typeof UiStatsRoute
   '/ui/': typeof UiIndexRoute
@@ -114,6 +123,7 @@ export interface FileRouteTypes {
     | '/'
     | '/health'
     | '/webhook'
+    | '/ui/locale'
     | '/ui/login'
     | '/ui/stats'
     | '/ui/'
@@ -126,6 +136,7 @@ export interface FileRouteTypes {
     | '/'
     | '/health'
     | '/webhook'
+    | '/ui/locale'
     | '/ui/login'
     | '/ui/stats'
     | '/ui'
@@ -138,6 +149,7 @@ export interface FileRouteTypes {
     | '/'
     | '/health'
     | '/webhook'
+    | '/ui/locale'
     | '/ui/login'
     | '/ui/stats'
     | '/ui/'
@@ -151,6 +163,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   HealthRoute: typeof HealthRoute
   WebhookRoute: typeof WebhookRoute
+  UiLocaleRoute: typeof UiLocaleRoute
   UiLoginRoute: typeof UiLoginRoute
   UiStatsRoute: typeof UiStatsRoute
   UiIndexRoute: typeof UiIndexRoute
@@ -188,6 +201,13 @@ declare module '@tanstack/react-router' {
       path: '/ui'
       fullPath: '/ui/'
       preLoaderRoute: typeof UiIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ui/locale': {
+      id: '/ui/locale'
+      path: '/ui/locale'
+      fullPath: '/ui/locale'
+      preLoaderRoute: typeof UiLocaleRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/ui/login': {
@@ -239,6 +259,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   HealthRoute: HealthRoute,
   WebhookRoute: WebhookRoute,
+  UiLocaleRoute: UiLocaleRoute,
   UiLoginRoute: UiLoginRoute,
   UiStatsRoute: UiStatsRoute,
   UiIndexRoute: UiIndexRoute,

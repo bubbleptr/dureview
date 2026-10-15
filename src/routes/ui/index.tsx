@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { LoginForm } from "../../components/login-form.js";
 import { OverviewPage } from "../../components/stats-page.js";
+import { localeFromMatches } from "../../ui/locale.js";
+import { messages } from "../../ui/messages.js";
 import { getStats } from "../../ui/stats-fn.js";
 
 export const Route = createFileRoute("/ui/")({
@@ -17,7 +19,7 @@ export const Route = createFileRoute("/ui/")({
   loader: async ({ location }) => {
     return getStats({ data: { search: location.searchStr, next: location.pathname } });
   },
-  head: () => ({ meta: [{ title: "Overview · dureview" }] }),
+  head: ({ matches }) => ({ meta: [{ title: messages[localeFromMatches(matches)].overview.documentTitle }] }),
   component: OverviewRoute,
 });
 

@@ -1,5 +1,9 @@
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, XAxis, YAxis } from "recharts";
 import { seriesColor } from "../ui/chart-palette.js";
+import { formatTokens } from "../ui/format.js";
+import { useI18n } from "../ui/i18n.js";
+import type { Locale } from "../ui/locale.js";
+import { seriesLabel } from "../ui/messages.js";
 import type { StatsPageModel } from "../ui/stats-model.js";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "./ui/chart.js";
 
@@ -14,6 +18,7 @@ function prefersReducedMotion(): boolean {
 }
 
 export function TokenTrendChart({ trend }: { trend: StatsPageModel["trend"] }) {
+  const { locale } = useI18n();
   const config: ChartConfig = {};
   for (const model of trend.models) {
     config[model] = { label: model, color: seriesColor(model) };
@@ -23,7 +28,7 @@ export function TokenTrendChart({ trend }: { trend: StatsPageModel["trend"] }) {
       <LineChart data={trend.points} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
         <CartesianGrid vertical={false} stroke="var(--border)" />
         <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} />
-        <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={compact} />
+        <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(value) => formatTokens(Number(value), locale)} />
         <ChartTooltip content={<ChartTooltipContent />} />
         {trend.models.length > 1 ? <Legend /> : null}
         {trend.models.map((model) => (
@@ -44,14 +49,30 @@ export function TokenTrendChart({ trend }: { trend: StatsPageModel["trend"] }) {
   );
 }
 
-export function DistributionChart({ rows }: { rows: StatsPageModel["priorities"] }) {
+export function distributionChartConfig(rows: ReadonlyArray<{ name: string }>, locale: Locale, countLabel: string): ChartConfig {
+  const config: ChartConfig = {};
+  for (const row of rows) config[row.name] = { label: seriesLabel(row.name, locale), color: seriesColor(row.name) };
+  const count = config.count;
+  config.count = { label: countLabel, color: count?.color };
+  return config;
+}
+
+export function failureChartConfig(rows: ReadonlyArray<{ name: string }>, countLabel: string): ChartConfig {
   const config: ChartConfig = {};
   for (const row of rows) config[row.name] = { label: row.name, color: seriesColor(row.name) };
+  const count = config.count;
+  config.count = { label: countLabel, color: count?.color };
+  return config;
+}
+
+export function DistributionChart({ rows }: { rows: StatsPageModel["priorities"] }) {
+  const { locale, m } = useI18n();
+  const config = distributionChartConfig(rows, locale, m.overview.count);
   return (
     <ChartContainer config={config} className="h-56">
       <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
         <CartesianGrid vertical={false} stroke="var(--border)" />
-        <XAxis dataKey="name" tickLine={false} axisLine={false} interval={0} />
+        <XAxis dataKey="name" tickLine={false} axisLine={false} interval={0} tickFormatter={(name) => seriesLabel(String(name), locale)} />
         <YAxis tickLine={false} axisLine={false} width={32} allowDecimals={false} />
         <ChartTooltip content={<ChartTooltipContent />} />
         <Bar dataKey="count" radius={4}>
@@ -65,8 +86,8 @@ export function DistributionChart({ rows }: { rows: StatsPageModel["priorities"]
 }
 
 export function FailureChart({ rows }: { rows: StatsPageModel["failures"] }) {
-  const config: ChartConfig = {};
-  for (const row of rows) config[row.name] = { label: row.name, color: seriesColor(row.name) };
+  const { m } = useI18n();
+  const config = failureChartConfig(rows, m.overview.count);
   return (
     <ChartContainer config={config} className="h-56">
       <BarChart data={rows} layout="vertical" margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
@@ -84,9 +105,3 @@ export function FailureChart({ rows }: { rows: StatsPageModel["failures"] }) {
   );
 }
 
-function compact(value: number): string {
-  if (!Number.isFinite(value)) return "";
-  if (Math.abs(value) >= 1_000_000) return `${Math.round(value / 100_000) / 10}M`;
-  if (Math.abs(value) >= 1_000) return `${Math.round(value / 100) / 10}k`;
-  return String(value);
-}

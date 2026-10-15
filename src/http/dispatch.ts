@@ -6,10 +6,13 @@ import type { ShellStatus } from "../ui/shell-status.js";
 import { codexPhrase, formatUptime } from "../ui/page.js";
 import { loadDashboard } from "../ui/status.js";
 import { buildStatsPage } from "../ui/stats-data.js";
+import { resolveLocale, type Locale } from "../ui/locale.js";
+import { loginNextFromSearch, loginReturnPath, requestPathAndQuery } from "../ui/next-path.js";
 import { renderListHtml, renderLoginHtml, renderOverviewHtml } from "../ui/render-react.js";
 import { gateGetPage, uiSession } from "./auth.js";
 import { reviewDetailResponse } from "./detail.js";
 import { htmlResponse, notFoundJson, redirectResponse, unauthorizedJson } from "./headers.js";
+import { localeSwitchResponse } from "./locale.js";
 import { loginPostResponse } from "./login.js";
 import { settingsGetResponse, settingsPostResponse } from "./settings.js";
 import { isKnownSettingsPath, isSettingsCandidate } from "../ui/settings-sections.js";
@@ -30,6 +33,7 @@ export async function dispatch(ctx: DispatchContext, request: Request): Promise<
   if (method === "POST" && pathname === "/webhook") {
     return handleWebhookRequest(ctx.service, ctx.service.configuredWebhookSecret(), request);
   }
+  if (method === "GET" && pathname === "/ui/locale") return localeSwitchResponse(request);
   if (pathname === "/ui/login") return loginDispatch(ctx, request);
   if (isSettingsCandidate(pathname)) {
     if (!isKnownSettingsPath(pathname)) return notFoundJson();
@@ -58,14 +62,15 @@ async function loginDispatch(ctx: DispatchContext, request: Request): Promise<Re
   if (!ctx.uiToken) return notFoundJson();
   if (request.method === "GET") {
     if (uiSession(request, ctx.uiToken) === "ok") return redirectResponse("/ui");
-    return htmlResponse(renderLoginHtml({ next: "/ui" }), 401);
+    const next = loginNextFromSearch(new URL(request.url).search);
+    return htmlResponse(renderLoginHtml({ next, locale: resolveLocale(request), location: loginReturnPath(next) }), 401);
   }
   if (request.method === "POST") return loginPostResponse(request, ctx.uiToken);
   return notFoundJson();
 }
 
 async function settingsDispatch(ctx: DispatchContext, request: Request): Promise<Response> {
-  const status = await shellStatus(ctx);
+  const status = await shellStatus(ctx, resolveLocale(request));
   if (request.method === "GET") return settingsGetResponse(ctx.service, ctx.uiToken, request, status);
   if (request.method === "POST") return settingsPostResponse(ctx.service, ctx.uiToken, request, status);
   return notFoundJson();
@@ -75,25 +80,31 @@ async function listDispatch(ctx: DispatchContext, request: Request, pathname: st
   const gate = gateGetPage(request, ctx.uiToken);
   if (gate === "disabled") return notFoundJson();
   if (gate === "challenge") return unauthorizedJson();
-  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(pathname) }), 401);
+  const locale = resolveLocale(request);
+  const location = requestPathAndQuery(request);
+  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(pathname), locale, location }), 401);
   const live = ctx.service.effectiveConfig();
   const model = await buildReviewList(
     { ...ctx, provider: live.provider, modelId: live.modelId, thinking: live.thinking },
     searchParamsFrom(new URL(request.url).search),
+    Date.now(),
+    locale,
   );
-  return htmlResponse(renderListHtml(model));
+  return htmlResponse(renderListHtml(model, locale, location));
 }
 
 async function overviewDispatch(ctx: DispatchContext, request: Request, pathname: string): Promise<Response> {
   const gate = gateGetPage(request, ctx.uiToken);
   if (gate === "disabled") return notFoundJson();
   if (gate === "challenge") return unauthorizedJson();
-  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(pathname) }), 401);
-  const model = await buildStatsPage(ctx.service, searchParamsFrom(new URL(request.url).search));
-  return htmlResponse(renderOverviewHtml(model));
+  const locale = resolveLocale(request);
+  const location = requestPathAndQuery(request);
+  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(pathname), locale, location }), 401);
+  const model = await buildStatsPage(ctx.service, searchParamsFrom(new URL(request.url).search), Date.now(), locale);
+  return htmlResponse(renderOverviewHtml(model, locale, location));
 }
 
-async function shellStatus(ctx: DispatchContext): Promise<ShellStatus> {
+async function shellStatus(ctx: DispatchContext, locale: Locale): Promise<ShellStatus> {
   const live = ctx.service.effectiveConfig();
   const status = await loadDashboard({
     dataDir: ctx.dataDir,
@@ -110,7 +121,7 @@ async function shellStatus(ctx: DispatchContext): Promise<ShellStatus> {
     provider: status.provider,
     model: status.model,
     thinking: live.thinking,
-    codex: codexPhrase(status.codex),
+    codex: codexPhrase(status.codex, Date.now(), locale),
     githubApp: status.githubApp,
     githubToken: status.githubToken,
   };

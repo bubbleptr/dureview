@@ -101,7 +101,7 @@ describe("status page", () => {
     expect(missing.headers.get("www-authenticate")).toBeNull();
     const loginHtml = await missing.text();
     expect(loginHtml).toContain('action="/ui/login"');
-    expect(loginHtml).toContain("登录");
+    expect(loginHtml).toContain("Sign in");
     expect(loginHtml).toContain('name="next" value="/ui"');
     expect(loginHtml).not.toContain(UI_TOKEN);
     expect(JSON.stringify(missing.headers)).not.toContain(UI_TOKEN);
@@ -307,8 +307,22 @@ describe("status page", () => {
     expect(rejected.headers.get("set-cookie")).toBeNull();
     expect(rejected.headers.get("www-authenticate")).toBeNull();
     const rejectedHtml = await rejected.text();
-    expect(rejectedHtml).toContain("token 不正确");
+    expect(rejectedHtml).toContain("Incorrect token.");
     expect(rejectedHtml).not.toContain("wrong-token-canary");
+
+    const chinese = await fetch(`${http.url}/ui/login`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "accept-language": "zh-CN,en;q=0.5",
+      },
+      body: new URLSearchParams({ token: "still-wrong", next: "/ui" }),
+    });
+    expect(chinese.status).toBe(401);
+    const chineseHtml = await chinese.text();
+    expect(chineseHtml).toContain("登录");
+    expect(chineseHtml).toContain("token 不正确");
+    expect(chineseHtml).toContain('lang="zh-CN"');
     expect(rejectedHtml).not.toContain(UI_TOKEN);
 
     const evil = await fetch(`${http.url}/ui/login`, {

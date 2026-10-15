@@ -596,8 +596,8 @@ describe("review detail loader", () => {
       githubApiUrl: "https://api.github.com",
       now,
     });
-    expect(fresh.duration).toBe("进行中");
-    expect(fresh.summary).toMatchObject({ mode: "incomplete", note: "进行中" });
+    expect(fresh.duration).toBe("Running");
+    expect(fresh.summary).toMatchObject({ mode: "incomplete", note: "Running" });
     expect(fresh.noChangedFiles).toBe(true);
 
     running.startedAt = new Date(now - STUCK_AFTER_MS).toISOString();
@@ -608,8 +608,8 @@ describe("review detail loader", () => {
       githubApiUrl: "https://api.github.com",
       now,
     });
-    expect(stuck.duration).toBe("疑似卡住");
-    expect(stuck.summary).toMatchObject({ mode: "incomplete", note: "疑似卡住" });
+    expect(stuck.duration).toBe("May be stuck");
+    expect(stuck.summary).toMatchObject({ mode: "incomplete", note: "May be stuck" });
 
     const failed = detail([]);
     failed.outcome = "failed";
@@ -623,7 +623,7 @@ describe("review detail loader", () => {
       githubApiUrl: "https://api.github.com",
       now,
     });
-    expect(broken.summary).toMatchObject({ mode: "incomplete", note: "审查失败，没有记录原因。" });
+    expect(broken.summary).toMatchObject({ mode: "incomplete", note: "The review failed, and no reason was recorded." });
     expect(broken.diffUnavailable).toBe(true);
     expect(JSON.stringify(broken.summary)).not.toContain("payment capture");
   });

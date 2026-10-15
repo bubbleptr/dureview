@@ -1,21 +1,15 @@
 import { useEffect, useState } from "react";
+import { formatLocalDateTime } from "../ui/format.js";
+import { useI18n } from "../ui/i18n.js";
 
 /** UTC label on the server. After hydration, the same element shows local time. */
 export function LocalTime({ iso, label }: { iso: string; label: string }) {
+  const { locale } = useI18n();
   const [text, setText] = useState(label);
   useEffect(() => {
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return;
-    setText(
-      new Intl.DateTimeFormat(undefined, {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      }).format(date),
-    );
-  }, [iso]);
+    const formatted = formatLocalDateTime(iso, locale);
+    if (formatted) setText(formatted);
+  }, [iso, locale]);
   return (
     <time className="font-mono tabular-nums" dateTime={iso} title={iso}>
       {text}
