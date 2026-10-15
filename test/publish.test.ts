@@ -91,7 +91,7 @@ describe("idempotent posting", () => {
 
     expect(next.reviewAction).toBe("skipped");
     expect(github.reviews).toHaveLength(1);
-    expect(github.comments[0]?.body).toContain("✔ Fixed since the last review:");
+    expect(github.comments[0]?.body).toContain("Fixed since the last review:");
     expect(github.comments[0]?.body).toContain(gone.title);
     expect(github.comments[0]?.body).toContain(`fp:${gone.fingerprint}`);
     expect(github.comments[0]?.body).not.toContain(`${kept.title} (`);
@@ -232,7 +232,7 @@ describe("summary off", () => {
     const allowed = new MemoryGitHub();
     await publishReview(base(allowed, "42", "A note.", [note], { summary: false, postInformational: true }));
     expect(allowed.reviews[0]?.event).toBe("COMMENT");
-    expect(allowed.reviewComments[0]?.body).toContain("P0 · Flag (informational)");
+    expect(allowed.reviewComments[0]?.body).toContain("P0 · Flag · Informational");
     expect(allowed.reviewComments[0]?.body).not.toContain("REQUEST_CHANGES");
   });
 

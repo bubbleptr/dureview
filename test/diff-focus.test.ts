@@ -80,7 +80,7 @@ describe("diff focus", () => {
     expect(later?.hunks[0]?.unifiedLineStart).toBe(0);
     const css = findingLineCss([{ start: 2, end: 2, priority: 0 }]);
     expect(css).toContain('[data-line="2"]');
-    expect(css).toContain("--finding-accent:#b91c1c");
+    expect(css).toContain("--finding-accent:oklch(0.62 0.17 48)");
     expect(css).toContain(":host([data-theme=dark])");
     expect(css).not.toContain(":host-context(");
   });

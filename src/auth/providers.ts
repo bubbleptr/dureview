@@ -41,3 +41,12 @@ export function isApiKeyProvider(value: string): value is ApiKeyProvider {
 export function providerLabel(provider: string): string {
   return isProviderName(provider) ? PROVIDER_LABEL[provider] : provider;
 }
+
+/** Provider id when `text` is that id or starts with `id/`. Longer ids win, so `openai-codex` beats `openai`. */
+export function providerAtStart(text: string): ProviderName | null {
+  const ids = [...PROVIDER_IDS].toSorted((left, right) => right.length - left.length);
+  for (const id of ids) {
+    if (text === id || text.startsWith(`${id}/`)) return id;
+  }
+  return null;
+}

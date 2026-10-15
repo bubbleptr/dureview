@@ -1,3 +1,4 @@
+import { PRIORITY_CHART, PRIORITY_CHART_DARK } from "./chart-palette.js";
 import { gitDiffText } from "./diff.js";
 import type { DetailFileView, DetailLineView } from "./detail-model.js";
 
@@ -8,8 +9,8 @@ export type FocusSegment =
   | { kind: "shown"; start: number; end: number; collapsible: boolean }
   | { kind: "hidden"; start: number; end: number; lines: number };
 
-const PRIORITY_COLOR = ["#b91c1c", "#c2410c", "#a16207", "#525252"] as const;
-const PRIORITY_COLOR_DARK = ["#fca5a5", "#fdba74", "#fcd34d", "#a3a3a3"] as const;
+const PRIORITY_COLOR = PRIORITY_CHART;
+const PRIORITY_COLOR_DARK = PRIORITY_CHART_DARK;
 
 /** Stable id for a hidden span so expanding and collapsing returns to the same gap. */
 export function gapKey(start: number, end: number): string {

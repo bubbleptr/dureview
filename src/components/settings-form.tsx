@@ -8,6 +8,7 @@ import { fieldCopy, resetLabel, resetToSentence, sourceSentence } from "../ui/se
 import { isSettingsSection, SETTINGS_SECTIONS, settingsSectionHref, type SettingsSection } from "../ui/settings-sections.js";
 import type { ShellStatus } from "../ui/shell-status.js";
 import { LocalTime } from "./local-time.js";
+import { ProviderMark } from "./provider-mark.js";
 import { AppShell } from "./app-shell.js";
 import { DiffStyleControl } from "./diff-style.js";
 import { ApiKeys, GitHubSetup, Subscriptions } from "./settings-connections.js";
@@ -174,6 +175,7 @@ function ModelsSection({
           />
           <ModelField
             field={model.fields.model}
+            provider={provider}
             options={options}
             value={modelId}
             onChange={(next) => {
@@ -266,10 +268,13 @@ function SystemSection({ model, status }: { model: SettingsPageModel; status: Sh
               <span className="block w-full min-w-0 text-right font-mono text-sm break-all">{status.dataDir ?? settingsCopy.notSet}</span>
             </SettingRow>
             <SettingRow title={copy.running} description={copy.runningHelp}>
-              <p className="text-sm">
-                {status.provider}/<span className="font-mono">{status.model}</span>
-                {" · "}
-                {status.thinking}
+              <p className="inline-flex items-center gap-1.5 text-sm">
+                <ProviderMark provider={status.provider} />
+                <span>
+                  {status.provider}/<span className="font-mono">{status.model}</span>
+                  {" · "}
+                  {status.thinking}
+                </span>
               </p>
             </SettingRow>
           </>
@@ -372,7 +377,11 @@ function ProviderField({
           id={field.key}
           name="provider"
           value={value}
-          options={listed.map((catalog) => ({ value: catalog.provider, label: catalog.label }))}
+          options={listed.map((catalog) => ({
+            value: catalog.provider,
+            label: catalog.label,
+            icon: <ProviderMark provider={catalog.provider} />,
+          }))}
           onValueChange={onChange}
           variant="select"
         />
@@ -383,11 +392,13 @@ function ProviderField({
 
 function ModelField({
   field,
+  provider,
   options,
   value,
   onChange,
 }: {
   field: SettingsFieldView;
+  provider: string;
   options: string[];
   value: string;
   onChange: (value: string) => void;
@@ -401,7 +412,7 @@ function ModelField({
           id={field.key}
           name="model"
           value={value}
-          options={choices.map((id) => ({ value: id, label: id }))}
+          options={choices.map((id) => ({ value: id, label: id, icon: <ProviderMark provider={provider} /> }))}
           onValueChange={onChange}
           variant="combobox"
           className="font-mono"

@@ -177,6 +177,7 @@ const en = {
     trigger: "Trigger",
     outsideComments: "Comments",
     outsideFiles: "Other files",
+    confidenceExact: "Confidence {value}",
     failedNoReason: "The review failed, and no reason was recorded.",
     untitled: "Untitled",
     configKeys: {
@@ -440,6 +441,7 @@ const zhCN = {
     trigger: "触发",
     outsideComments: "评论",
     outsideFiles: "其他文件",
+    confidenceExact: "置信度 {value}",
     failedNoReason: "审查失败，没有记录原因。",
     untitled: "无标题",
     configKeys: {

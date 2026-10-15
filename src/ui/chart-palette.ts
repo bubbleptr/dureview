@@ -1,3 +1,18 @@
+/** Painted values of `--chart-1` through `--chart-4`. The diff shadow root cannot see those variables. */
+export const PRIORITY_CHART = [
+  "oklch(0.62 0.17 48)",
+  "oklch(0.55 0.2 350)",
+  "oklch(0.52 0.15 264)",
+  "oklch(0.58 0.13 85)",
+] as const;
+
+export const PRIORITY_CHART_DARK = [
+  "oklch(0.78 0.15 50)",
+  "oklch(0.76 0.16 350)",
+  "oklch(0.75 0.12 264)",
+  "oklch(0.84 0.13 90)",
+] as const;
+
 const SLOTS = [
   "var(--chart-1)",
   "var(--chart-2)",

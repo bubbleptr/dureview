@@ -13,6 +13,7 @@ import {
 import type { SettingsSection } from "../ui/settings-sections.js";
 import type { ShellStatus } from "../ui/shell-status.js";
 import { LocalTime } from "./local-time.js";
+import { ProviderLabel } from "./provider-mark.js";
 import { SettingRow, SettingsCard } from "./settings-row.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
@@ -100,7 +101,10 @@ function SubscriptionCard({
   const settingsCopy = useSettingsCopy();
   const copy = settingsCopy.subscriptions;
   return (
-    <SettingsCard title={row.label} description={<span className="font-mono">{row.provider}</span>}>
+    <SettingsCard
+      title={<ProviderLabel provider={row.provider}>{row.label}</ProviderLabel>}
+      description={<span className="font-mono">{row.provider}</span>}
+    >
       <div className="flex flex-col gap-4 py-5">
         {row.unreadable ? (
           <p className="text-sm text-destructive" role="alert">
@@ -236,7 +240,7 @@ export function ApiKeys({ rows, csrf, section }: { rows: ApiKeyView[]; csrf: str
       {rows.map((row) => (
         <SettingRow
           key={row.provider}
-          title={row.label}
+          title={<ProviderLabel provider={row.provider}>{row.label}</ProviderLabel>}
           htmlFor={`key-${row.provider}`}
           description={
             <>
