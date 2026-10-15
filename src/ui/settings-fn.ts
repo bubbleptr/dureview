@@ -7,10 +7,11 @@ export const getSettingsPage = createServerFn({ method: "GET" }).handler(async (
   const { getRequest } = await import("@tanstack/react-start/server");
   const { getRuntime } = await import("../app/runtime.js");
   const { uiSession } = await import("../http/auth.js");
+  const { settingsPageQuery } = await import("../http/console.js");
+  const { withSettingsCsrf } = await import("../http/csrf.js");
   const runtime = await getRuntime();
   const request = getRequest();
   if (uiSession(request, runtime.config.uiToken) !== "ok") return { kind: "login", next: "/ui/settings" };
-  const saved = new URL(request.url).searchParams.get("saved") === "1";
-  const model = await runtime.service.settingsPage({ saved });
+  const model = withSettingsCsrf(await runtime.service.settingsPage(settingsPageQuery(request)), runtime.config.uiToken);
   return { kind: "page", model };
 });

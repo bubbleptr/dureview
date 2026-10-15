@@ -1,3 +1,4 @@
+import { isProviderName, type ProviderName } from "../auth/providers.js";
 import {
   DEFAULT_CHECKOUT_TTL_DAYS,
   DEFAULT_MODEL_ID,
@@ -9,7 +10,7 @@ import {
 import { BUILTIN_DEFAULT_TRIGGER, type ReviewTrigger } from "../review/policy.js";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 
-export const SETTING_KEYS = ["model", "thinking", "defaultTrigger", "skipDrafts", "checkoutTtlDays"] as const;
+export const SETTING_KEYS = ["provider", "model", "thinking", "defaultTrigger", "skipDrafts", "checkoutTtlDays"] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
@@ -25,6 +26,7 @@ export type ResolvedField<T> = {
 };
 
 export type ResolvedSettings = {
+  provider: ResolvedField<string>;
   model: ResolvedField<string>;
   thinking: ResolvedField<ModelThinkingLevel>;
   defaultTrigger: ResolvedField<ReviewTrigger>;
@@ -36,9 +38,14 @@ export function isSettingKey(value: string): value is SettingKey {
   return (SETTING_KEYS as readonly string[]).includes(value);
 }
 
-/** UI override, then environment, then the built-in default. */
-export function resolveSettings(raw: ReadonlyMap<string, string>, baseline: EditableBaseline): ResolvedSettings {
+/** UI override, then environment, then the built-in default. `fallbackProvider` is the auto-detected provider when the variable is unset. */
+export function resolveSettings(
+  raw: ReadonlyMap<string, string>,
+  baseline: EditableBaseline,
+  fallbackProvider: string,
+): ResolvedSettings {
   return {
+    provider: resolveString(raw, "provider", baseline.provider, fallbackProvider, parseProviderSetting),
     model: resolveString(raw, "model", baseline.modelId, DEFAULT_MODEL_ID, parseModelId),
     thinking: resolveString(raw, "thinking", baseline.thinking, DEFAULT_THINKING, parseThinkingSetting),
     defaultTrigger: resolveString(raw, "defaultTrigger", baseline.defaultTrigger, BUILTIN_DEFAULT_TRIGGER, parseTriggerSetting),
@@ -63,6 +70,7 @@ export function encodeSetting(key: SettingKey, value: string | ModelThinkingLeve
  * for that setting (the caller decides whether that is a hard error).
  */
 export function parseSettingValue(key: SettingKey, raw: string): string | ModelThinkingLevel | ReviewTrigger | boolean | number | undefined {
+  if (key === "provider") return parseProviderSetting(raw);
   if (key === "model") return parseModelId(raw);
   if (key === "thinking") return parseThinkingSetting(raw);
   if (key === "defaultTrigger") return parseTriggerSetting(raw);
@@ -70,10 +78,16 @@ export function parseSettingValue(key: SettingKey, raw: string): string | ModelT
   return parseTtlDaysSetting(raw);
 }
 
+export function parseProviderSetting(value: string): ProviderName | undefined {
+  const trimmed = value.trim();
+  return isProviderName(trimmed) ? trimmed : undefined;
+}
+
 export function parseModelId(value: string): string | undefined {
   const trimmed = value.trim();
   if (trimmed.length === 0 || trimmed.length > 80) return undefined;
-  if (!/^[A-Za-z0-9._:-]+$/.test(trimmed)) return undefined;
+  if (trimmed.includes("..") || trimmed.includes("\\") || trimmed.includes("//")) return undefined;
+  if (!/^[A-Za-z0-9._:~/+-]+$/.test(trimmed)) return undefined;
   return trimmed;
 }
 

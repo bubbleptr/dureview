@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from "react";
-import type { SettingsFieldView, SettingsPageModel } from "../settings/page.js";
+import type { ProviderCatalog, SettingsFieldView, SettingsPageModel } from "../settings/page.js";
 import { nearestThinking } from "../settings/thinking.js";
 import { formatTime } from "../ui/page.js";
 import type { ShellStatus } from "../ui/shell-status.js";
 import { LocalTime } from "./local-time.js";
 import { AppShell } from "./app-shell.js";
 import { DiffStyleControl } from "./diff-style.js";
+import { Connections } from "./settings-connections.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
 import { FormSelect } from "./ui/form-select.js";
@@ -16,9 +17,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 const TRIGGERS = ["manual", "once", "auto"] as const;
 
 export function SettingsForm({ model, status = null }: { model: SettingsPageModel; status?: ShellStatus | null }) {
+  const [provider, setProvider] = useState(model.form.provider || model.provider);
   const [modelId, setModelId] = useState(model.form.model);
   const [thinking, setThinking] = useState<string>(model.form.thinking);
-  const levels = levelsFor(model, modelId, thinking);
+  const options = modelIds(model, provider, modelId);
+  const levels = levelsFor(model, provider, modelId, thinking);
   const thinkingValue = levels.includes(thinking) ? thinking : (levels[0] ?? thinking);
 
   return (
@@ -29,45 +32,85 @@ export function SettingsForm({ model, status = null }: { model: SettingsPageMode
           Changes apply to new reviews. A review that is already running keeps the model and thinking it started with.
           An override wins over the environment variable, which wins over the built-in default.
         </p>
-        <p className="text-sm text-muted-foreground">
-          Provider <b>{model.provider}</b>. Model choices are the pi-ai catalog for this provider.
-        </p>
         <DiffStyleControl />
         {model.error ? (
           <p className="text-sm text-destructive" role="alert">
             {model.error}
           </p>
         ) : null}
+        {model.notice ? <p className="text-sm">{model.notice}</p> : null}
         {model.saved ? <p className="text-sm">Saved. New reviews use these settings.</p> : null}
         {model.problems.map((problem) => (
           <p key={problem} className="text-sm text-destructive" role="alert">
             {problem}
           </p>
         ))}
-          <form className="flex flex-col gap-5" method="post" action="/ui/settings">
-            <ModelField
-              field={model.fields.model}
-              options={model.modelOptions}
-              value={modelId}
-              onChange={(next) => {
-                setModelId(next);
-                const nextLevels = levelsFor(model, next, thinking);
-                setThinking(nearestThinking(nextLevels, thinking));
-              }}
-            />
-            <ThinkingField field={model.fields.thinking} levels={levels} value={thinkingValue} onChange={setThinking} />
-            <TriggerField field={model.fields.defaultTrigger} value={model.form.defaultTrigger} />
-            <SkipDraftsField field={model.fields.skipDrafts} checked={model.form.skipDrafts} />
-            <TtlField field={model.fields.checkoutTtlDays} value={model.form.checkoutTtlDays} />
-            <div>
-              <Button type="submit" name="save" value="1">
-                Save
-              </Button>
-            </div>
-          </form>
-        <Audit audit={model.audit} />
+        <Connections console={model.console} csrf={model.csrf} />
+        <form className="flex flex-col gap-5" method="post" action="/ui/settings">
+          <CsrfField token={model.csrf} />
+          <h2 className="text-sm font-medium">Review settings</h2>
+          <ProviderField
+            field={model.fields.provider}
+            catalogs={model.catalogs}
+            value={provider}
+            onChange={(next) => {
+              const nextModels = modelIds(model, next, "");
+              const nextModel = nextModels.includes(modelId) ? modelId : (nextModels[0] ?? modelId);
+              setProvider(next);
+              setModelId(nextModel);
+              setThinking(nearestThinking(levelsFor(model, next, nextModel, thinking), thinking));
+            }}
+          />
+          <ModelField
+            field={model.fields.model}
+            options={options}
+            value={modelId}
+            onChange={(next) => {
+              setModelId(next);
+              setThinking(nearestThinking(levelsFor(model, provider, next, thinking), thinking));
+            }}
+          />
+          <ThinkingField field={model.fields.thinking} levels={levels} value={thinkingValue} onChange={setThinking} />
+          <TriggerField field={model.fields.defaultTrigger} value={model.form.defaultTrigger} />
+          <SkipDraftsField field={model.fields.skipDrafts} checked={model.form.skipDrafts} />
+          <TtlField field={model.fields.checkoutTtlDays} value={model.form.checkoutTtlDays} />
+          <div>
+            <Button type="submit" name="save" value="1">
+              Save
+            </Button>
+          </div>
+        </form>
+        <Audit audit={model.audit} csrf={model.csrf} />
       </div>
     </AppShell>
+  );
+}
+
+function ProviderField({
+  field,
+  catalogs,
+  value,
+  onChange,
+}: {
+  field: SettingsFieldView;
+  catalogs: ProviderCatalog[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const listed = catalogs.some((catalog) => catalog.provider === value)
+    ? catalogs
+    : [{ provider: value, label: value, models: [] }, ...catalogs];
+  return (
+    <FieldShell field={field}>
+      <FormSelect
+        id={field.key}
+        name="provider"
+        value={value}
+        options={listed.map((catalog) => ({ value: catalog.provider, label: catalog.label }))}
+        onValueChange={onChange}
+        variant="select"
+      />
+    </FieldShell>
   );
 }
 
@@ -92,6 +135,7 @@ function ModelField({
         options={choices.map((id) => ({ value: id, label: id }))}
         onValueChange={onChange}
         variant="combobox"
+        className="font-mono"
       />
     </FieldShell>
   );
@@ -220,7 +264,11 @@ function RuntimeStatus({ status }: { status: ShellStatus }) {
   );
 }
 
-function Audit({ audit }: { audit: SettingsPageModel["audit"] }) {
+function CsrfField({ token }: { token: string }) {
+  return <input type="hidden" name="csrf" value={token} />;
+}
+
+function Audit({ audit, csrf }: { audit: SettingsPageModel["audit"]; csrf: string }) {
   return (
     <section className="flex flex-col gap-2">
       <h2 className="text-sm font-medium">Recent changes</h2>
@@ -251,13 +299,27 @@ function Audit({ audit }: { audit: SettingsPageModel["audit"] }) {
           </TableBody>
         </Table>
       ) : null}
-      <form id="settings-reset" method="post" action="/ui/settings" />
+      <form id="settings-reset" method="post" action="/ui/settings">
+        <CsrfField token={csrf} />
+      </form>
     </section>
   );
 }
 
-function levelsFor(model: SettingsPageModel, modelId: string, current: string): string[] {
-  const levels = model.thinkingByModel[modelId];
-  if (levels && levels.length > 0) return levels;
+function modelIds(model: SettingsPageModel, provider: string, current: string): string[] {
+  const catalog = model.catalogs.find((item) => item.provider === provider);
+  const ids = catalog ? catalog.models.map((item) => item.id) : provider === model.provider ? model.modelOptions : [];
+  if (current && !ids.includes(current)) return [current, ...ids];
+  return ids;
+}
+
+function levelsFor(model: SettingsPageModel, provider: string, modelId: string, current: string): string[] {
+  const catalog = model.catalogs.find((item) => item.provider === provider);
+  const fromCatalog = catalog?.models.find((item) => item.id === modelId)?.thinking;
+  if (fromCatalog && fromCatalog.length > 0) return fromCatalog;
+  if (provider === model.provider) {
+    const levels = model.thinkingByModel[modelId];
+    if (levels && levels.length > 0) return levels;
+  }
   return current ? [current] : [];
 }

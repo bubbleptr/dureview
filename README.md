@@ -63,9 +63,9 @@ docker run --rm -p 8787:8787 -v dureview-data:/data \
   dureview serve
 ```
 
-`dureview serve` requires `DUREVIEW_WEBHOOK_SECRET` (or `GITHUB_WEBHOOK_SECRET`) and either the App id plus private key, or `GITHUB_TOKEN`.
+`dureview serve` starts without a webhook secret or GitHub credential, so `/ui/settings` can finish that setup. A half-set App id or private key still refuses to start. Webhook deliveries fail until a secret exists.
 
-To use an API key, skip `login` and pass the provider. The key is read from the environment and is not written into the data directory.
+To use an API key, skip `login` and pass the provider. A key saved on the settings page overrides the environment variable and is stored in the data directory.
 
 ```bash
 docker run --rm -p 8787:8787 -v dureview-data:/data \
@@ -118,7 +118,7 @@ Codex login outside Docker:
 DUREVIEW_DATA_DIR=./data node dist/cli.js login
 ```
 
-`dureview login` stores the Codex credential in `$DUREVIEW_DATA_DIR/auth.json` (mode `0600`). Browser login uses a localhost callback. Device-code login prints a URL and a code; set `DUREVIEW_LOGIN_METHOD=device_code` to skip the prompt, which is what a non-TTY session does. `dureview logout` deletes the credential. pi-ai refreshes an expired access token and writes the new token back to `auth.json`, so the data directory has to survive restarts. Do not bake `auth.json` into the image.
+`dureview login` stores the Codex credential in `$DUREVIEW_DATA_DIR/auth.json` (mode `0600`). Browser login uses a localhost callback. Device-code login prints a URL and a code; set `DUREVIEW_LOGIN_METHOD=device_code` to skip the prompt, which is what a non-TTY session does. `dureview logout` deletes the credential. The settings page can also sign in with a device code for ChatGPT, GitHub Copilot, and xAI, because a hosted server cannot receive a localhost callback. pi-ai refreshes an expired access token and writes the new token back to `auth.json`, so the data directory has to survive restarts. Do not bake `auth.json` into the image.
 
 ### Fly
 
@@ -126,7 +126,7 @@ Run one machine. Mount a volume at `/data` and set `DUREVIEW_DATA_DIR=/data`. Re
 
 ### GitHub App
 
-1. Create a GitHub App owned by the account that should review pull requests.
+1. Create a GitHub App owned by the account that should review pull requests. `/ui/settings` can create it with the permissions and webhook below, and stores the app id, private key, and webhook secret in the data directory. An env app still wins over that file, and `GITHUB_TOKEN` wins over a saved app when the env app is unset.
 2. Permissions: **Contents** (read), **Pull requests** (read and write), **Issues** (read and write), **Checks** (read and write). Metadata is included.
 3. Subscribe to **Pull request** and **Issue comment**.
 4. Webhook URL: `https://<your-host>/webhook`. Secret: the same value as `DUREVIEW_WEBHOOK_SECRET`.
@@ -176,26 +176,28 @@ Settings-page values use this order: a saved UI override, then the environment v
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DUREVIEW_DATA_DIR` | `./data` | `auth.json`, `session.sqlite`, `reviews.sqlite`, `reviews.json`, and `checkouts/`. Mount this. |
+| `DUREVIEW_DATA_DIR` | `./data` | `auth.json`, `github-app.json`, `session.sqlite`, `reviews.sqlite`, `reviews.json`, and `checkouts/`. `auth.json` and `github-app.json` are mode `0600`. Mount this. |
 | `DUREVIEW_HOST` | `0.0.0.0` | Bind address for `npm run dev`. Production uses it only when `HOST` is unset. |
 | `DUREVIEW_PORT` | `8787` | Port for `npm run dev`. Production uses it only when `PORT` is unset. |
-| `DUREVIEW_WEBHOOK_SECRET` | required to serve | HMAC secret for `X-Hub-Signature-256`. Also accepts `GITHUB_WEBHOOK_SECRET`. |
-| `DUREVIEW_PROVIDER` | Codex when that credential exists, otherwise `openai` when `OPENAI_API_KEY` is set, otherwise `openai-codex` | `openai-codex` or `openai`. |
+| `DUREVIEW_WEBHOOK_SECRET` | | HMAC secret for `X-Hub-Signature-256`. Also accepts `GITHUB_WEBHOOK_SECRET`. Wins over the secret stored with a GitHub App from the settings page. |
+| `DUREVIEW_PROVIDER` | Codex when that credential exists, otherwise `openai` when `OPENAI_API_KEY` is set, otherwise `openai-codex` | `openai-codex`, `github-copilot`, `xai`, `openai`, `openrouter`, or `deepseek`. The settings page can override this. |
 | `DUREVIEW_MODEL` | `gpt-5.5` | Model id from the pi-ai catalog for the selected provider. The settings page can override this. |
 | `DUREVIEW_THINKING` | `medium` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Only levels that model supports are accepted. The settings page can override this. |
 | `DUREVIEW_LOGIN_METHOD` | prompt | `device_code` or `browser`. |
 | `DUREVIEW_SKIP_DRAFTS` | off | `1` or `true` skips drafts even when `.dureview.md` sets `drafts: true`. The settings page can override this. |
 | `DUREVIEW_DEFAULT_TRIGGER` | `manual` | `auto`, `once`, or `manual`, used when the base branch has no `.dureview.md` or the file omits `trigger`. An explicit `trigger` in the file wins. The settings page can override this. |
-| `OPENAI_API_KEY` | | Used when the provider is `openai`. |
-| `GITHUB_APP_ID` | | GitHub App id. |
+| `OPENAI_API_KEY` | | OpenAI API key. A key saved on the settings page overrides it. |
+| `OPENROUTER_API_KEY` | | OpenRouter API key. A saved key overrides it. |
+| `DEEPSEEK_API_KEY` | | DeepSeek API key. A saved key overrides it. |
+| `GITHUB_APP_ID` | | GitHub App id. Together with the private key, this wins over an app saved on the settings page. |
 | `GITHUB_APP_PRIVATE_KEY` | | PEM contents, or a path to a PEM. |
 | `GITHUB_APP_PRIVATE_KEY_PATH` | | Path to the App private key. |
-| `GITHUB_TOKEN` | | Personal access token when the App id is unset. |
+| `GITHUB_TOKEN` | | Personal access token when the env app is unset. Wins over an app saved on the settings page. |
 | `GITHUB_API_URL` | `https://api.github.com` | API root for GitHub Enterprise. |
 | `DUREVIEW_UI_TOKEN` | | Enables the web UI. Unset leaves those paths at `404`. |
 | `DUREVIEW_CHECKOUT_TTL_DAYS` | `30` | Delete `checkouts/<owner>/<repo>/<sha>` older than this many days. `0` deletes every checkout no review is still using. The sweep runs at startup and every six hours. The settings page can override this. |
 
-Provider, host, port, the data directory, and secrets are not editable on the settings page.
+Host, port, the data directory, and the UI token are not editable on the settings page. Saved API keys and the GitHub App private key are write-only: the page shows that they are configured, and a saved key or webhook secret shows its last four characters.
 
 ## Web UI
 
@@ -206,7 +208,7 @@ The UI is off until `DUREVIEW_UI_TOKEN` is set. With it unset, these paths retur
 | `GET /` and `GET /ui` | Overview: counts, charts, token usage, and findings by type (bug, flag, security). |
 | `GET /ui/reviews` | Review list. |
 | `GET /ui/reviews/<task id>` | Review detail: changed files, the diff with inline findings, and the summary. |
-| `GET /ui/settings` and `POST /ui/settings` | Model, thinking, default trigger, draft skip, and checkout TTL. |
+| `GET /ui/settings` and `POST /ui/settings` | Provider, model, thinking, trigger, draft skip, checkout TTL, device-code login, API keys, and GitHub App setup. |
 | `GET /ui/stats` | Redirects to `GET /ui`. |
 | `GET /ui/login` and `POST /ui/login` | Login form. |
 

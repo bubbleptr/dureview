@@ -8,6 +8,13 @@ export const Route = createFileRoute("/ui/settings")({
   server: {
     handlers: {
       GET: async ({ request, next }) => {
+        const { isGitHubSetupReturn, isSettingsPoll } = await import("../../http/console.js");
+        if (isSettingsPoll(request) || isGitHubSetupReturn(request)) {
+          const { getRuntime } = await import("../../app/runtime.js");
+          const { settingsGetResponse } = await import("../../http/settings.js");
+          const runtime = await getRuntime();
+          return settingsGetResponse(runtime.service, runtime.config.uiToken, request);
+        }
         const { guardListGet } = await import("../../http/page-guard.js");
         const blocked = await guardListGet(request);
         if (blocked) return blocked;

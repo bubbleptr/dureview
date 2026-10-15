@@ -26,13 +26,22 @@ export function htmlResponse(html: string, status = 200): Response {
   return new Response(html, { status, headers });
 }
 
-export function redirectResponse(location: string, setCookie?: string): Response {
+export function jsonResponse(body: unknown, status = 200): Response {
+  const headers = new Headers(UI_HEADERS);
+  headers.set("content-type", "application/json; charset=utf-8");
+  return new Response(JSON.stringify(body), { status, headers });
+}
+
+export function redirectResponse(location: string, setCookie?: string | readonly string[]): Response {
   const headers = new Headers({
     location,
     "cache-control": "no-store",
     "referrer-policy": "no-referrer",
     "x-content-type-options": "nosniff",
   });
-  if (setCookie) headers.set("set-cookie", setCookie);
+  if (typeof setCookie === "string") headers.set("set-cookie", setCookie);
+  else if (setCookie) {
+    for (const cookie of setCookie) headers.append("set-cookie", cookie);
+  }
   return new Response(null, { status: 303, headers });
 }

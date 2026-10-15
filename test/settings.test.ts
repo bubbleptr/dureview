@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { editableBaseline } from "../src/config.js";
+import { settingsCsrfToken } from "../src/http/csrf.js";
 import { ServerSettings } from "../src/settings/effective.js";
 import { REVIEWS_DB_FILE } from "../src/review/archive.js";
 import { startHttp } from "../src/server.js";
@@ -320,13 +321,14 @@ describe("settings at runtime", () => {
 
     const bad = await fetch(`${http.url}/ui/settings`, {
       method: "POST",
-      headers: { authorization: `Bearer ${UI_TOKEN}`, "content-type": "application/x-www-form-urlencoded" },
+      headers: settingsHeaders(http.url),
       body: new URLSearchParams({
         model: "not-a-model",
         thinking: "low",
         defaultTrigger: "manual",
         checkoutTtlDays: "30",
         save: "1",
+        csrf: settingsCsrfToken(UI_TOKEN),
       }),
     });
     expect(bad.status).toBe(400);
@@ -335,11 +337,7 @@ describe("settings at runtime", () => {
 
     const ok = await fetch(`${http.url}/ui/settings`, {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${UI_TOKEN}`,
-        "content-type": "application/x-www-form-urlencoded",
-        "x-forwarded-for": "203.0.113.4, 10.0.0.1",
-      },
+      headers: { ...settingsHeaders(http.url), "x-forwarded-for": "203.0.113.4, 10.0.0.1" },
       body: new URLSearchParams({
         model: "faux-2",
         thinking: "high",
@@ -347,6 +345,7 @@ describe("settings at runtime", () => {
         skipDrafts: "true",
         checkoutTtlDays: "9",
         save: "1",
+        csrf: settingsCsrfToken(UI_TOKEN),
       }),
       redirect: "manual",
     });
@@ -369,8 +368,8 @@ describe("settings at runtime", () => {
 
     const reset = await fetch(`${http.url}/ui/settings`, {
       method: "POST",
-      headers: { authorization: `Bearer ${UI_TOKEN}`, "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ reset: "model" }),
+      headers: settingsHeaders(http.url),
+      body: new URLSearchParams({ reset: "model", csrf: settingsCsrfToken(UI_TOKEN) }),
       redirect: "manual",
     });
     expect(reset.status).toBe(303);
@@ -384,6 +383,15 @@ describe("settings at runtime", () => {
     expect(listedHtml).toContain(" · high");
   });
 });
+
+function settingsHeaders(url: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${UI_TOKEN}`,
+    "content-type": "application/x-www-form-urlencoded",
+    origin: new URL(url).origin,
+    "sec-fetch-site": "same-origin",
+  };
+}
 
 function catalog() {
   const models = createModels();

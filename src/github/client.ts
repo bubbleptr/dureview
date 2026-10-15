@@ -1,6 +1,8 @@
 import { createSign } from "node:crypto";
 import type { Config } from "../config.js";
 import { log } from "../log.js";
+import { activeGitHub } from "./access.js";
+import type { StoredGitHubApp } from "./app-file.js";
 import { isBranchRef } from "../review/trigger.js";
 import type { GitHubRepo, ReviewRequest } from "../types.js";
 
@@ -164,7 +166,10 @@ export class GithubRest implements GitHub {
   #tokens = new Map<number, CachedToken>();
   #viewer: string | undefined;
 
-  constructor(private readonly config: Config) {}
+  constructor(
+    private readonly config: Config,
+    private readonly storedApp: () => StoredGitHubApp | undefined = () => undefined,
+  ) {}
 
   getPullDiff(request: ReviewRequest, signal: AbortSignal): Promise<string> {
     return this.#text(
@@ -417,8 +422,9 @@ export class GithubRest implements GitHub {
 
   async viewerLogin(signal: AbortSignal): Promise<string> {
     if (this.#viewer) return this.#viewer;
-    if (this.config.githubAppId && this.config.githubAppPrivateKey) {
-      const slug = await this.#appSlug(signal);
+    const app = this.#appCredentials();
+    if (app) {
+      const slug = await this.#appSlug(app, signal);
       this.#viewer = `${slug}[bot]`;
       return this.#viewer;
     }
@@ -552,11 +558,8 @@ export class GithubRest implements GitHub {
     return this.#token(request, signal);
   }
 
-  async #appSlug(signal: AbortSignal): Promise<string> {
-    if (!this.config.githubAppId || !this.config.githubAppPrivateKey) {
-      throw new Error("GitHub App credentials are not configured.");
-    }
-    const jwt = appJwt(this.config.githubAppId, this.config.githubAppPrivateKey);
+  async #appSlug(app: { appId: string; privateKey: string }, signal: AbortSignal): Promise<string> {
+    const jwt = appJwt(app.appId, app.privateKey);
     const response = await fetch(`${this.config.githubApiUrl}/app`, {
       signal,
       headers: {
@@ -577,18 +580,22 @@ export class GithubRest implements GitHub {
     return payload.slug;
   }
 
+  #appCredentials(): { appId: string; privateKey: string } | undefined {
+    const active = activeGitHub(this.config, this.storedApp());
+    if (active.kind !== "app") return undefined;
+    return { appId: active.appId, privateKey: active.privateKey };
+  }
+
   async #token(request: { installationId: number | null }, signal: AbortSignal): Promise<string> {
-    if (this.config.githubToken && !this.config.githubAppId) return this.config.githubToken;
-    if (!this.config.githubAppId || !this.config.githubAppPrivateKey) {
-      if (this.config.githubToken) return this.config.githubToken;
-      throw new Error("GitHub authentication is not configured.");
-    }
+    const active = activeGitHub(this.config, this.storedApp());
+    if (active.kind === "token") return active.token;
+    if (active.kind === "none") throw new Error("GitHub authentication is not configured.");
     if (request.installationId === null) {
       throw new Error("GitHub App webhook payload did not include installation.id.");
     }
     const cached = this.#tokens.get(request.installationId);
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
-    const jwt = appJwt(this.config.githubAppId, this.config.githubAppPrivateKey);
+    const jwt = appJwt(active.appId, active.privateKey);
     const response = await fetch(
       `${this.config.githubApiUrl}/app/installations/${request.installationId}/access_tokens`,
       {

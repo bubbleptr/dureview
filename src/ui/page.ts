@@ -1,3 +1,4 @@
+import { githubWebOrigin } from "../github/web.js";
 import type { ReviewResultKind } from "../review/archive.js";
 import type { DashboardStatus } from "./status.js";
 
@@ -7,18 +8,8 @@ const NAME = /^[A-Za-z0-9_.-]+$/;
 export function pullRequestUrl(apiUrl: string, owner: string, repo: string, number: number): string | null {
   if (!NAME.test(owner) || owner.length > 100 || !NAME.test(repo) || repo.length > 100) return null;
   if (!Number.isInteger(number) || number < 1) return null;
-  let web: string;
-  try {
-    const url = new URL(apiUrl);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-    if (url.username || url.password) {
-      url.username = "";
-      url.password = "";
-    }
-    web = url.hostname === "api.github.com" ? "https://github.com" : url.origin;
-  } catch {
-    return null;
-  }
+  const web = githubWebOrigin(apiUrl);
+  if (!web) return null;
   return `${web}/${owner}/${repo}/pull/${number}`;
 }
 

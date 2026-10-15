@@ -2,8 +2,13 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import type { AuthInteraction, AuthPrompt, Models } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
+import type { CredentialStore } from "@earendil-works/pi-ai";
+import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
+import { githubCopilotProvider } from "@earendil-works/pi-ai/providers/github-copilot";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
+import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
+import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
 import { join } from "node:path";
 import type { Config, ProviderName } from "../config.js";
 import { log } from "../log.js";
@@ -19,11 +24,15 @@ export function storageFile(config: Config): string {
   return join(config.dataDir, "session.sqlite");
 }
 
-/** Models collection whose Codex OAuth refresh writes back through the data-dir store. */
-export function createReviewModels(config: Config): Models {
-  const models = createModels({ credentials: new FileCredentialStore(authFile(config)) });
+/** Models collection whose OAuth refresh writes back through the data-dir store. */
+export function createReviewModels(config: Config, credentials: CredentialStore = new FileCredentialStore(authFile(config))): Models {
+  const models = createModels({ credentials });
   models.setProvider(openaiCodexProvider());
+  models.setProvider(githubCopilotProvider());
+  models.setProvider(xaiProvider());
   models.setProvider(openaiProvider());
+  models.setProvider(openrouterProvider());
+  models.setProvider(deepseekProvider());
   return models;
 }
 
