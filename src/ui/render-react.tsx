@@ -7,7 +7,7 @@ import { OverviewPage } from "../components/stats-page.js";
 import type { SettingsPageModel } from "../settings/page.js";
 import type { ReviewDetailModel } from "./detail-model.js";
 import type { ReviewListModel } from "./list-model.js";
-import type { ShellStatus } from "../components/app-shell.js";
+import type { ShellStatus } from "./shell-status.js";
 import type { StatsPageModel } from "./stats-model.js";
 import { reviewTreePreload } from "./review-preload.js";
 
@@ -19,8 +19,8 @@ export function renderListHtml(model: ReviewListModel): string {
   return documentShell("Reviews · dureview", renderToStaticMarkup(<ReviewListView model={model} />));
 }
 
-export function renderSettingsHtml(model: SettingsPageModel): string {
-  return documentShell("Settings · dureview", renderToStaticMarkup(<SettingsForm model={model} />));
+export function renderSettingsHtml(model: SettingsPageModel, status: ShellStatus | null = null): string {
+  return documentShell("Settings · dureview", renderToStaticMarkup(<SettingsForm model={model} status={status} />));
 }
 
 export function renderDetailHtml(model: ReviewDetailModel): string {
@@ -30,8 +30,8 @@ export function renderDetailHtml(model: ReviewDetailModel): string {
   );
 }
 
-export function renderOverviewHtml(model: StatsPageModel, status: ShellStatus | null = null): string {
-  return documentShell("Overview · dureview", renderToStaticMarkup(<OverviewPage model={model} status={status} />));
+export function renderOverviewHtml(model: StatsPageModel): string {
+  return documentShell("Overview · dureview", renderToStaticMarkup(<OverviewPage model={model} />));
 }
 
 function documentShell(title: string, body: string): string {

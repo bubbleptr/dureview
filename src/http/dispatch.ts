@@ -2,7 +2,7 @@ import type { DureviewService } from "../service.js";
 import { safeNextPath } from "../ui/auth.js";
 import type { ListContext } from "../ui/list-data.js";
 import { buildReviewList, searchParamsFrom } from "../ui/list-data.js";
-import type { ShellStatus } from "../components/app-shell.js";
+import type { ShellStatus } from "../ui/shell-status.js";
 import { codexPhrase, formatUptime } from "../ui/page.js";
 import { loadDashboard } from "../ui/status.js";
 import { buildStatsPage } from "../ui/stats-data.js";
@@ -61,8 +61,9 @@ async function loginDispatch(ctx: DispatchContext, request: Request): Promise<Re
 }
 
 async function settingsDispatch(ctx: DispatchContext, request: Request): Promise<Response> {
-  if (request.method === "GET") return settingsGetResponse(ctx.service, ctx.uiToken, request);
-  if (request.method === "POST") return settingsPostResponse(ctx.service, ctx.uiToken, request);
+  const status = await shellStatus(ctx);
+  if (request.method === "GET") return settingsGetResponse(ctx.service, ctx.uiToken, request, status);
+  if (request.method === "POST") return settingsPostResponse(ctx.service, ctx.uiToken, request, status);
   return notFoundJson();
 }
 
@@ -85,7 +86,7 @@ async function overviewDispatch(ctx: DispatchContext, request: Request, pathname
   if (gate === "challenge") return unauthorizedJson();
   if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(pathname) }), 401);
   const model = await buildStatsPage(ctx.service, searchParamsFrom(new URL(request.url).search));
-  return htmlResponse(renderOverviewHtml(model, await shellStatus(ctx)));
+  return htmlResponse(renderOverviewHtml(model));
 }
 
 async function shellStatus(ctx: DispatchContext): Promise<ShellStatus> {

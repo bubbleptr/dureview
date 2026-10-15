@@ -3,7 +3,7 @@ import { cn } from "../../lib/utils.js";
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
-    <div className="relative w-full overflow-x-auto">
+    <div className="relative w-full max-w-full overflow-x-auto overscroll-contain">
       <table className={cn("w-full caption-top text-sm", className)} {...props} />
     </div>
   );

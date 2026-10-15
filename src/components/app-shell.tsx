@@ -1,22 +1,9 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { GitPullRequest, LayoutDashboard, PanelLeft, Settings } from "lucide-react";
-import type { CodexView } from "../ui/list-model.js";
 import { mobileSidebarConcealed } from "../ui/sidebar-state.js";
-import { LocalTime } from "./local-time.js";
 import { ThemeToggle } from "./theme.js";
 
 export type ShellSection = "overview" | "reviews" | "settings";
-
-export type ShellStatus = {
-  version: string;
-  uptime: string;
-  provider: string;
-  model: string;
-  thinking: string;
-  codex: CodexView;
-  githubApp: boolean;
-  githubToken: boolean;
-};
 
 const NAV = [
   ["overview", "/ui", "Overview", LayoutDashboard],
@@ -28,7 +15,6 @@ export function AppShell({
   current,
   title,
   crumbs,
-  status,
   form,
   fill,
   children,
@@ -36,7 +22,6 @@ export function AppShell({
   current: ShellSection;
   title: string;
   crumbs?: ReactNode;
-  status?: ShellStatus | null;
   form?: { method: "get" | "post"; action: string };
   fill?: boolean;
   children: ReactNode;
@@ -69,13 +54,13 @@ export function AppShell({
           <h1 className="truncate text-base font-medium tracking-tight">{title}</h1>
         </div>
       </header>
-        <main id="main" className={fill ? "min-h-0 min-w-0 flex-1 overflow-hidden" : "min-h-0 min-w-0 flex-1 overflow-auto"}>
+        <main id="main" className={fill ? "min-h-0 min-w-0 flex-1 overflow-hidden" : "min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain"}>
         {fill ? children : <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-10 p-4 md:p-6">{children}</div>}
       </main>
     </>
   );
   return (
-    <div className="flex h-dvh overflow-hidden bg-background text-foreground">
+    <div className="flex h-full min-h-0 overflow-hidden bg-background text-foreground">
       <a className="skip-link" href="#main">
         Skip to content
       </a>
@@ -119,50 +104,15 @@ export function AppShell({
             <span className="sidebar-theme-label nav-label px-1 text-xs text-muted-foreground">Theme</span>
             <ThemeToggle />
           </div>
-          <div className="sidebar-footer-detail px-3 pb-3">{status ? <StatusLine status={status} /> : <p className="text-[11px] text-muted-foreground">dureview</p>}</div>
         </div>
       </aside>
       {form ? (
-        <form className="flex min-w-0 flex-1 flex-col" method={form.method} action={form.action}>
+        <form className="flex min-h-0 min-w-0 flex-1 flex-col" method={form.method} action={form.action}>
           {column}
         </form>
       ) : (
-        <div className="flex min-w-0 flex-1 flex-col">{column}</div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">{column}</div>
       )}
-    </div>
-  );
-}
-
-function StatusLine({ status }: { status: ShellStatus }) {
-  return (
-    <div className="flex flex-col gap-1 text-xs leading-5 break-words text-muted-foreground">
-      <p className="font-medium text-foreground">ChatGPT</p>
-      <p>
-        {status.version}
-        {" · "}
-        up {status.uptime}
-      </p>
-      <p>
-        {status.provider}/{status.model}
-        {" · "}
-        {status.thinking}
-      </p>
-      <p>
-        {status.codex.kind === "plain" ? (
-          status.codex.text
-        ) : (
-          <>
-            {status.codex.lead}
-            <LocalTime iso={status.codex.iso} label={status.codex.label} />
-          </>
-        )}
-      </p>
-      <p>
-        GitHub App <b>{status.githubApp ? "yes" : "no"}</b>
-      </p>
-      <p>
-        GitHub token <b>{status.githubToken ? "yes" : "no"}</b>
-      </p>
     </div>
   );
 }
