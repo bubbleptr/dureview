@@ -1,9 +1,12 @@
 import { useLayoutEffect } from "react";
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { applySavedAppearance, THEME_BOOT } from "../components/theme.js";
+import { I18nProvider, useI18n } from "../ui/i18n.js";
+import { getUiLocale } from "../ui/locale-fn.js";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
+  loader: () => getUiLocale(),
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -14,23 +17,31 @@ export const Route = createRootRoute({
     links: [{ rel: "stylesheet", href: appCss }],
   }),
   component: RootComponent,
-  notFoundComponent: () => <p className="p-6 text-sm text-muted-foreground">Not found.</p>,
+  notFoundComponent: NotFound,
 });
 
 function RootComponent() {
+  const { locale } = Route.useLoaderData();
   useLayoutEffect(() => {
     applySavedAppearance();
   }, []);
   return (
-    <html lang="en" className="h-dvh overflow-hidden" suppressHydrationWarning>
+    <html lang={locale} className="h-dvh overflow-hidden" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
         <HeadContent />
       </head>
       <body className="h-dvh overflow-hidden bg-background font-sans text-foreground antialiased">
-        <Outlet />
+        <I18nProvider locale={locale}>
+          <Outlet />
+        </I18nProvider>
         <Scripts />
       </body>
     </html>
   );
+}
+
+function NotFound() {
+  const { m } = useI18n();
+  return <p className="p-6 text-sm text-muted-foreground">{m.notFound}</p>;
 }

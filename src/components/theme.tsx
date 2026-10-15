@@ -1,4 +1,5 @@
 import { Moon, Sun } from "lucide-react";
+import { useI18n } from "../ui/i18n.js";
 
 /** Blocking head script. Runs before paint so the saved theme does not flash. */
 export const THEME_BOOT = `(function(){try{var r=document.documentElement;var t=localStorage.getItem("dureview-theme");var d=t==="dark"||(t!=="light"&&matchMedia("(prefers-color-scheme: dark)").matches);r.classList.toggle("dark",d);r.style.colorScheme=d?"dark":"light";if(localStorage.getItem("dureview-sidebar")==="collapsed")r.dataset.sidebar="collapsed";}catch(e){}})();`;
@@ -17,11 +18,12 @@ export function applySavedAppearance(): void {
 }
 
 export function ThemeToggle() {
+  const { m } = useI18n();
   return (
     <button
       type="button"
       className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      aria-label="Toggle color scheme"
+      aria-label={m.shell.toggleTheme}
       onClick={() => {
         const root = document.documentElement;
         const next = root.classList.contains("dark") ? "light" : "dark";

@@ -18,6 +18,9 @@ import {
   windowDiffText,
   type FocusSegment,
 } from "../ui/diff-focus.js";
+import { fill } from "../ui/format.js";
+import { useI18n } from "../ui/i18n.js";
+import type { Messages } from "../ui/messages.js";
 import { reviewFindingCount, reviewTreeOptions, type ReviewTreePreload } from "../ui/review-presentation.js";
 import { dragLimit, fitPanelWidths, SUMMARY_LIMIT, TREE_LIMIT } from "../ui/panel-widths.js";
 import { AppShell } from "./app-shell.js";
@@ -63,6 +66,7 @@ export function ReviewDetailView({
   model: ReviewDetailModel;
   tree?: ReviewTreePreload | null;
 }) {
+  const { m } = useI18n();
   const [diffStyle] = useDiffStyle();
   const [treePref, setTreePref] = useStoredWidth(TREE_WIDTH_KEY, TREE_LIMIT.fallback, TREE_LIMIT.max);
   const [summaryPref, setSummaryPref] = useStoredWidth(SUMMARY_WIDTH_KEY, SUMMARY_LIMIT.fallback, SUMMARY_LIMIT.max);
@@ -89,7 +93,7 @@ export function ReviewDetailView({
       fill
       crumbs={
         <a className="shrink-0 text-sm text-muted-foreground hover:text-foreground" href={model.backHref}>
-          Reviews
+          {m.shell.reviews}
         </a>
       }
     >
@@ -102,16 +106,16 @@ export function ReviewDetailView({
         >
           <aside className="review-panel flex flex-col border-b min-[960px]:border-r min-[960px]:border-b-0">
             {files.length === 0 ? (
-              <p className="px-3 py-3 text-sm text-muted-foreground">No changed files.</p>
+              <p className="px-3 py-3 text-sm text-muted-foreground">{m.detail.noFiles}</p>
             ) : (
               <ReviewTree files={files} preloaded={tree} theme={theme} />
             )}
             {model.hiddenFiles > 0 ? (
-              <p className="px-3 py-2 text-sm text-muted-foreground">{model.hiddenFiles} more files are not shown.</p>
+              <p className="px-3 py-2 text-sm text-muted-foreground">{fill(m.detail.moreFiles, { count: model.hiddenFiles })}</p>
             ) : null}
           </aside>
           <PanelHandle
-            label="Resize file tree"
+            label={m.detail.resizeTree}
             width={shown.tree}
             min={treeDrag.min}
             max={treeDrag.max}
@@ -121,7 +125,7 @@ export function ReviewDetailView({
             <DiffColumn files={files} model={model} diffStyle={diffStyle} theme={theme} />
           </div>
           <PanelHandle
-            label="Resize summary"
+            label={m.detail.resizeSummary}
             width={shown.summary}
             min={summaryDrag.min}
             max={summaryDrag.max}
@@ -139,13 +143,14 @@ export function ReviewDetailView({
 }
 
 export function ReviewDetailPending({ header }: { header: ReviewDetailHeader }) {
+  const { m } = useI18n();
   return (
     <ReviewFrame header={header}>
-      <LoadingColumn label="Loading changed files." />
+      <LoadingColumn label={m.detail.loadingFiles} />
       <div className="panel-handle" aria-hidden="true" />
-      <LoadingColumn label="Loading the diff." />
+      <LoadingColumn label={m.detail.loadingDiff} />
       <div className="panel-handle" aria-hidden="true" />
-      <LoadingColumn label="Loading the summary." />
+      <LoadingColumn label={m.detail.loadingSummary} />
     </ReviewFrame>
   );
 }
@@ -173,6 +178,7 @@ function ReviewFrame({
   header: ReviewDetailHeader;
   children: ReactNode;
 }) {
+  const { m } = useI18n();
   return (
     <AppShell
       current="reviews"
@@ -180,7 +186,7 @@ function ReviewFrame({
       fill
       crumbs={
         <a className="shrink-0 text-sm text-muted-foreground hover:text-foreground" href={header.backHref}>
-          Reviews
+          {m.shell.reviews}
         </a>
       }
     >
@@ -278,6 +284,7 @@ function DiffColumn({
   diffStyle: "unified" | "split";
   theme: "light" | "dark";
 }) {
+  const { m } = useI18n();
   const [openFiles, setOpenFiles] = useState<Record<string, boolean>>({});
   const [expandedGaps, setExpandedGaps] = useState<Record<string, true>>({});
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
@@ -338,14 +345,12 @@ function DiffColumn({
   return (
     <div>
       {model.diffUnavailable ? (
-        <p className="border-b px-3 py-2 text-sm text-muted-foreground">
-          The diff could not be loaded from GitHub. Saved comments are still listed.
-        </p>
+        <p className="border-b px-3 py-2 text-sm text-muted-foreground">{m.detail.diffUnavailable}</p>
       ) : null}
       {model.hiddenFiles > 0 ? (
-        <p className="border-b px-3 py-2 text-sm text-muted-foreground">{model.hiddenFiles} files are hidden on this page.</p>
+        <p className="border-b px-3 py-2 text-sm text-muted-foreground">{fill(m.detail.hiddenOnPage, { count: model.hiddenFiles })}</p>
       ) : null}
-      {model.noChangedFiles ? <p className="px-3 py-4 text-sm text-muted-foreground">GitHub returned no changed files.</p> : null}
+      {model.noChangedFiles ? <p className="px-3 py-4 text-sm text-muted-foreground">{m.detail.githubNoFiles}</p> : null}
       {files.map((file) => (
         <FileBlock
           key={file.anchor}
@@ -389,6 +394,7 @@ function FileBlock({
   diffStyle: "unified" | "split";
   diffTheme: "light" | "dark";
 }) {
+  const { m } = useI18n();
   const findings = reviewFindingCount(file);
   const anchors = commentAnchorIndexes(file.lines);
   const prefix = `${file.anchor}:`;
@@ -405,19 +411,19 @@ function FileBlock({
           type="button"
           className="shrink-0 rounded-md border px-2 py-0.5 text-xs font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-expanded={open}
-          aria-label={`${open ? "Collapse" : "Expand"} ${file.filename}`}
+          aria-label={fill(open ? m.detail.collapseNamed : m.detail.expandNamed, { name: file.filename })}
           onClick={onToggle}
         >
-          {open ? "Collapse" : "Expand"}
+          {open ? m.detail.collapse : m.detail.expand}
         </button>
         <span className="min-w-0 truncate font-mono text-xs">{file.filename}</span>
         <Badge variant="outline">{file.status}</Badge>
         {file.stats ? <span className="text-xs text-muted-foreground">{file.stats}</span> : null}
-        {findings === 0 ? <span className="text-xs text-muted-foreground">No comments</span> : null}
+        {findings === 0 ? <span className="text-xs text-muted-foreground">{m.detail.noComments}</span> : null}
       </header>
       {open ? (
         file.patchMissing || !file.diffText ? (
-          <p className="px-3 py-2 text-sm text-muted-foreground">GitHub did not include a patch for this file.</p>
+          <p className="px-3 py-2 text-sm text-muted-foreground">{m.detail.noPatch}</p>
         ) : (
           segments.map((segment) => (
             <FocusSegmentView
@@ -433,8 +439,8 @@ function FileBlock({
           ))
         )
       ) : null}
-      {open && file.patchTruncated ? <p className="px-3 py-2 text-sm text-muted-foreground">Patch truncated.</p> : null}
-      {open ? <CommentGroup title="Not on a line in this diff" comments={file.unanchored} /> : null}
+      {open && file.patchTruncated ? <p className="px-3 py-2 text-sm text-muted-foreground">{m.detail.patchTruncated}</p> : null}
+      {open ? <CommentGroup title={m.detail.unanchored} comments={file.unanchored} /> : null}
     </section>
   );
 }
@@ -456,8 +462,9 @@ function FocusSegmentView({
   onExpand: () => void;
   onCollapse: () => void;
 }) {
+  const { m } = useI18n();
   if (segment.kind === "hidden") {
-    const label = segment.lines === 1 ? "1 hidden line" : `${segment.lines} hidden lines`;
+    const label = fill(segment.lines === 1 ? m.detail.hiddenLine : m.detail.hiddenLines, { count: segment.lines });
     return (
       <button
         type="button"
@@ -478,7 +485,7 @@ function FocusSegmentView({
           className="flex w-full items-center border-b px-3 py-1.5 text-left text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={onCollapse}
         >
-          Collapse
+          {m.detail.collapse}
         </button>
       ) : null}
       {patch ? (
@@ -690,6 +697,7 @@ function CommentGroup({ title, comments }: { title: string; comments: DetailComm
 }
 
 function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: boolean }) {
+  const { m } = useI18n();
   const accent = COMMENT_ACCENT[comment.priority] ?? COMMENT_ACCENT[3];
   return (
     <article
@@ -710,7 +718,7 @@ function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: b
       <p className="mt-1 text-sm">{comment.body}</p>
       {comment.trigger ? (
         <p className="mt-1 text-sm">
-          <span className="mr-1 text-muted-foreground">Trigger</span>
+          <span className="mr-1 text-muted-foreground">{m.detail.trigger}</span>
           {comment.trigger}
         </p>
       ) : null}
@@ -733,9 +741,10 @@ function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: b
 }
 
 function SummaryRail({ summary }: { summary: DetailSummary }) {
+  const { m } = useI18n();
   return (
     <section className="border-b px-3 py-3">
-      <h2 className="mb-2 text-sm font-medium">Summary</h2>
+      <h2 className="mb-2 text-sm font-medium">{m.detail.summary}</h2>
       <Badge variant={summary.resultKind}>{summary.resultText}</Badge>
       {summary.mode === "incomplete" ? (
         <p className="mt-2 text-sm break-words whitespace-pre-wrap">{summary.note}</p>
@@ -747,6 +756,7 @@ function SummaryRail({ summary }: { summary: DetailSummary }) {
 }
 
 function CompleteSummary({ summary }: { summary: Extract<DetailSummary, { mode: "complete" }> }) {
+  const { m } = useI18n();
   return (
     <>
       {summary.verdictLabel ? (
@@ -761,7 +771,7 @@ function CompleteSummary({ summary }: { summary: Extract<DetailSummary, { mode: 
           </Fragment>
         ))}
       </dl>
-      {summary.noComments ? <p className="mt-3 text-sm text-muted-foreground">No saved comments.</p> : null}
+      {summary.noComments ? <p className="mt-3 text-sm text-muted-foreground">{m.detail.noSavedComments}</p> : null}
       {summary.findings.length > 0 ? (
         <ul className="-mx-3 mt-3">
           {summary.findings.map((finding) => (
@@ -788,14 +798,15 @@ function CompleteSummary({ summary }: { summary: Extract<DetailSummary, { mode: 
 }
 
 function ReviewConfig({ settings }: { settings: DetailSettings }) {
+  const { m } = useI18n();
   return (
     <details className="border-t px-3 py-2">
-      <summary className="cursor-pointer text-sm font-medium">Review configuration</summary>
+      <summary className="cursor-pointer text-sm font-medium">{m.detail.configuration}</summary>
       {settings.recorded ? (
         <dl className="mt-2 grid grid-cols-[9.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-sm">
           {settings.rows.map((row) => (
             <Fragment key={row.key}>
-              <dt className="text-muted-foreground">{row.key}</dt>
+              <dt className="text-muted-foreground">{configLabel(row.key, m.detail.configKeys)}</dt>
               <dd className="min-w-0 truncate" title={row.value}>
                 {row.value}
               </dd>
@@ -803,7 +814,7 @@ function ReviewConfig({ settings }: { settings: DetailSettings }) {
           ))}
         </dl>
       ) : (
-        <p className="mt-2 text-sm text-muted-foreground">Settings were not recorded for this review.</p>
+        <p className="mt-2 text-sm text-muted-foreground">{m.detail.settingsMissing}</p>
       )}
     </details>
   );
@@ -824,6 +835,13 @@ function decodeHash(raw: string): string {
   } catch {
     return raw;
   }
+}
+
+function configLabel(key: string, labels: Messages["detail"]["configKeys"]): string {
+  for (const [name, label] of Object.entries(labels)) {
+    if (name === key) return label;
+  }
+  return key;
 }
 
 function verdictTone(kind: "pass" | "suggest" | "blocker" | null): string {

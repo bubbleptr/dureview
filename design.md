@@ -50,8 +50,14 @@ SaaS landing page. This is an operator console for pull-request review.
   P0–P3 may use the same restrained hues. Chart series use the chart palette
   above, not these label hues. Do not color a number merely because it is
   favorable, expensive, or large.
-- Dashboard copy is English and sentence case. The login form stays Chinese:
-  the title and submit button are `登录`, and a bad token says `token 不正确`.
+- Dashboard copy is English or Chinese (`zh-CN`). English stays sentence case.
+  A language switch sits in the sidebar footer beside the theme control, and on
+  the login page beside that same control. The choice is the `dureview-locale`
+  cookie so the server renders the saved language and the first paint does not
+  flash. With no cookie, any `zh*` `Accept-Language` tag is Chinese and every
+  other tag is English. Login follows that language: English is `Sign in` and
+  `Incorrect token.`; Chinese is `登录` and `token 不正确`. GitHub review
+  comments and provider or API text stay in the language they were written.
   Do not add tracked uppercase eyebrows or decorative section numbers.
 - Empty, loading, and error states are short sentences. A loading chart says
   what is loading. An error uses `role="alert"` and is not color alone.
@@ -71,7 +77,7 @@ SaaS landing page. This is an operator console for pull-request review.
   the unified or split diff view saved in the browser, plus version, uptime,
   provider, model, thinking, Codex login expiry, and GitHub credential status.
   The sidebar collapses on a wide screen and becomes a sheet on a narrow one.
-  Its footer is only the theme control. Repo and time-range filters sit in the
+  Its footer is the language switch and the theme control. Repo and time-range filters sit in the
   page they apply to, not in the top bar. The top bar is the sidebar control, the
   page title, and a breadcrumb when the review detail page has one.
   Dropdowns use the shadcn Select. A list of eight or more options, and the
@@ -87,8 +93,8 @@ SaaS landing page. This is an operator console for pull-request review.
 Apply guidance in this order:
 
 1. The user's explicit request and settled product decisions, including auth,
-   URL filter behavior, Chinese login copy, review-result colors, and the
-   persisted theme control.
+   URL filter behavior, bilingual UI copy with the persisted locale cookie,
+   review-result colors, and the persisted theme control.
 2. Repository `AGENTS.md` instructions.
 3. This dureview interpretation.
 4. The canonical Vercel `design.md` baseline.

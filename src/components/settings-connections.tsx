@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import type { ApiKeyView, ConsoleView, LoginView, SubscriptionView } from "../settings/page.js";
+import { useI18n, useSettingsCopy } from "../ui/i18n.js";
+import { localizeKnown } from "../ui/messages.js";
 import { formatTime } from "../ui/page.js";
 import {
   apiKeySentence,
   githubSentence,
   installationsSentence,
   privateKeySentence,
-  settingsCopy,
   webhookSentence,
 } from "../ui/settings-copy.js";
 import type { SettingsSection } from "../ui/settings-sections.js";
@@ -59,6 +60,7 @@ export function Subscriptions({
     };
   }, [pending]);
 
+  const settingsCopy = useSettingsCopy();
   const codexRow = rows.some((row) => row.provider === "openai-codex");
   return (
     <div className="flex flex-col gap-4">
@@ -94,6 +96,8 @@ function SubscriptionCard({
   status: ShellStatus | null;
   section: SettingsSection;
 }) {
+  const { locale } = useI18n();
+  const settingsCopy = useSettingsCopy();
   const copy = settingsCopy.subscriptions;
   return (
     <SettingsCard title={row.label} description={<span className="font-mono">{row.provider}</span>}>
@@ -114,7 +118,7 @@ function SubscriptionCard({
         ) : null}
         {login?.phase === "error" && login.message ? (
           <p className="text-sm text-destructive" role="alert">
-            {login.message}
+            {localizeKnown(locale, login.message)}
           </p>
         ) : null}
         {login && (login.phase === "starting" || login.phase === "code") ? <DeviceCode login={login} /> : null}
@@ -152,7 +156,8 @@ function SubscriptionCard({
 }
 
 function SubscriptionStatus({ row }: { row: SubscriptionView }) {
-  const copy = settingsCopy.subscriptions;
+  const { locale } = useI18n();
+  const copy = useSettingsCopy().subscriptions;
   if (row.unreadable) {
     return (
       <p className="text-sm text-destructive" role="alert">
@@ -173,7 +178,7 @@ function SubscriptionStatus({ row }: { row: SubscriptionView }) {
       {row.expiresAt ? (
         <>
           {". "}
-          {copy.accessExpires} <LocalTime iso={row.expiresAt} label={formatTime(row.expiresAt)} />
+          {copy.accessExpires} <LocalTime iso={row.expiresAt} label={formatTime(row.expiresAt, locale)} />
         </>
       ) : null}
       .
@@ -192,7 +197,8 @@ function CodexLine({ status }: { status: ShellStatus }) {
 }
 
 function DeviceCode({ login }: { login: LoginView }) {
-  const copy = settingsCopy.subscriptions;
+  const { locale } = useI18n();
+  const copy = useSettingsCopy().subscriptions;
   return (
     <div className="flex flex-col gap-2" aria-live="polite">
       {login.phase === "starting" ? <p className="text-sm text-muted-foreground">{copy.starting}</p> : null}
@@ -213,7 +219,7 @@ function DeviceCode({ login }: { login: LoginView }) {
           </div>
           {login.expiresAt ? (
             <p className="text-xs text-muted-foreground">
-              {copy.codeExpires} <LocalTime iso={login.expiresAt} label={formatTime(login.expiresAt)} />.
+              {copy.codeExpires} <LocalTime iso={login.expiresAt} label={formatTime(login.expiresAt, locale)} />.
             </p>
           ) : null}
         </>
@@ -223,6 +229,7 @@ function DeviceCode({ login }: { login: LoginView }) {
 }
 
 export function ApiKeys({ rows, csrf, section }: { rows: ApiKeyView[]; csrf: string; section: SettingsSection }) {
+  const settingsCopy = useSettingsCopy();
   const copy = settingsCopy.apiKeys;
   return (
     <SettingsCard title={copy.title} description={copy.description}>
@@ -235,7 +242,7 @@ export function ApiKeys({ rows, csrf, section }: { rows: ApiKeyView[]; csrf: str
             <>
               <span className="font-mono">{row.envName}</span>
               {". "}
-              {apiKeySentence(row)}
+              {apiKeySentence(row, settingsCopy)}
             </>
           }
         >
@@ -285,12 +292,14 @@ export function GitHubSetup({
   status: ShellStatus | null;
   section: SettingsSection;
 }) {
+  const { locale } = useI18n();
+  const settingsCopy = useSettingsCopy();
   const copy = settingsCopy.github;
   const listed = github.installations ?? [];
   const extra = github.installationCount === null ? 0 : github.installationCount - listed.length;
   return (
     <div className="flex flex-col gap-8">
-      <SettingsCard title={copy.connection} description={githubSentence(github)}>
+      <SettingsCard title={copy.connection} description={githubSentence(github, settingsCopy)}>
         {github.unreadable ? (
           <p className="py-5 text-sm text-destructive" role="alert">
             {copy.unreadable}
@@ -314,10 +323,10 @@ export function GitHubSetup({
             </span>
           </SettingRow>
         ) : null}
-        <SettingRow title={copy.webhook} description={webhookSentence(github)}>
+        <SettingRow title={copy.webhook} description={webhookSentence(github, settingsCopy)}>
           <span className="text-sm font-medium">{github.webhook === "missing" ? settingsCopy.no : settingsCopy.yes}</span>
         </SettingRow>
-        <SettingRow title={copy.privateKey} description={privateKeySentence(github)}>
+        <SettingRow title={copy.privateKey} description={privateKeySentence(github, settingsCopy)}>
           <span className="text-sm font-medium">{github.privateKey === "missing" ? settingsCopy.no : settingsCopy.yes}</span>
         </SettingRow>
         <SettingRow
@@ -327,7 +336,7 @@ export function GitHubSetup({
               ? copy.installationsUnknown
               : github.installationCount === 0
                 ? copy.noneInstalled
-                : installationsSentence(listed, extra)
+                : installationsSentence(listed, extra, settingsCopy)
           }
         >
           {github.installUrl ? (
@@ -340,7 +349,7 @@ export function GitHubSetup({
         </SettingRow>
         {github.installationError ? (
           <p className="py-5 text-sm text-destructive" role="alert">
-            {github.installationError}
+            {localizeKnown(locale, github.installationError)}
           </p>
         ) : null}
       </SettingsCard>

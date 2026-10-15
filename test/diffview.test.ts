@@ -228,7 +228,7 @@ describe("pull request diff placement", () => {
         now,
       }),
     );
-    expect(runningHtml).toContain("进行中");
+    expect(runningHtml).toContain("Running");
     expect(runningHtml).not.toContain(">P0<");
     expect(runningHtml).not.toContain("5m");
 
@@ -242,7 +242,7 @@ describe("pull request diff placement", () => {
         now,
       }),
     );
-    expect(stuckHtml).toContain("疑似卡住");
+    expect(stuckHtml).toContain("May be stuck");
     expect(stuckHtml).not.toContain("30m");
 
     const same = stored(sampleFinding());
@@ -325,7 +325,7 @@ describe("pull request diff placement", () => {
       empty: null,
     };
     const html = renderListHtml(model);
-    expect(html).toContain("疑似卡住");
+    expect(html).toContain("May be stuck");
     expect(html).not.toContain("30m");
     expect(html).toContain("<time ");
   });

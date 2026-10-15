@@ -1,6 +1,7 @@
 import type { DureviewService } from "../service.js";
 import { safeNextPath } from "../ui/auth.js";
 import { loadReviewDetail } from "../ui/detail-data.js";
+import { resolveLocale } from "../ui/locale.js";
 import { renderDetailHtml, renderLoginHtml } from "../ui/render-react.js";
 import { gateGetPage } from "./auth.js";
 import { htmlResponse, notFoundJson, unauthorizedJson } from "./headers.js";
@@ -19,8 +20,9 @@ export async function reviewDetailResponse(input: {
   const gate = gateGetPage(input.request, input.uiToken);
   if (gate === "disabled" || !taskId) return notFoundJson();
   if (gate === "challenge") return unauthorizedJson();
-  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(path) }), 401);
-  const model = await loadReviewDetail(input.service, input.githubApiUrl, taskId);
+  const locale = resolveLocale(input.request);
+  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(path), locale }), 401);
+  const model = await loadReviewDetail(input.service, input.githubApiUrl, taskId, Date.now(), locale);
   if (!model) return notFoundJson();
-  return htmlResponse(await renderDetailHtml(model));
+  return htmlResponse(await renderDetailHtml(model, locale));
 }

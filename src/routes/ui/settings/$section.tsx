@@ -1,7 +1,9 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { LoginForm } from "../../../components/login-form.js";
 import { SettingsForm } from "../../../components/settings-form.js";
-import { settingsCopy, sectionDocumentTitle } from "../../../ui/settings-copy.js";
+import { localeFromMatches } from "../../../ui/locale.js";
+import { messages } from "../../../ui/messages.js";
+import { sectionDocumentTitle } from "../../../ui/settings-copy.js";
 import { getSettingsPage } from "../../../ui/settings-fn.js";
 import { isSettingsSection } from "../../../ui/settings-sections.js";
 import { getShellStatus } from "../../../ui/shell-fn.js";
@@ -34,10 +36,13 @@ export const Route = createFileRoute("/ui/settings/$section")({
     if (data.kind !== "page") return { ...data, status: null };
     return { ...data, status: await getShellStatus() };
   },
-  head: ({ loaderData }) => ({
+  head: ({ loaderData, matches }) => ({
     meta: [
       {
-        title: loaderData?.kind === "page" ? sectionDocumentTitle(loaderData.section) : settingsCopy.loginTitle,
+        title:
+          loaderData?.kind === "page"
+            ? sectionDocumentTitle(loaderData.section, localeFromMatches(matches))
+            : messages[localeFromMatches(matches)].login.documentTitle,
       },
     ],
   }),

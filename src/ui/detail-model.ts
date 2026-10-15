@@ -106,7 +106,7 @@ export type ReviewDetailModel = ReviewDetailHeader & {
   diffUnavailable: boolean;
   hiddenFiles: number;
   noChangedFiles: boolean;
-  outsideTitle: "Comments" | "Other files";
+  outsideTitle: string;
   files: DetailFileView[];
   outside: DetailCommentView[];
   summary: DetailSummary;

@@ -1,8 +1,10 @@
 import { useState } from "react";
 import type { ProviderCatalog, SettingsFieldView, SettingsPageModel } from "../settings/page.js";
 import { nearestThinking } from "../settings/thinking.js";
+import { useI18n, useSettingsCopy } from "../ui/i18n.js";
+import { localizeKnown } from "../ui/messages.js";
 import { formatTime } from "../ui/page.js";
-import { resetLabel, resetToSentence, settingsCopy, sourceSentence } from "../ui/settings-copy.js";
+import { fieldCopy, resetLabel, resetToSentence, sourceSentence } from "../ui/settings-copy.js";
 import { isSettingsSection, SETTINGS_SECTIONS, settingsSectionHref, type SettingsSection } from "../ui/settings-sections.js";
 import type { ShellStatus } from "../ui/shell-status.js";
 import { LocalTime } from "./local-time.js";
@@ -29,6 +31,7 @@ export function SettingsForm({
   status?: ShellStatus | null;
   section: SettingsSection;
 }) {
+  const settingsCopy = useSettingsCopy();
   return (
     <AppShell current="settings" title={settingsCopy.title}>
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 md:flex-row md:items-start md:gap-12">
@@ -47,6 +50,7 @@ export function SettingsForm({
 }
 
 function SettingsNav({ section }: { section: SettingsSection }) {
+  const settingsCopy = useSettingsCopy();
   const options = SETTINGS_SECTIONS.map((id) => ({ value: id, label: settingsCopy.section[id] }));
   return (
     <div className="md:sticky md:top-0 md:w-52 md:shrink-0">
@@ -89,18 +93,20 @@ function SettingsNav({ section }: { section: SettingsSection }) {
 }
 
 function Banners({ model }: { model: SettingsPageModel }) {
+  const { locale } = useI18n();
+  const settingsCopy = useSettingsCopy();
   return (
     <>
       {model.error ? (
         <p className="text-sm text-destructive" role="alert">
-          {model.error}
+          {localizeKnown(locale, model.error)}
         </p>
       ) : null}
-      {model.notice ? <p className="text-sm">{model.notice}</p> : null}
+      {model.notice ? <p className="text-sm">{localizeKnown(locale, model.notice)}</p> : null}
       {model.saved ? <p className="text-sm">{settingsCopy.banners.saved}</p> : null}
       {model.problems.map((problem) => (
         <p key={problem} className="text-sm text-destructive" role="alert">
-          {problem}
+          {localizeKnown(locale, problem)}
         </p>
       ))}
     </>
@@ -141,6 +147,7 @@ function ModelsSection({
   status: ShellStatus | null;
   section: SettingsSection;
 }) {
+  const settingsCopy = useSettingsCopy();
   const [provider, setProvider] = useState(model.form.provider || model.provider);
   const [modelId, setModelId] = useState(model.form.model);
   const [thinking, setThinking] = useState<string>(model.form.thinking);
@@ -189,6 +196,7 @@ function ModelsSection({
 }
 
 function ReviewSection({ model, section }: { model: SettingsPageModel; section: SettingsSection }) {
+  const settingsCopy = useSettingsCopy();
   const copy = settingsCopy.review;
   return (
     <form className="flex flex-col gap-8" method="post" action="/ui/settings">
@@ -231,6 +239,7 @@ function ReviewSection({ model, section }: { model: SettingsPageModel; section: 
 }
 
 function SystemSection({ model, status }: { model: SettingsPageModel; status: ShellStatus | null }) {
+  const settingsCopy = useSettingsCopy();
   const copy = settingsCopy.system;
   const fields = [
     model.fields.provider,
@@ -270,17 +279,17 @@ function SystemSection({ model, status }: { model: SettingsPageModel; status: Sh
         {fields.map((field) => (
           <SettingRow
             key={field.key}
-            title={field.label}
+            title={fieldCopy(field, settingsCopy).label}
             description={
               <>
                 <span className="font-mono">{field.envName}</span>
                 {". "}
-                {sourceSentence(field)}
+                {sourceSentence(field, settingsCopy)}
               </>
             }
           >
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <Badge variant="outline">{field.sourceLabel}</Badge>
+              <Badge variant="outline">{settingsCopy.sources[field.source]}</Badge>
               {field.canReset ? (
                 <Button
                   type="submit"
@@ -289,7 +298,7 @@ function SystemSection({ model, status }: { model: SettingsPageModel; status: Sh
                   variant="outline"
                   size="sm"
                   form="settings-reset"
-                  aria-label={resetLabel(field.label)}
+                  aria-label={resetLabel(fieldCopy(field, settingsCopy).label, settingsCopy)}
                 >
                   {settingsCopy.reset}
                 </Button>
@@ -310,6 +319,8 @@ function SystemSection({ model, status }: { model: SettingsPageModel; status: Sh
 }
 
 function AuditTable({ audit }: { audit: SettingsPageModel["audit"] }) {
+  const { locale } = useI18n();
+  const settingsCopy = useSettingsCopy();
   const copy = settingsCopy.system;
   return (
     <Table>
@@ -325,11 +336,11 @@ function AuditTable({ audit }: { audit: SettingsPageModel["audit"] }) {
         {audit.map((row, index) => (
           <TableRow key={`${row.at}-${row.key}-${index}`}>
             <TableCell className="text-muted-foreground">
-              <LocalTime iso={row.at} label={formatTime(row.at)} />
+              <LocalTime iso={row.at} label={formatTime(row.at, locale)} />
             </TableCell>
             <TableCell>{row.actor}</TableCell>
             <TableCell>{row.key}</TableCell>
-            <TableCell>{resetToSentence(row.previous, row.value, row.action)}</TableCell>
+            <TableCell>{resetToSentence(row.previous, row.value, row.action, settingsCopy)}</TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -348,11 +359,12 @@ function ProviderField({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const text = fieldCopy(field, useSettingsCopy());
   const listed = catalogs.some((catalog) => catalog.provider === value)
     ? catalogs
     : [{ provider: value, label: value, models: [] }, ...catalogs];
   return (
-    <SettingRow title={field.label} description={field.help} htmlFor={field.key}>
+    <SettingRow title={text.label} description={text.help} htmlFor={field.key}>
       <div className="w-full">
         <FormSelect
           id={field.key}
@@ -378,9 +390,10 @@ function ModelField({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const text = fieldCopy(field, useSettingsCopy());
   const choices = options.includes(value) ? options : [value, ...options];
   return (
-    <SettingRow title={field.label} description={field.help} htmlFor={field.key}>
+    <SettingRow title={text.label} description={text.help} htmlFor={field.key}>
       <div className="w-full">
         <FormSelect
           id={field.key}
@@ -407,9 +420,10 @@ function ThinkingField({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const text = fieldCopy(field, useSettingsCopy());
   const choices = levels.includes(value) ? levels : [value, ...levels];
   return (
-    <SettingRow title={field.label} description={field.help} htmlFor={field.key}>
+    <SettingRow title={text.label} description={text.help} htmlFor={field.key}>
       <div className="w-full">
         <FormSelect
           id={field.key}
@@ -424,8 +438,10 @@ function ThinkingField({
 }
 
 function TriggerField({ field, value }: { field: SettingsFieldView; value: string }) {
+  const settingsCopy = useSettingsCopy();
+  const text = fieldCopy(field, settingsCopy);
   return (
-    <SettingRow title={field.label} description={field.help} htmlFor={field.key}>
+    <SettingRow title={text.label} description={text.help} htmlFor={field.key}>
       <div className="w-full">
         <FormSelect id={field.key} name="defaultTrigger" defaultValue={value} options={[...settingsCopy.triggers]} />
       </div>
@@ -434,8 +450,9 @@ function TriggerField({ field, value }: { field: SettingsFieldView; value: strin
 }
 
 function SkipDraftsField({ field, checked }: { field: SettingsFieldView; checked: boolean }) {
+  const text = fieldCopy(field, useSettingsCopy());
   return (
-    <SettingRow title={field.label} description={field.help} htmlFor={field.key}>
+    <SettingRow title={text.label} description={text.help} htmlFor={field.key}>
       <input type="hidden" name="skipDrafts" value="false" />
       <input id={field.key} className="size-4 accent-foreground" type="checkbox" name="skipDrafts" value="true" defaultChecked={checked} />
     </SettingRow>
@@ -443,8 +460,9 @@ function SkipDraftsField({ field, checked }: { field: SettingsFieldView; checked
 }
 
 function TtlField({ field, value }: { field: SettingsFieldView; value: string }) {
+  const text = fieldCopy(field, useSettingsCopy());
   return (
-    <SettingRow title={field.label} description={field.help} htmlFor={field.key}>
+    <SettingRow title={text.label} description={text.help} htmlFor={field.key}>
       <div className="w-full">
         <Input id={field.key} name="checkoutTtlDays" type="number" min={0} step={1} defaultValue={value} />
       </div>

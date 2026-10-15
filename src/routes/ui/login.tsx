@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { LoginForm } from "../../components/login-form.js";
+import { localeFromMatches } from "../../ui/locale.js";
+import { messages } from "../../ui/messages.js";
 
 export const Route = createFileRoute("/ui/login")({
   server: {
@@ -25,6 +27,7 @@ export const Route = createFileRoute("/ui/login")({
       },
     },
   },
+  head: ({ matches }) => ({ meta: [{ title: messages[localeFromMatches(matches)].login.documentTitle }] }),
   component: LoginPage,
 });
 

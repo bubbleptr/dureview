@@ -8,6 +8,9 @@ import {
 } from "../../../components/review-detail.js";
 import { getReviewDetail, getReviewHeader } from "../../../ui/detail-fn.js";
 import type { DetailPayload } from "../../../ui/detail-data.js";
+import { useI18n } from "../../../ui/i18n.js";
+import { localeFromMatches } from "../../../ui/locale.js";
+import { messages } from "../../../ui/messages.js";
 
 export const Route = createFileRoute("/ui/reviews/$taskId")({
   server: {
@@ -29,14 +32,22 @@ export const Route = createFileRoute("/ui/reviews/$taskId")({
     }));
     return { kind: "detail" as const, header: header.header, detail };
   },
-  head: ({ loaderData }) => ({
-    meta: [{ title: loaderData?.kind === "detail" ? loaderData.header.pageTitle : "登录 · dureview" }],
+  head: ({ loaderData, matches }) => ({
+    meta: [
+      {
+        title:
+          loaderData?.kind === "detail"
+            ? loaderData.header.pageTitle
+            : messages[localeFromMatches(matches)].login.documentTitle,
+      },
+    ],
   }),
   component: ReviewDetailPage,
 });
 
 function ReviewDetailPage() {
   const data = Route.useLoaderData();
+  const { m } = useI18n();
   if (data.kind === "login") return <LoginForm next={data.next} />;
   return (
     <Suspense fallback={<ReviewDetailPending header={data.header} />}>
@@ -46,8 +57,7 @@ function ReviewDetailPage() {
             return <ReviewDetailView model={detail.model} tree={detail.tree} />;
           }
           if (detail.kind === "login") return <LoginForm next={detail.next} />;
-          const message =
-            detail.kind === "missing" ? "This review is no longer available." : "The review could not be loaded.";
+          const message = detail.kind === "missing" ? m.detail.unavailable : m.detail.loadError;
           return <ReviewDetailUnavailable header={data.header} message={message} />;
         }}
       </Await>

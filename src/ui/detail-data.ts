@@ -3,6 +3,8 @@ import { reviewResult, type ReviewDetail, type StoredComment } from "../review/a
 import { formatFindingType } from "../review/schema.js";
 import type { DureviewService } from "../service.js";
 import { fileStatusMark, placeReview, type PlacedLine } from "./diff.js";
+import type { Locale } from "./locale.js";
+import { messages } from "./messages.js";
 import type {
   DetailCommentView,
   DetailCount,
@@ -43,11 +45,12 @@ export async function loadReviewHeader(
   githubApiUrl: string,
   taskId: string,
   now = Date.now(),
+  locale: Locale = "en",
 ): Promise<ReviewDetailHeader | null> {
   if (!TASK_ID.test(taskId)) return null;
   const review = await service.savedReview(taskId);
   if (!review) return null;
-  return reviewHeader(review, githubApiUrl, now);
+  return reviewHeader(review, githubApiUrl, now, locale);
 }
 
 /**
@@ -60,6 +63,7 @@ export async function loadReviewDetail(
   githubApiUrl: string,
   taskId: string,
   now = Date.now(),
+  locale: Locale = "en",
 ): Promise<ReviewDetailModel | null> {
   if (!TASK_ID.test(taskId)) return null;
   const detail = await service.reviewForUi(taskId, AbortSignal.timeout(20_000));
@@ -70,6 +74,7 @@ export async function loadReviewDetail(
     diffUnavailable: detail.diffUnavailable,
     githubApiUrl,
     now,
+    locale,
   });
 }
 
@@ -80,24 +85,27 @@ export function buildReviewDetail(input: {
   diffUnavailable: boolean;
   githubApiUrl: string;
   now?: number;
+  locale?: Locale;
 }): ReviewDetailModel {
   const now = input.now ?? Date.now();
+  const locale = input.locale ?? "en";
   const review = input.review;
   const placed = placeReview(input.files, review.comments);
+  const copy = messages[locale].detail;
   return {
-    ...reviewHeader(review, input.githubApiUrl, now),
+    ...reviewHeader(review, input.githubApiUrl, now, locale),
     diffUnavailable: input.diffUnavailable,
     hiddenFiles: placed.hiddenFiles,
     noChangedFiles: placed.files.length === 0 && !input.diffUnavailable,
-    outsideTitle: placed.files.length === 0 && !input.diffUnavailable ? "Comments" : "Other files",
-    files: placed.files.map(fileView),
-    outside: placed.outside.map(commentView),
-    summary: summaryView(review, now),
+    outsideTitle: placed.files.length === 0 && !input.diffUnavailable ? copy.outsideComments : copy.outsideFiles,
+    files: placed.files.map((file) => fileView(file, locale)),
+    outside: placed.outside.map((comment) => commentView(comment, locale)),
+    summary: summaryView(review, now, locale),
     settings: settingsView(review),
   };
 }
 
-export function reviewHeader(review: ReviewDetail, githubApiUrl: string, now = Date.now()): ReviewDetailHeader {
+export function reviewHeader(review: ReviewDetail, githubApiUrl: string, now = Date.now(), locale: Locale = "en"): ReviewDetailHeader {
   const kind = reviewResult(review);
   const whenIso = review.finishedAt ?? review.startedAt;
   const pullLabel = `${review.owner}/${review.repo} #${review.number}`;
@@ -106,17 +114,21 @@ export function reviewHeader(review: ReviewDetail, githubApiUrl: string, now = D
     backHref: "/ui/reviews",
     pullHref: pullRequestUrl(githubApiUrl, review.owner, review.repo, review.number),
     pullLabel,
-    heading: review.title || "Untitled",
+    heading: review.title || messages[locale].detail.untitled,
     resultKind: kind,
-    resultText: resultLabel(kind),
-    triggerLabel: displayTrigger(review.trigger),
+    resultText: resultLabel(kind, locale),
+    triggerLabel: displayTrigger(review.trigger, locale),
     duration:
       review.outcome === "running"
-        ? runningLabel(review.startedAt, now)
+        ? runningLabel(review.startedAt, now, locale)
         : formatDuration(reviewDurationMs(review.startedAt, review.finishedAt, now)),
     whenIso,
-    whenLabel: formatTime(whenIso),
+    whenLabel: formatTime(whenIso, locale),
   };
+}
+
+function findingLanguage(locale: Locale): "en" | "zh" {
+  return locale === "zh-CN" ? "zh" : "en";
 }
 
 function fileView(file: {
@@ -130,7 +142,7 @@ function fileView(file: {
   patchMissing: boolean;
   patchTruncated: boolean;
   diffText: string | null;
-}): DetailFileView {
+}, locale: Locale): DetailFileView {
   return {
     anchor: file.anchor,
     filename: file.filename,
@@ -140,12 +152,12 @@ function fileView(file: {
     patchMissing: file.patchMissing,
     patchTruncated: file.patchTruncated,
     diffText: file.diffText,
-    lines: file.lines.map(lineView),
-    unanchored: file.unanchored.map(commentView),
+    lines: file.lines.map((line) => lineView(line, locale)),
+    unanchored: file.unanchored.map((comment) => commentView(comment, locale)),
   };
 }
 
-function lineView(line: PlacedLine): DetailLineView {
+function lineView(line: PlacedLine, locale: Locale): DetailLineView {
   return {
     kind: line.kind,
     oldLabel: line.oldLine === null ? "" : String(line.oldLine),
@@ -153,16 +165,16 @@ function lineView(line: PlacedLine): DetailLineView {
     mark: line.kind === "add" ? "+" : line.kind === "del" ? "−" : line.kind === "context" ? " " : "",
     text: line.text,
     severity: line.severity,
-    comments: line.comments.map(commentView),
+    comments: line.comments.map((item) => commentView(item, locale)),
   };
 }
 
-function commentView(comment: StoredComment): DetailCommentView {
+function commentView(comment: StoredComment, locale: Locale): DetailCommentView {
   return {
     ordinal: comment.ordinal,
     anchor: `c-${comment.ordinal}`,
     priority: comment.priority,
-    typeLabel: formatFindingType({ type: comment.findingType, subtype: comment.subtype }),
+    typeLabel: formatFindingType({ type: comment.findingType, subtype: comment.subtype, language: findingLanguage(locale) }),
     tags: commentTags(comment.kind, comment.category),
     confidence: `${Math.round(comment.confidence * 100)}%`,
     title: comment.title,
@@ -187,15 +199,14 @@ function commentTags(kind: string, category: string): string[] {
   return tags;
 }
 
-function summaryView(review: ReviewDetail, now: number): DetailSummary {
+function summaryView(review: ReviewDetail, now: number, locale: Locale): DetailSummary {
   const kind = reviewResult(review);
-  const resultText = resultLabel(kind);
+  const resultText = resultLabel(kind, locale);
   if (review.outcome !== "completed") {
-    const note =
-      review.outcome === "failed" ? review.error || "审查失败，没有记录原因。" : runningLabel(review.startedAt, now);
+    const note = review.outcome === "failed" ? review.error || messages[locale].detail.failedNoReason : runningLabel(review.startedAt, now, locale);
     return { mode: "incomplete", resultKind: kind, resultText, note };
   }
-  const verdict = verdictView(review.verdict);
+  const verdict = verdictView(review.verdict, locale);
   return {
     mode: "complete",
     resultKind: kind,
@@ -207,7 +218,7 @@ function summaryView(review: ReviewDetail, now: number): DetailSummary {
     findings: review.comments.map((comment) => ({
       anchor: `c-${comment.ordinal}`,
       priority: comment.priority,
-      typeLabel: formatFindingType({ type: comment.findingType, subtype: comment.subtype }),
+      typeLabel: formatFindingType({ type: comment.findingType, subtype: comment.subtype, language: findingLanguage(locale) }),
       title: comment.title,
       where: `${comment.path}:${comment.startLine}`,
     })),
@@ -230,11 +241,12 @@ function countText(count: number, known: boolean): string {
   return known ? String(count) : "—";
 }
 
-function verdictView(verdict: string | null): { label: string; kind: "pass" | "suggest" | "blocker" } | null {
+function verdictView(verdict: string | null, locale: Locale): { label: string; kind: "pass" | "suggest" | "blocker" } | null {
   if (!verdict) return null;
-  if (verdict === "fix_recommended") return { label: "Fix recommended", kind: "suggest" };
-  if (verdict === "block") return { label: "Block", kind: "blocker" };
-  if (verdict === "clean") return { label: "Clean", kind: "pass" };
+  const copy = messages[locale].status;
+  if (verdict === "fix_recommended") return { label: copy.verdictFix, kind: "suggest" };
+  if (verdict === "block") return { label: copy.verdictBlock, kind: "blocker" };
+  if (verdict === "clean") return { label: copy.verdictClean, kind: "pass" };
   return { label: verdict, kind: "pass" };
 }
 

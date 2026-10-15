@@ -1,14 +1,16 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { GitPullRequest, LayoutDashboard, PanelLeft, Settings } from "lucide-react";
+import { useI18n } from "../ui/i18n.js";
 import { mobileSidebarConcealed } from "../ui/sidebar-state.js";
+import { LanguageSwitch } from "./language-switch.js";
 import { ThemeToggle } from "./theme.js";
 
 export type ShellSection = "overview" | "reviews" | "settings";
 
 const NAV = [
-  ["overview", "/ui", "Overview", LayoutDashboard],
-  ["reviews", "/ui/reviews", "Reviews", GitPullRequest],
-  ["settings", "/ui/settings", "Settings", Settings],
+  ["overview", "/ui", LayoutDashboard],
+  ["reviews", "/ui/reviews", GitPullRequest],
+  ["settings", "/ui/settings", Settings],
 ] as const;
 
 export function AppShell({
@@ -29,6 +31,8 @@ export function AppShell({
   const sidebarRef = useRef<HTMLElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   useMobileSidebar(sidebarRef);
+  const { m } = useI18n();
+  const labels = { overview: m.shell.overview, reviews: m.shell.reviews, settings: m.shell.settings };
   const active = current;
   const column = (
     <>
@@ -37,7 +41,8 @@ export function AppShell({
           ref={toggleRef}
           type="button"
           className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label="Toggle sidebar"
+          data-sidebar-toggle=""
+          aria-label={m.shell.toggleSidebar}
           onClick={() => toggleNav(sidebarRef.current, toggleRef.current)}
         >
           <PanelLeft className="size-4" />
@@ -62,14 +67,14 @@ export function AppShell({
   return (
     <div className="flex h-full min-h-0 overflow-hidden bg-background text-foreground">
       <a className="skip-link" href="#main">
-        Skip to content
+        {m.shell.skip}
       </a>
-      <button type="button" className="mobile-backdrop fixed inset-0 z-30 bg-black/40" aria-label="Close menu" onClick={closeMobile} />
+      <button type="button" className="mobile-backdrop fixed inset-0 z-30 bg-black/40" aria-label={m.shell.closeMenu} onClick={closeMobile} />
       <aside
         ref={sidebarRef}
         tabIndex={-1}
         className="app-sidebar flex h-full shrink-0 flex-col border-r bg-background focus:outline-none"
-        aria-label="Sidebar"
+        aria-label={m.shell.sidebar}
       >
         <div className="flex h-12 items-center px-3">
           <a href="/ui" className="flex min-w-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={closeMobile}>
@@ -77,8 +82,9 @@ export function AppShell({
             <span className="brand-name truncate text-sm font-medium">dureview</span>
           </a>
         </div>
-        <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2" aria-label="Dashboard">
-          {NAV.map(([id, href, label, Icon]) => {
+        <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2" aria-label={m.shell.dashboard}>
+          {NAV.map(([id, href, Icon]) => {
+            const label = labels[id];
             const on = active === id;
             return (
               <a
@@ -100,8 +106,8 @@ export function AppShell({
           })}
         </nav>
         <div className="border-t">
-          <div className="sidebar-theme flex items-center justify-between gap-2 px-2 py-2">
-            <span className="sidebar-theme-label nav-label px-1 text-xs text-muted-foreground">Theme</span>
+          <div className="sidebar-tools">
+            <LanguageSwitch />
             <ThemeToggle />
           </div>
         </div>
@@ -175,5 +181,5 @@ function closeMobile(): void {
   const root = document.documentElement;
   if (root.dataset.mobileNav !== "open") return;
   delete root.dataset.mobileNav;
-  document.querySelector<HTMLButtonElement>('[aria-label="Toggle sidebar"]')?.focus();
+  document.querySelector<HTMLButtonElement>("[data-sidebar-toggle]")?.focus();
 }

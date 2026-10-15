@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { fill } from "../ui/format.js";
+import { useI18n } from "../ui/i18n.js";
 import type { ReviewListModel, ReviewRowView } from "../ui/list-model.js";
 import { compareReviewRows } from "../ui/list-sort.js";
 import { AppShell } from "./app-shell.js";
@@ -12,83 +14,91 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 
 const PAGE_SIZE = 10;
 
-const RESULTS: Array<[string, string]> = [
-  ["", "All results"],
-  ["pass", "Pass"],
-  ["suggest", "Suggestions"],
-  ["blocker", "P0/P1"],
-  ["error", "Error"],
-  ["running", "Running"],
-];
-
-const SINCE: Array<[string, string]> = [
-  ["", "Any time"],
-  ["24h", "Last 24 hours"],
-  ["7d", "Last 7 days"],
-  ["30d", "Last 30 days"],
-];
+const RESULT_KEYS = ["", "pass", "suggest", "blocker", "error", "running"] as const;
+const SINCE_KEYS = ["", "24h", "7d", "30d"] as const;
 
 const SORT_KEYS = ["repo", "title", "trigger", "result", "p0", "p1", "p2", "p3", "duration", "when"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
 export function ReviewListView({ model, search = "" }: { model: ReviewListModel; search?: string }) {
+  const { m } = useI18n();
+  const copy = m.reviews;
   const view = pageRows(model.reviews, search);
-  const count = model.total === model.shown ? `${model.shown} shown` : `${model.shown} shown of ${model.total}`;
+  const count = model.total === model.shown ? fill(copy.shown, { count: model.shown }) : fill(copy.shownOf, { shown: model.shown, total: model.total });
+  const since = SINCE_KEYS.map((value) => ({
+    value,
+    label: value === "" ? copy.anyTime : copy.since[value],
+  }));
+  const results = RESULT_KEYS.map((value) => ({
+    value,
+    label:
+      value === ""
+        ? copy.allResults
+        : value === "pass"
+          ? m.status.pass
+          : value === "suggest"
+            ? m.status.suggest
+            : value === "blocker"
+              ? m.status.blocker
+              : value === "error"
+                ? m.status.error
+                : m.status.running,
+  }));
   return (
-    <AppShell current="reviews" title="Reviews" form={{ method: "get", action: "/ui/reviews" }}>
+    <AppShell current="reviews" title={m.shell.reviews} form={{ method: "get", action: "/ui/reviews" }}>
       <section className="flex flex-col gap-4">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <p className="max-w-prose text-sm leading-6 text-muted-foreground">Latest reviews. Open a row for the diff.</p>
+          <p className="max-w-prose text-sm leading-6 text-muted-foreground">{copy.lede}</p>
           <p className="text-xs text-muted-foreground tabular-nums">{count}</p>
         </div>
         <div className="flex flex-wrap items-end gap-3 border-b pb-4">
-            <Filter label="Repository">
+            <Filter label={copy.repository}>
               <FormSelect
                 name="repo"
                 defaultValue={model.form.repo}
-                options={[{ value: "", label: "All repositories" }, ...model.repos.map((repo) => ({ value: repo, label: repo }))]}
+                options={[{ value: "", label: copy.allRepos }, ...model.repos.map((repo) => ({ value: repo, label: repo }))]}
                 submitOnChange
                 className="h-8 w-44 text-xs"
               />
             </Filter>
-            <Filter label="Time">
+            <Filter label={copy.time}>
               <FormSelect
                 name="since"
                 defaultValue={model.form.since}
-                options={SINCE.map(([value, label]) => ({ value, label }))}
+                options={since}
                 submitOnChange
                 className="h-8 text-xs"
               />
             </Filter>
-            <Filter label="Result">
+            <Filter label={copy.result}>
               <FormSelect
                 name="result"
                 defaultValue={model.form.result}
-                options={RESULTS.map(([value, label]) => ({ value, label }))}
+                options={results}
                 submitOnChange
                 className="h-8 text-xs"
               />
             </Filter>
-            <Filter label="From">
+            <Filter label={copy.from}>
               <Input type="date" name="from" defaultValue={model.form.from} className="h-8 w-36 text-xs" onChange={submitForm} />
             </Filter>
-            <Filter label="To">
+            <Filter label={copy.to}>
               <Input type="date" name="to" defaultValue={model.form.to} className="h-8 w-36 text-xs" onChange={submitForm} />
             </Filter>
-            <Filter label="Search" className="min-w-48 flex-1">
-              <Input type="search" name="q" defaultValue={model.form.q} placeholder="Title, repository, or PR" className="h-8 text-xs" />
+            <Filter label={copy.search} className="min-w-48 flex-1">
+              <Input type="search" name="q" defaultValue={model.form.q} placeholder={copy.searchPlaceholder} className="h-8 text-xs" />
             </Filter>
             <Button type="submit" size="sm">
-              Apply
+              {copy.apply}
             </Button>
             {model.filtered ? (
               <a className="text-sm text-muted-foreground underline-offset-4 hover:underline" href="/ui/reviews">
-                Clear
+                {copy.clear}
               </a>
             ) : null}
         </div>
-        {model.empty === "none" ? <p className="text-sm text-muted-foreground">No reviews yet.</p> : null}
-        {model.empty === "filtered" ? <p className="text-sm text-muted-foreground">No reviews match these filters.</p> : null}
+        {model.empty === "none" ? <p className="text-sm text-muted-foreground">{copy.empty}</p> : null}
+        {model.empty === "filtered" ? <p className="text-sm text-muted-foreground">{copy.emptyFiltered}</p> : null}
         {model.reviews.length > 0 ? (
           <>
             <ReviewTable rows={view.rows} search={search} sort={view.sort} dir={view.dir} count={count} />
@@ -96,20 +106,20 @@ export function ReviewListView({ model, search = "" }: { model: ReviewListModel;
                 <div className="flex items-center justify-end gap-2 text-xs">
                   {view.page > 1 ? (
                     <a className={buttonVariants({ variant: "outline", size: "sm" })} href={listHref(search, { page: view.page === 2 ? null : String(view.page - 1) })}>
-                      Previous
+                      {copy.previous}
                     </a>
                   ) : (
-                    <span className="px-3 text-muted-foreground">Previous</span>
+                    <span className="px-3 text-muted-foreground">{copy.previous}</span>
                   )}
                   <span className="tabular-nums text-muted-foreground">
-                    Page {view.page} of {view.pages}
+                    {fill(copy.page, { page: view.page, pages: view.pages })}
                   </span>
                   {view.page < view.pages ? (
                     <a className={buttonVariants({ variant: "outline", size: "sm" })} href={listHref(search, { page: String(view.page + 1) })}>
-                      Next
+                      {copy.next}
                     </a>
                   ) : (
-                    <span className="px-3 text-muted-foreground">Next</span>
+                    <span className="px-3 text-muted-foreground">{copy.next}</span>
                   )}
                 </div>
               ) : null}
@@ -141,21 +151,23 @@ function ReviewTable({
   dir: "asc" | "desc";
   count: string;
 }) {
+  const { m } = useI18n();
+  const columns = m.reviews.columns;
   return (
     <Table>
-      <caption className="sr-only">Reviews, {count}</caption>
+      <caption className="sr-only">{fill(m.reviews.caption, { count })}</caption>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
-          <SortHead label="Repository" sortKey="repo" search={search} sort={sort} dir={dir} />
-          <SortHead label="Title" sortKey="title" search={search} sort={sort} dir={dir} />
-          <SortHead label="Trigger" sortKey="trigger" search={search} sort={sort} dir={dir} />
-          <SortHead label="Result" sortKey="result" search={search} sort={sort} dir={dir} />
+          <SortHead label={columns.repository} sortKey="repo" search={search} sort={sort} dir={dir} />
+          <SortHead label={columns.title} sortKey="title" search={search} sort={sort} dir={dir} />
+          <SortHead label={columns.trigger} sortKey="trigger" search={search} sort={sort} dir={dir} />
+          <SortHead label={columns.result} sortKey="result" search={search} sort={sort} dir={dir} />
           <SortHead label="P0" sortKey="p0" search={search} sort={sort} dir={dir} align="right" className="text-red-700 dark:text-red-400" />
           <SortHead label="P1" sortKey="p1" search={search} sort={sort} dir={dir} align="right" className="text-orange-700 dark:text-orange-400" />
           <SortHead label="P2" sortKey="p2" search={search} sort={sort} dir={dir} align="right" className="text-amber-700 dark:text-amber-400" />
           <SortHead label="P3" sortKey="p3" search={search} sort={sort} dir={dir} align="right" />
-          <SortHead label="Duration" sortKey="duration" search={search} sort={sort} dir={dir} align="right" />
-          <SortHead label="When" sortKey="when" search={search} sort={sort} dir={dir} />
+          <SortHead label={columns.duration} sortKey="duration" search={search} sort={sort} dir={dir} align="right" />
+          <SortHead label={columns.when} sortKey="when" search={search} sort={sort} dir={dir} />
         </TableRow>
       </TableHeader>
       <TableBody>

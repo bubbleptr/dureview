@@ -165,11 +165,18 @@ html[data-sidebar="collapsed"] .app-sidebar {
   width: 3.25rem;
 }
 html[data-sidebar="collapsed"] .nav-label,
-html[data-sidebar="collapsed"] .brand-name,
-html[data-sidebar="collapsed"] .sidebar-theme-label {
+html[data-sidebar="collapsed"] .brand-name {
   display: none;
 }
-html[data-sidebar="collapsed"] .sidebar-theme {
+.sidebar-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+html[data-sidebar="collapsed"] .sidebar-tools {
+  flex-direction: column;
   justify-content: center;
 }
 html[data-sidebar="collapsed"] .nav-link {
@@ -197,11 +204,11 @@ html[data-sidebar="collapsed"] .nav-link {
     width: 16rem;
   }
   html[data-sidebar="collapsed"] .nav-label,
-  html[data-sidebar="collapsed"] .brand-name,
-  html[data-sidebar="collapsed"] .sidebar-theme-label {
+  html[data-sidebar="collapsed"] .brand-name {
     display: revert;
   }
-  html[data-sidebar="collapsed"] .sidebar-theme {
+  html[data-sidebar="collapsed"] .sidebar-tools {
+    flex-direction: row;
     justify-content: space-between;
   }
   html[data-sidebar="collapsed"] .nav-link {

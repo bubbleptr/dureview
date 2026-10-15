@@ -13,12 +13,13 @@ export const getReviewList = createServerFn({ method: "GET" })
     const { getRequest } = await import("@tanstack/react-start/server");
     const { getRuntime, listContext } = await import("../app/runtime.js");
     const { uiSession } = await import("../http/auth.js");
+    const { resolveLocale } = await import("./locale.js");
     const { buildReviewList, searchParamsFrom } = await import("./list-data.js");
     const runtime = await getRuntime();
     const request = getRequest();
     if (uiSession(request, runtime.config.uiToken) !== "ok") {
       return { kind: "login", next: data.next };
     }
-    const model = await buildReviewList(listContext(runtime), searchParamsFrom(data.search));
+    const model = await buildReviewList(listContext(runtime), searchParamsFrom(data.search), Date.now(), resolveLocale(request));
     return { kind: "list", model };
   });

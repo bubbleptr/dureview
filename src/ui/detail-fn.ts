@@ -10,7 +10,7 @@ export const getReviewHeader = createServerFn({ method: "GET" })
     const opened = await openDetail(data.taskId);
     if (opened.kind !== "ready") return opened;
     const { loadReviewHeader } = await import("./detail-data.js");
-    const header = await loadReviewHeader(opened.runtime.service, opened.runtime.config.githubApiUrl, opened.taskId);
+    const header = await loadReviewHeader(opened.runtime.service, opened.runtime.config.githubApiUrl, opened.taskId, Date.now(), opened.locale);
     if (!header) return { kind: "missing" };
     return { kind: "header", header };
   });
@@ -21,7 +21,7 @@ export const getReviewDetail = createServerFn({ method: "GET" })
     const opened = await openDetail(data.taskId);
     if (opened.kind !== "ready") return opened;
     const { loadReviewDetail } = await import("./detail-data.js");
-    const model = await loadReviewDetail(opened.runtime.service, opened.runtime.config.githubApiUrl, opened.taskId);
+    const model = await loadReviewDetail(opened.runtime.service, opened.runtime.config.githubApiUrl, opened.taskId, Date.now(), opened.locale);
     if (!model) return { kind: "missing" };
     const { reviewTreePreload } = await import("./review-preload.js");
     return { kind: "detail", model, tree: reviewTreePreload(model.files) };
@@ -36,15 +36,16 @@ function taskInput(input: { taskId: string }): { taskId: string } {
 async function openDetail(taskId: string): Promise<
   | { kind: "login"; next: string }
   | { kind: "missing" }
-  | { kind: "ready"; runtime: Awaited<ReturnType<typeof import("../app/runtime.js").getRuntime>>; taskId: string }
+  | { kind: "ready"; runtime: Awaited<ReturnType<typeof import("../app/runtime.js").getRuntime>>; taskId: string; locale: import("./locale.js").Locale }
 > {
   const { getRequest } = await import("@tanstack/react-start/server");
   const { getRuntime } = await import("../app/runtime.js");
+  const { resolveLocale } = await import("./locale.js");
   const { uiSession } = await import("../http/auth.js");
   const runtime = await getRuntime();
   const request = getRequest();
   const next = safeNextPath(taskId ? `/ui/reviews/${taskId}` : "/ui");
   if (uiSession(request, runtime.config.uiToken) !== "ok") return { kind: "login", next };
   if (!taskId) return { kind: "missing" };
-  return { kind: "ready", runtime, taskId };
+  return { kind: "ready", runtime, taskId, locale: resolveLocale(request) };
 }

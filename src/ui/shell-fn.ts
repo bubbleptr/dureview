@@ -9,9 +9,11 @@ export const getShellStatus = createServerFn({ method: "GET" }).handler(async ()
   const { getRuntime, listContext } = await import("../app/runtime.js");
   const { uiSession } = await import("../http/auth.js");
   const { loadDashboard } = await import("./status.js");
+  const { resolveLocale } = await import("./locale.js");
   const { codexPhrase, formatUptime } = await import("./page.js");
   const runtime = await getRuntime();
   const request = getRequest();
+  const locale = resolveLocale(request);
   if (uiSession(request, runtime.config.uiToken) !== "ok") return null;
   const ctx = listContext(runtime);
   const status = await loadDashboard({
@@ -29,7 +31,7 @@ export const getShellStatus = createServerFn({ method: "GET" }).handler(async ()
     provider: status.provider,
     model: status.model,
     thinking: ctx.thinking,
-    codex: codexPhrase(status.codex),
+    codex: codexPhrase(status.codex, Date.now(), locale),
     githubApp: status.githubApp,
     githubToken: status.githubToken,
   };

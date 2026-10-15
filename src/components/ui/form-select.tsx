@@ -2,6 +2,7 @@ import { ChevronDown } from "lucide-react";
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { cn } from "../../lib/utils.js";
+import { useI18n } from "../../ui/i18n.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "./select.js";
 
@@ -24,7 +25,7 @@ export function FormSelect({
   value,
   defaultValue,
   options,
-  placeholder = "Select",
+  placeholder,
   onValueChange,
   submitOnChange = false,
   className,
@@ -43,11 +44,13 @@ export function FormSelect({
   disabled?: boolean;
   variant?: "auto" | "select" | "combobox";
 }) {
+  const { m } = useI18n();
   const generatedId = useId();
   const controlId = id ?? generatedId;
   const [uncontrolled, setUncontrolled] = useState(defaultValue ?? "");
   const selected = value ?? uncontrolled;
-  const label = options.find((option) => option.value === selected)?.label ?? (selected || placeholder);
+  const emptyLabel = placeholder ?? m.select.placeholder;
+  const label = options.find((option) => option.value === selected)?.label ?? (selected || emptyLabel);
   const combobox = variant === "combobox" || (variant === "auto" && options.length >= LONG_LIST);
 
   function commit(next: string, form: HTMLFormElement | null): void {
@@ -148,6 +151,7 @@ function FormCombobox({
   onCommit: (value: string, form: HTMLFormElement | null) => void;
   children: ReactNode;
 }) {
+  const { m } = useI18n();
   const listId = `${id}-list`;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -228,12 +232,12 @@ function FormCombobox({
       <PopoverContent>
         <div className="border-b p-1">
           <input
-            aria-label="Filter"
+            aria-label={m.select.filter}
             aria-controls={listId}
             aria-activedescendant={shownOption ? optionId(id, shownOption.value) : undefined}
             className="h-8 w-full bg-transparent px-2 text-sm outline-none"
             value={query}
-            placeholder="Filter"
+            placeholder={m.select.filter}
             onChange={(event) => {
               setQuery(event.target.value);
               highlightFromKeyboard(0);
@@ -259,7 +263,7 @@ function FormCombobox({
           />
         </div>
         <ul id={listId} role="listbox" className="max-h-72 overflow-auto p-1">
-          {filtered.length === 0 ? <li className="px-2 py-1.5 text-sm text-muted-foreground">No matches.</li> : null}
+          {filtered.length === 0 ? <li className="px-2 py-1.5 text-sm text-muted-foreground">{m.select.noMatches}</li> : null}
           {filtered.map((option, index) => {
             const on = option.value === selected;
             return (
