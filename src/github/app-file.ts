@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -14,6 +15,7 @@ export type StoredGitHubApp = {
 export class GitHubAppFile {
   #current: StoredGitHubApp | undefined;
   #unreadable = false;
+  #chain: Promise<unknown> = Promise.resolve();
 
   private constructor(private readonly file: string) {}
 
@@ -32,21 +34,42 @@ export class GitHubAppFile {
   }
 
   async save(app: StoredGitHubApp): Promise<void> {
-    await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
-    await chmod(dirname(this.file), 0o700);
-    const tmp = `${this.file}.${process.pid}.tmp`;
-    await writeFile(tmp, `${JSON.stringify(app, null, 2)}\n`, { mode: 0o600 });
-    await chmod(tmp, 0o600);
-    await rename(tmp, this.file);
-    await chmod(this.file, 0o600);
-    this.#current = app;
-    this.#unreadable = false;
+    await this.#exclusive(() => this.#write(app));
   }
 
   async clear(): Promise<void> {
-    await rm(this.file, { force: true });
-    this.#current = undefined;
-    this.#unreadable = false;
+    await this.#exclusive(async () => {
+      await rm(this.file, { force: true });
+      this.#current = undefined;
+      this.#unreadable = false;
+    });
+  }
+
+  async #exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.#chain.then(fn, fn);
+    this.#chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  async #write(app: StoredGitHubApp): Promise<void> {
+    await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
+    await chmod(dirname(this.file), 0o700);
+    // Two conversions in one process used to share `${file}.${pid}.tmp`, so one rename deleted the other's bytes.
+    const tmp = `${this.file}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+    try {
+      await writeFile(tmp, `${JSON.stringify(app, null, 2)}\n`, { mode: 0o600 });
+      await chmod(tmp, 0o600);
+      await rename(tmp, this.file);
+      await chmod(this.file, 0o600);
+      this.#current = app;
+      this.#unreadable = false;
+    } catch (error) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   async #load(): Promise<void> {

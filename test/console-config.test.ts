@@ -1,6 +1,7 @@
-import { stat } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AuthPrompt } from "@earendil-works/pi-ai";
@@ -14,7 +15,7 @@ import { publicAuthError, subscriptionView } from "../src/auth/reveal.js";
 import { FileCredentialStore } from "../src/auth/store.js";
 import { assertServeConfig, configFromEnv, editableBaseline } from "../src/config.js";
 import { activeGitHub, activeWebhookSecret, githubSetupView } from "../src/github/access.js";
-import { GitHubAppFile } from "../src/github/app-file.js";
+import { GitHubAppFile, parseStoredGitHubApp } from "../src/github/app-file.js";
 import { exchangeAppManifest, manifestCreateUrl, manifestHandoffPage } from "../src/github/manifest.js";
 import { postIsSameOrigin, settingsCsrfToken } from "../src/http/csrf.js";
 import { REVIEWS_DB_FILE } from "../src/review/archive.js";
@@ -232,7 +233,181 @@ describe("GitHub App file", () => {
     expect(app.privateKey).toContain("PRIVATE KEY");
     expect(JSON.stringify(app)).not.toContain("CLIENT-SECRET");
   });
+
+  it("keeps the file and the in-memory app aligned when saves overlap", async () => {
+    const file = join(await tempDataDir(), "github-app.json");
+    const apps = await GitHubAppFile.open(file);
+    const first = { ...stored, appId: "11", name: "first" };
+    const second = { ...stored, appId: "22", name: "second" };
+    await Promise.all([apps.save(first), apps.save(second)]);
+    const text = await readFile(file, "utf8");
+    const onDisk = parseStoredGitHubApp(JSON.parse(text));
+    expect(onDisk).toEqual(second);
+    expect(apps.current()).toEqual(second);
+    const reloaded = await GitHubAppFile.open(file);
+    expect(reloaded.current()).toEqual(second);
+    const names = await readdir(dirname(file));
+    expect(names.filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
 });
+
+describe("GitHub setup exchange", () => {
+  it("holds the pending setup until the manifest exchange finishes", async () => {
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const seen: string[] = [];
+    const server = createServer((req, res) => {
+      const code = /^\/app-manifests\/([^/]+)\/conversions$/.exec(req.url ?? "")?.[1];
+      if (req.method !== "POST" || !code) {
+        res.writeHead(404).end();
+        return;
+      }
+      seen.push(code);
+      void gate.then(() => {
+        const first = code === "firstcode";
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(manifestPayload(first ? 11 : 22, first ? "first" : "second"));
+      });
+    });
+    const port = await listen(server);
+    try {
+      const dataDir = await tempDataDir();
+      const { service } = await openTestService({
+        dataDir,
+        github: new MemoryGitHub(),
+        responses: [],
+        githubApiUrl: `http://127.0.0.1:${port}`,
+      });
+      try {
+        const handoff = service.beginGitHubSetup("http://127.0.0.1", "");
+        const state = setupState(handoff);
+        const mismatch = await service.finishGitHubSetup("0".repeat(64), "firstcode");
+        expect(mismatch).toEqual({ ok: false, error: "GitHub setup expired. Start it again from settings." });
+
+        const finishing = service.finishGitHubSetup(state, "firstcode");
+        const again = service.beginGitHubSetup("http://127.0.0.1", "");
+        expect(again?.status).toBe(303);
+        expect(again?.headers.get("location")).toContain("already%20finishing");
+        const second = await service.finishGitHubSetup(state, "secondcode");
+        expect(second).toEqual({ ok: false, error: "GitHub setup is already finishing. Start it again from settings." });
+
+        release();
+        expect(await finishing).toEqual({ ok: true });
+        expect(seen).toEqual(["firstcode"]);
+        const saved = await GitHubAppFile.open(join(dataDir, "github-app.json"));
+        expect(saved.current()).toMatchObject({ appId: "11", name: "first" });
+
+        const restarted = service.beginGitHubSetup("http://127.0.0.1", "");
+        expect(restarted?.status).toBe(200);
+        expect(setupState(restarted)).not.toBe(state);
+      } finally {
+        release();
+        await service.close();
+      }
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("releases the setup lock when the manifest body never finishes", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('{"id":');
+    });
+    const port = await listen(server);
+    try {
+      const dataDir = await tempDataDir();
+      const { service } = await openTestService({
+        dataDir,
+        github: new MemoryGitHub(),
+        responses: [],
+        githubApiUrl: `http://127.0.0.1:${port}`,
+      });
+      try {
+        const state = setupState(service.beginGitHubSetup("http://127.0.0.1", ""));
+        const started = Date.now();
+        const failed = await service.finishGitHubSetup(state, "firstcode", AbortSignal.timeout(200));
+        expect(Date.now() - started).toBeLessThan(2_000);
+        expect(failed.ok).toBe(false);
+        const restarted = service.beginGitHubSetup("http://127.0.0.1", "");
+        expect(restarted?.status).toBe(200);
+        expect(setupState(restarted)).not.toBe(state);
+      } finally {
+        await service.close();
+      }
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+    }
+  });
+
+  it("clears a failed exchange so setup can start again", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(422).end("nope");
+    });
+    const port = await listen(server);
+    try {
+      const dataDir = await tempDataDir();
+      const { service } = await openTestService({
+        dataDir,
+        github: new MemoryGitHub(),
+        responses: [],
+        githubApiUrl: `http://127.0.0.1:${port}`,
+      });
+      try {
+        const state = setupState(service.beginGitHubSetup("http://127.0.0.1", ""));
+        const failed = await service.finishGitHubSetup(state, "firstcode");
+        expect(failed.ok).toBe(false);
+        const restarted = service.beginGitHubSetup("http://127.0.0.1", "");
+        expect(restarted?.status).toBe(200);
+        expect(setupState(restarted)).not.toBe(state);
+      } finally {
+        await service.close();
+      }
+    } finally {
+      await closeServer(server);
+    }
+  });
+});
+
+function manifestPayload(id: number, name: string): string {
+  return JSON.stringify({
+    id,
+    pem: PEM,
+    webhook_secret: "whsec-canary-abcd",
+    slug: "dureview",
+    name,
+    html_url: "https://github.com/apps/dureview",
+  });
+}
+
+function setupState(response: Response | null): string {
+  const state = /dureview_github_setup=([a-f0-9]{64})/.exec(response?.headers.get("set-cookie") ?? "")?.[1];
+  if (!state) throw new Error("missing GitHub setup state");
+  return state;
+}
+
+function listen(server: Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("test server has no port"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
 
 describe("device-code login", () => {
   it("forces the device-code choice and shows only the code", async () => {

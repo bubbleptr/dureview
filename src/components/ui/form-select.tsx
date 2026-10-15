@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { cn } from "../../lib/utils.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
@@ -152,14 +152,46 @@ function FormCombobox({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const pointer = useRef<PointerPoint | null>(null);
+  const frozenPointer = useRef<PointerPoint | null>(null);
   const filtered = filterOptions(options, query);
   const shown = Math.min(active, Math.max(0, filtered.length - 1));
+  const shownOption = shown >= 0 ? filtered[shown] : undefined;
+
+  useLayoutEffect(() => {
+    if (!open || !shownOption) return;
+    let frame = 0;
+    let tries = 0;
+    const reveal = () => {
+      const list = document.getElementById(listId);
+      const node = document.getElementById(optionId(id, shownOption.value));
+      // The option list is portaled after this commit, so the first pass can run before it has a box.
+      if (!list || !node || list.clientHeight <= 0) {
+        if (tries++ < 8) frame = requestAnimationFrame(reveal);
+        return;
+      }
+      const listRect = list.getBoundingClientRect();
+      const nodeRect = node.getBoundingClientRect();
+      const next = listScrollTopForOption(
+        { scrollTop: list.scrollTop, clientHeight: list.clientHeight },
+        { top: nodeRect.top - listRect.top + list.scrollTop, height: nodeRect.height },
+      );
+      if (next !== list.scrollTop) list.scrollTop = next;
+    };
+    reveal();
+    return () => cancelAnimationFrame(frame);
+  }, [open, shownOption, listId, id]);
 
   function choose(next: string): void {
     const form = document.getElementById(id)?.closest("form") ?? null;
     setOpen(false);
     setQuery("");
     onCommit(next, form);
+  }
+
+  function highlightFromKeyboard(next: number | ((current: number) => number)): void {
+    frozenPointer.current = pointer.current;
+    setActive(next);
   }
 
   return (
@@ -169,6 +201,8 @@ function FormCombobox({
         setOpen(next);
         if (next) {
           setQuery("");
+          pointer.current = null;
+          frozenPointer.current = null;
           const index = options.findIndex((option) => option.value === selected);
           setActive(index >= 0 ? index : 0);
         }
@@ -196,31 +230,30 @@ function FormCombobox({
           <input
             aria-label="Filter"
             aria-controls={listId}
-            aria-activedescendant={filtered[shown] ? optionId(id, filtered[shown].value) : undefined}
+            aria-activedescendant={shownOption ? optionId(id, shownOption.value) : undefined}
             className="h-8 w-full bg-transparent px-2 text-sm outline-none"
             value={query}
             placeholder="Filter"
             onChange={(event) => {
               setQuery(event.target.value);
-              setActive(0);
+              highlightFromKeyboard(0);
             }}
             onKeyDown={(event) => {
               if (event.key === "ArrowDown") {
                 event.preventDefault();
-                setActive((current) => Math.min(filtered.length - 1, current + 1));
+                highlightFromKeyboard((current) => Math.min(filtered.length - 1, current + 1));
               } else if (event.key === "ArrowUp") {
                 event.preventDefault();
-                setActive((current) => Math.max(0, current - 1));
+                highlightFromKeyboard((current) => Math.max(0, current - 1));
               } else if (event.key === "Home") {
                 event.preventDefault();
-                setActive(0);
+                highlightFromKeyboard(0);
               } else if (event.key === "End") {
                 event.preventDefault();
-                setActive(Math.max(0, filtered.length - 1));
+                highlightFromKeyboard(Math.max(0, filtered.length - 1));
               } else if (event.key === "Enter") {
                 event.preventDefault();
-                const option = filtered[shown];
-                if (option) choose(option.value);
+                if (shownOption) choose(shownOption.value);
               }
             }}
           />
@@ -236,7 +269,16 @@ function FormCombobox({
                 role="option"
                 aria-selected={on}
                 className={index === shown ? "flex cursor-default items-center rounded-sm bg-accent px-2 py-1.5 text-sm" : "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm"}
-                onMouseEnter={() => setActive(index)}
+                onPointerEnter={(event) => {
+                  pointer.current = pointerPoint(event);
+                }}
+                onPointerMove={(event) => {
+                  const point = pointerPoint(event);
+                  const decision = activeIndexAfterPointerMove(index, point, frozenPointer.current);
+                  pointer.current = point;
+                  frozenPointer.current = decision.frozen;
+                  if (decision.active !== null) setActive(decision.active);
+                }}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => choose(option.value)}
               >
@@ -248,6 +290,33 @@ function FormCombobox({
       </PopoverContent>
     </Popover>
   );
+}
+
+export type PointerPoint = { x: number; y: number };
+
+/** Options sliding under a stationary pointer are not a hover. The highlight changes only after the pointer coordinates move. */
+export function activeIndexAfterPointerMove(
+  index: number,
+  pointer: PointerPoint,
+  frozen: PointerPoint | null,
+): { active: number | null; frozen: PointerPoint | null } {
+  if (frozen && frozen.x === pointer.x && frozen.y === pointer.y) return { active: null, frozen };
+  return { active: index, frozen: null };
+}
+
+function pointerPoint(event: { clientX: number; clientY: number }): PointerPoint {
+  return { x: event.clientX, y: event.clientY };
+}
+
+export function listScrollTopForOption(
+  list: { scrollTop: number; clientHeight: number },
+  option: { top: number; height: number },
+): number {
+  const optionBottom = option.top + option.height;
+  const viewBottom = list.scrollTop + list.clientHeight;
+  if (option.top < list.scrollTop) return option.top;
+  if (optionBottom > viewBottom) return Math.max(0, optionBottom - list.clientHeight);
+  return list.scrollTop;
 }
 
 function filterOptions(options: readonly FormSelectOption[], query: string): FormSelectOption[] {

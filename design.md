@@ -75,7 +75,8 @@ SaaS landing page. This is an operator console for pull-request review.
   page they apply to, not in the top bar. The top bar is the sidebar control, the
   page title, and a breadcrumb when the review detail page has one.
   Dropdowns use the shadcn Select. A list of eight or more options, and the
-  model catalog, use a combobox with a filter.
+  model catalog, use a combobox with a filter. Keyboard highlight in that
+  combobox scrolls the active option into view.
 - Keep URL filters (`repo`, `result`, `since`, `from`, `to`, `q` on the review
   list; `range`, `repo`, and `tz` on the overview), auth, and server functions.
   Client-only `sort`, `dir`, and `page` must not change those queries' meaning.
