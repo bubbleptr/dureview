@@ -1,3 +1,5 @@
+import { safeNextPath } from "./next-path.js";
+
 export const LOCALES = ["en", "zh-CN"] as const;
 
 export type Locale = (typeof LOCALES)[number];
@@ -56,6 +58,11 @@ export function localeFromMatches(matches: ReadonlyArray<{ loaderData?: unknown 
 
 export function localeCookie(locale: Locale): string {
   return `${LOCALE_COOKIE}=${locale}; Path=/; Max-Age=${COOKIE_MAX_AGE}; SameSite=Lax`;
+}
+
+export function localeHref(locale: Locale, returnTo: string): string {
+  const params = new URLSearchParams({ locale, next: safeNextPath(returnTo) });
+  return `/ui/locale?${params.toString()}`;
 }
 
 export function acceptLanguageTags(header: string | null | undefined): string[] {

@@ -33,7 +33,7 @@ export function SettingsForm({
 }) {
   const settingsCopy = useSettingsCopy();
   return (
-    <AppShell current="settings" title={settingsCopy.title}>
+    <AppShell current="settings" title={settingsCopy.title} returnTo={settingsSectionHref(section)}>
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 md:flex-row md:items-start md:gap-12">
         <SettingsNav section={section} />
         <div data-section={section} className="flex min-w-0 flex-1 flex-col gap-6">

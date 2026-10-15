@@ -19,6 +19,7 @@ export function AppShell({
   crumbs,
   form,
   fill,
+  returnTo,
   children,
 }: {
   current: ShellSection;
@@ -26,6 +27,7 @@ export function AppShell({
   crumbs?: ReactNode;
   form?: { method: "get" | "post"; action: string };
   fill?: boolean;
+  returnTo?: string;
   children: ReactNode;
 }) {
   const sidebarRef = useRef<HTMLElement>(null);
@@ -107,7 +109,7 @@ export function AppShell({
         </nav>
         <div className="border-t">
           <div className="sidebar-tools">
-            <LanguageSwitch />
+            <LanguageSwitch returnTo={returnTo ?? shellReturnTo(current)} />
             <ThemeToggle />
           </div>
         </div>
@@ -121,6 +123,21 @@ export function AppShell({
       )}
     </div>
   );
+}
+
+function shellReturnTo(current: ShellSection): string {
+  switch (current) {
+    case "overview":
+      return "/ui";
+    case "reviews":
+      return "/ui/reviews";
+    case "settings":
+      return "/ui/settings";
+    default: {
+      const _exhaustive: never = current;
+      return _exhaustive;
+    }
+  }
 }
 
 function useMobileSidebar(sidebarRef: { current: HTMLElement | null }): void {

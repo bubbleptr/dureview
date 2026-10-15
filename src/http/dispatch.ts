@@ -11,6 +11,7 @@ import { renderListHtml, renderLoginHtml, renderOverviewHtml } from "../ui/rende
 import { gateGetPage, uiSession } from "./auth.js";
 import { reviewDetailResponse } from "./detail.js";
 import { htmlResponse, notFoundJson, redirectResponse, unauthorizedJson } from "./headers.js";
+import { localeSwitchResponse } from "./locale.js";
 import { loginPostResponse } from "./login.js";
 import { settingsGetResponse, settingsPostResponse } from "./settings.js";
 import { isKnownSettingsPath, isSettingsCandidate } from "../ui/settings-sections.js";
@@ -31,6 +32,7 @@ export async function dispatch(ctx: DispatchContext, request: Request): Promise<
   if (method === "POST" && pathname === "/webhook") {
     return handleWebhookRequest(ctx.service, ctx.service.configuredWebhookSecret(), request);
   }
+  if (method === "GET" && pathname === "/ui/locale") return localeSwitchResponse(request);
   if (pathname === "/ui/login") return loginDispatch(ctx, request);
   if (isSettingsCandidate(pathname)) {
     if (!isKnownSettingsPath(pathname)) return notFoundJson();

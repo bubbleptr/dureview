@@ -52,9 +52,10 @@ SaaS landing page. This is an operator console for pull-request review.
   favorable, expensive, or large.
 - Dashboard copy is English or Chinese (`zh-CN`). English stays sentence case.
   A language switch sits in the sidebar footer beside the theme control, and on
-  the login page beside that same control. The choice is the `dureview-locale`
-  cookie so the server renders the saved language and the first paint does not
-  flash. With no cookie, any `zh*` `Accept-Language` tag is Chinese and every
+  the login page beside that same control. Each option is a link to
+  `GET /ui/locale`, which sets the `dureview-locale` cookie and redirects to a
+  same-origin UI path, so the switch works on pages that have no scripts. The
+  cookie is what the server reads, so the first paint does not flash. With no cookie, any `zh*` `Accept-Language` tag is Chinese and every
   other tag is English. Login follows that language: English is `Sign in` and
   `Incorrect token.`; Chinese is `登录` and `token 不正确`. GitHub review
   comments and provider or API text stay in the language they were written.

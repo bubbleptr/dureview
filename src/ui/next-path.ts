@@ -3,6 +3,7 @@ export function safeNextPath(value: string | null | undefined): string {
   if (!value) return "/ui";
   const path = value.split("#")[0]?.split("?")[0] ?? "";
   if (path === "/" || path === "/ui" || path === "/ui/") return "/ui";
+  if (path === "/ui/login" || path === "/ui/login/") return "/ui/login";
   if (path === "/ui/reviews" || path === "/ui/reviews/") return "/ui/reviews";
   if (path === "/ui/settings" || path === "/ui/settings/") return "/ui/settings";
   if (path === "/ui/settings/models" || path === "/ui/settings/models/") return "/ui/settings/models";
