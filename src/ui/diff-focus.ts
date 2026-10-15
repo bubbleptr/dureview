@@ -105,7 +105,11 @@ export function findingRanges(lines: readonly DetailLineView[]): Array<{ start: 
   return [...byOrdinal.values()].sort((left, right) => right.priority - left.priority || left.start - right.start);
 }
 
-/** Shadow-DOM CSS that boxes each comment's new-file line range. Lower priorities are painted first. */
+/**
+ * Shadow-DOM CSS that boxes each comment's new-file line range. Lower priorities
+ * are painted first. Dark colors key off `data-theme` on the host because
+ * Safari and Firefox do not support `:host-context()`.
+ */
 export function findingLineCss(ranges: readonly { start: number; end: number; priority: number }[]): string {
   const rules: string[] = [];
   for (const range of ranges) {
@@ -120,7 +124,7 @@ export function findingLineCss(ranges: readonly { start: number; end: number; pr
         `[data-line="${line}"]{box-shadow:${shadow};background:color-mix(in srgb,${color} 12%,transparent);--finding-accent:${color}}`,
       );
       rules.push(
-        `:host-context(.dark) [data-line="${line}"]{background:color-mix(in srgb,${dark} 18%,transparent);--finding-accent:${dark}}`,
+        `:host([data-theme=dark]) [data-line="${line}"]{background:color-mix(in srgb,${dark} 18%,transparent);--finding-accent:${dark}}`,
       );
     }
   }

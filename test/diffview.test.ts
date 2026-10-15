@@ -172,14 +172,17 @@ describe("pull request diff placement", () => {
     expect(tree).toContain("--trees-selected-bg-override:var(--accent)");
     expect(tree).toContain("--trees-search-bg-override:var(--background)");
     expect(tree).toContain("[data-icon-token]{color:var(--muted-foreground)}");
-    expect(tree).toContain(":host-context(.dark){color-scheme:dark}");
+    expect(tree).toContain(":host([data-theme=dark]){color-scheme:dark}");
+    expect(tree).toContain(":host([data-theme=light]){color-scheme:light}");
+    expect(tree).not.toContain(":host-context(");
     expect(tree).not.toContain("#e5e5e5");
 
     const diff = reviewDiffOptions({ diffStyle: "unified", themeType: "dark", lines: [] }).unsafeCSS;
     expect(diff).toContain("--diffs-light-bg:var(--background)");
     expect(diff).toContain("--diffs-dark-bg:var(--background)");
     expect(diff).toContain("--diffs-light:var(--foreground)");
-    expect(diff).toContain(":host-context(.dark){color-scheme:dark}");
+    expect(diff).toContain(":host([data-theme=dark]){color-scheme:dark}");
+    expect(diff).not.toContain(":host-context(");
   });
 
   it("shows status instead of zero counts, and one tag when kind and category match", async () => {

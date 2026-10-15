@@ -5,14 +5,16 @@ import { findingLineCss, findingRanges } from "./diff-focus.js";
 
 export const REVIEW_DIFF_THEME: ThemeTypes = "light";
 
+const HOST_SCHEME = ":host([data-theme=light]){color-scheme:light}:host([data-theme=dark]){color-scheme:dark}";
+
 /**
- * The tree shadow host sets `color-scheme: light dark`, so `light-dark()`
- * follows the OS and the panel stays on the light palette when the page is
- * `.dark`. This later layer pins the scheme to the app theme and maps the
- * chrome onto the page tokens.
+ * Safari and Firefox drop `:host-context()`, and the tree host sets
+ * `color-scheme: light dark`, so `light-dark()` would follow the OS.
+ * The page sets `data-theme` on the host; this later layer maps the chrome
+ * onto the page tokens.
  */
 export const REVIEW_TREE_CSS = [
-  ":host{color-scheme:light;",
+  ":host{",
   "--trees-bg-override:var(--background);",
   "--trees-fg-override:var(--foreground);",
   "--trees-fg-muted-override:var(--muted-foreground);",
@@ -30,7 +32,7 @@ export const REVIEW_TREE_CSS = [
   "--trees-file-icon-color:var(--muted-foreground);",
   "--trees-file-icon-vermilion:var(--muted-foreground);",
   "--trees-file-icon-cyan:var(--muted-foreground)}",
-  ":host-context(.dark){color-scheme:dark}",
+  HOST_SCHEME,
   "[data-icon-token]{color:var(--muted-foreground)}",
   "[data-file-tree-search-input]{font-family:var(--font-sans)}",
 ].join("");
@@ -61,18 +63,18 @@ export const REVIEW_EXPAND_CSS =
   "[data-expand-button][data-expand-all-button]{display:flex}[data-expand-index] [data-separator-wrapper][data-separator-multi-button]{grid-template-columns:32px 32px minmax(0,1fr) auto}";
 
 /**
- * The diff host also sets `color-scheme: light dark`. Point both scheme
- * branches at the page tokens so the panel cannot stay on the library's
- * white surface when the app theme is dark.
+ * The diff host also sets `color-scheme: light dark`. Both branches point at
+ * the page tokens, and `data-theme` on the host picks the scheme. `:host-context()`
+ * does not exist in Safari or Firefox.
  */
 export const REVIEW_DIFF_SURFACE_CSS = [
-  ":host{color-scheme:light;",
+  ":host{",
   "--diffs-light-bg:var(--background);",
   "--diffs-dark-bg:var(--background);",
   "--diffs-light:var(--foreground);",
   "--diffs-dark:var(--foreground);",
   "--diffs-font-family:var(--font-mono)}",
-  ":host-context(.dark){color-scheme:dark}",
+  HOST_SCHEME,
 ].join("");
 
 export type ReviewTreePreload = {
