@@ -19,6 +19,8 @@ export const DEFAULT_SKIP_DRAFTS = false;
 
 export const DEFAULT_CHECKOUT_TTL_DAYS = 30;
 
+export const DEFAULT_MAX_OUTPUT_TOKENS = 16_000;
+
 export const DEFAULT_PROVIDER = "openai-codex" as const;
 
 const THINKING_LEVELS = new Set<ModelThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -46,6 +48,7 @@ export type Config = {
   defaultTrigger: ReviewTrigger;
   /** Checkouts older than this are deleted. `0` deletes every checkout that no review is using. */
   checkoutTtlDays: number;
+  maxOutputTokens: number;
 };
 
 /**
@@ -59,6 +62,7 @@ export type EditableBaseline = {
   defaultTrigger: ReviewTrigger | undefined;
   skipDrafts: boolean | undefined;
   checkoutTtlDays: number | undefined;
+  maxOutputTokens: number | undefined;
   provider: ProviderName | undefined;
 };
 
@@ -82,6 +86,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     uiToken: emptyToUndefined(env.DUREVIEW_UI_TOKEN)?.trim(),
     defaultTrigger: baseline.defaultTrigger ?? BUILTIN_DEFAULT_TRIGGER,
     checkoutTtlDays: baseline.checkoutTtlDays ?? DEFAULT_CHECKOUT_TTL_DAYS,
+    maxOutputTokens: baseline.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
   };
 }
 
@@ -93,6 +98,7 @@ export function editableBaseline(env: NodeJS.ProcessEnv = process.env): Editable
     defaultTrigger: triggerFromEnv(env.DUREVIEW_DEFAULT_TRIGGER),
     skipDrafts: skipDraftsFromEnv(env.DUREVIEW_SKIP_DRAFTS),
     checkoutTtlDays: checkoutTtlFromEnv(env.DUREVIEW_CHECKOUT_TTL_DAYS),
+    maxOutputTokens: maxOutputTokensFromEnv(env.DUREVIEW_MAX_OUTPUT_TOKENS),
     provider: parseProvider(env.DUREVIEW_PROVIDER),
   };
 }
@@ -102,7 +108,7 @@ export function editableBaseline(env: NodeJS.ProcessEnv = process.env): Editable
  * Tests and callers that pass a `Config` do not have the original env presence.
  */
 export function baselineFromConfig(
-  config: Pick<Config, "modelId" | "thinking" | "defaultTrigger" | "skipDrafts" | "checkoutTtlDays">,
+  config: Pick<Config, "modelId" | "thinking" | "defaultTrigger" | "skipDrafts" | "checkoutTtlDays" | "maxOutputTokens">,
 ): EditableBaseline {
   return {
     modelId: config.modelId,
@@ -110,6 +116,7 @@ export function baselineFromConfig(
     defaultTrigger: config.defaultTrigger,
     skipDrafts: config.skipDrafts,
     checkoutTtlDays: config.checkoutTtlDays,
+    maxOutputTokens: config.maxOutputTokens,
     provider: undefined,
   };
 }
@@ -136,6 +143,24 @@ function triggerFromEnv(value: string | undefined): ReviewTrigger | undefined {
   if (trimmed === "") return undefined;
   if (trimmed === "auto" || trimmed === "once" || trimmed === "manual") return trimmed;
   throw new Error(`DUREVIEW_DEFAULT_TRIGGER must be auto, once, or manual, got ${value}.`);
+}
+
+export function parseMaxOutputTokens(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const tokens = Number(trimmed);
+  if (!Number.isSafeInteger(tokens) || tokens < 1) return undefined;
+  return tokens;
+}
+
+function maxOutputTokensFromEnv(value: string | undefined): number | undefined {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "") return undefined;
+  const tokens = parseMaxOutputTokens(trimmed);
+  if (tokens === undefined) {
+    throw new Error(`DUREVIEW_MAX_OUTPUT_TOKENS must be a positive integer, got ${value}.`);
+  }
+  return tokens;
 }
 
 function checkoutTtlFromEnv(value: string | undefined): number | undefined {

@@ -47,6 +47,7 @@ describe("settings precedence", () => {
       defaultTrigger: "manual",
       skipDrafts: false,
       checkoutTtlDays: 30,
+      maxOutputTokens: 16000,
     });
     const page = await settings.page();
     expect(page.fields.model.source).toBe("default");
@@ -84,6 +85,7 @@ describe("settings precedence", () => {
       defaultTrigger: "once",
       skipDrafts: true,
       checkoutTtlDays: 14,
+      maxOutputTokens: 16000,
     });
     expect((await env.page()).fields.thinking).toMatchObject({ source: "env", value: "low", builtin: "medium" });
 
@@ -434,10 +436,13 @@ describe("settings at runtime", () => {
     expect(modelsHtml).not.toContain('name="defaultTrigger"');
     expect(modelsHtml).not.toContain('name="skipDrafts"');
     expect(modelsHtml).not.toContain('name="checkoutTtlDays"');
+    expect(modelsHtml).not.toContain('name="maxOutputTokens"');
 
     const reviewHtml = await (await fetch(`${http.url}/ui/settings/review`, { headers: auth })).text();
     expect(reviewHtml).toContain('name="defaultTrigger"');
     expect(reviewHtml).toContain('name="skipDrafts" value="false"');
+    expect(reviewHtml).toContain('name="maxOutputTokens"');
+    expect(reviewHtml).toContain("Max output tokens");
     expect(reviewHtml).not.toContain('name="model"');
     expect(reviewHtml).not.toContain('name="thinking"');
     expect(reviewHtml).not.toContain('name="provider"');
@@ -490,6 +495,7 @@ describe("settings at runtime", () => {
         ["skipDrafts", "false"],
         ["skipDrafts", "true"],
         ["checkoutTtlDays", "4"],
+        ["maxOutputTokens", "4000"],
         ["save", "1"],
         ["csrf", settingsCsrfToken(UI_TOKEN)],
       ]),
@@ -501,7 +507,11 @@ describe("settings at runtime", () => {
       defaultTrigger: "once",
       skipDrafts: true,
       checkoutTtlDays: 4,
+      maxOutputTokens: 4000,
     });
+
+    const chinese = await fetch(`${http.url}/ui/settings/review`, { headers: { ...auth, cookie: "dureview-locale=zh-CN" } });
+    expect(await chinese.text()).toContain("单次输出上限");
 
     const modelAgain = await fetch(`${http.url}/ui/settings/models`, {
       method: "POST",
@@ -523,7 +533,53 @@ describe("settings at runtime", () => {
       defaultTrigger: "once",
       skipDrafts: true,
       checkoutTtlDays: 4,
+      maxOutputTokens: 4000,
     });
+  });
+
+  it("resolves max output tokens from the override, then the environment, then 16000", async () => {
+    const models = catalog();
+    const settings = await ServerSettings.open({
+      file: join(await mkdtemp(join(tmpdir(), "dureview-settings-")), REVIEWS_DB_FILE),
+      baseline: editableBaseline({}),
+      models,
+      provider: "openai-codex",
+    });
+    expect(settings.effective().maxOutputTokens).toBe(16000);
+    expect((await settings.page()).fields.maxOutputTokens).toMatchObject({
+      source: "default",
+      value: "16000",
+      builtin: "16000",
+      envName: "DUREVIEW_MAX_OUTPUT_TOKENS",
+    });
+
+    const env = await ServerSettings.open({
+      file: join(await mkdtemp(join(tmpdir(), "dureview-settings-")), REVIEWS_DB_FILE),
+      baseline: editableBaseline({ DUREVIEW_MAX_OUTPUT_TOKENS: "8000" }),
+      models,
+      provider: "openai-codex",
+    });
+    expect(env.effective().maxOutputTokens).toBe(8000);
+    expect((await env.page()).fields.maxOutputTokens).toMatchObject({ source: "env", value: "8000", builtin: "16000" });
+
+    expect(await env.save({ maxOutputTokens: "4000" }, "ui")).toEqual({ ok: true });
+    expect(env.effective().maxOutputTokens).toBe(4000);
+    expect((await env.page()).fields.maxOutputTokens.source).toBe("override");
+
+    expect(await env.save({ maxOutputTokens: "8000" }, "ui")).toEqual({ ok: true });
+    expect(env.effective().maxOutputTokens).toBe(8000);
+    expect((await env.page()).fields.maxOutputTokens.source).toBe("env");
+
+    expect(await env.save({ maxOutputTokens: "4000" }, "ui")).toEqual({ ok: true });
+    expect(await env.reset("maxOutputTokens", "ui")).toEqual({ ok: true });
+    expect(env.effective().maxOutputTokens).toBe(8000);
+    expect((await env.page()).fields.maxOutputTokens.source).toBe("env");
+
+    for (const bad of ["0", "-1", "1.5", "nope", ""]) {
+      const rejected = await env.save({ maxOutputTokens: bad }, "ui");
+      expect(rejected.ok).toBe(false);
+    }
+    expect(env.effective().maxOutputTokens).toBe(8000);
   });
 });
 

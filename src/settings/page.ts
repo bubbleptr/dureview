@@ -33,6 +33,7 @@ export type SettingsFormValues = {
   defaultTrigger: ReviewTrigger;
   skipDrafts: boolean;
   checkoutTtlDays: string;
+  maxOutputTokens: string;
 };
 
 export type CatalogModel = {
@@ -109,6 +110,7 @@ export type SettingsPageModel = {
     defaultTrigger: SettingsFieldView;
     skipDrafts: SettingsFieldView;
     checkoutTtlDays: SettingsFieldView;
+    maxOutputTokens: SettingsFieldView;
   };
   form: SettingsFormValues;
   console: ConsoleView;

@@ -1,16 +1,18 @@
 import { isProviderName, type ProviderName } from "../auth/providers.js";
 import {
   DEFAULT_CHECKOUT_TTL_DAYS,
+  DEFAULT_MAX_OUTPUT_TOKENS,
   DEFAULT_MODEL_ID,
   DEFAULT_SKIP_DRAFTS,
   DEFAULT_THINKING,
   isThinkingLevel,
+  parseMaxOutputTokens,
   type EditableBaseline,
 } from "../config.js";
 import { BUILTIN_DEFAULT_TRIGGER, type ReviewTrigger } from "../review/policy.js";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 
-export const SETTING_KEYS = ["provider", "model", "thinking", "defaultTrigger", "skipDrafts", "checkoutTtlDays"] as const;
+export const SETTING_KEYS = ["provider", "model", "thinking", "defaultTrigger", "skipDrafts", "checkoutTtlDays", "maxOutputTokens"] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
@@ -32,6 +34,7 @@ export type ResolvedSettings = {
   defaultTrigger: ResolvedField<ReviewTrigger>;
   skipDrafts: ResolvedField<boolean>;
   checkoutTtlDays: ResolvedField<number>;
+  maxOutputTokens: ResolvedField<number>;
 };
 
 export function isSettingKey(value: string): value is SettingKey {
@@ -57,6 +60,13 @@ export function resolveSettings(
       DEFAULT_CHECKOUT_TTL_DAYS,
       parseTtlDaysSetting,
     ),
+    maxOutputTokens: resolveString(
+      raw,
+      "maxOutputTokens",
+      baseline.maxOutputTokens,
+      DEFAULT_MAX_OUTPUT_TOKENS,
+      parseMaxOutputTokens,
+    ),
   };
 }
 
@@ -75,7 +85,8 @@ export function parseSettingValue(key: SettingKey, raw: string): string | ModelT
   if (key === "thinking") return parseThinkingSetting(raw);
   if (key === "defaultTrigger") return parseTriggerSetting(raw);
   if (key === "skipDrafts") return parseSkipDraftsSetting(raw);
-  return parseTtlDaysSetting(raw);
+  if (key === "checkoutTtlDays") return parseTtlDaysSetting(raw);
+  return parseMaxOutputTokens(raw);
 }
 
 export function parseProviderSetting(value: string): ProviderName | undefined {

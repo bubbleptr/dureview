@@ -273,7 +273,9 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             { type: "input", content: prompt, requestId: `dureview:${current.id}:prompt` },
             context,
           );
+          const seenStops = new Set<string>();
           const firstSettled = await first.wait(context);
+          await warnOnCappedOutput(runtime, conversationId, String(current.id), context, seenStops);
           if (firstSettled.status !== "done") {
             await fail(unfinishedReviewMessage("run", firstSettled));
             return;
@@ -290,6 +292,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               context,
             );
             const nudged = await nudge.wait(context);
+            await warnOnCappedOutput(runtime, conversationId, String(current.id), context, seenStops);
             if (nudged.status !== "done") {
               await fail(unfinishedReviewMessage("nudge", nudged));
               return;
@@ -723,6 +726,32 @@ async function collectReviewRecord(
       }),
     );
   return { ...base, recordedFindings: recordedFindings(checkpoint.review.findings, postings) };
+}
+
+async function warnOnCappedOutput(
+  runtime: TaskRuntime,
+  conversationId: ConversationId,
+  taskId: string,
+  context: Context,
+  seen: Set<string>,
+): Promise<void> {
+  try {
+    const view = await runtime.context(conversationId, context);
+    for (const entry of view.entries) {
+      if (!AssistantEntry.is(entry)) continue;
+      const entryId = String(entry.id);
+      if (seen.has(entryId)) continue;
+      seen.add(entryId);
+      const capped = entry.model?.some((message) => message.role === "assistant" && message.stopReason === "length");
+      if (!capped) continue;
+      log("warn", "model call stopped at the output token cap", { taskId, entryId });
+    }
+  } catch (error) {
+    log("warn", "could not read model stop reason", {
+      taskId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 async function captureModelUsage(

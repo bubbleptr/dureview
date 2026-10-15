@@ -462,6 +462,7 @@ export function testConfig(dataDir: string): Config {
     uiToken: undefined,
     defaultTrigger: "manual",
     checkoutTtlDays: 30,
+    maxOutputTokens: 16000,
   };
 }
 
@@ -479,7 +480,7 @@ export async function openTestService(options: {
   defaultTrigger?: Config["defaultTrigger"];
   modelId?: string;
   thinking?: Config["thinking"];
-  fauxModels?: Array<{ id: string; reasoning?: boolean }>;
+  fauxModels?: Array<{ id: string; reasoning?: boolean; maxTokens?: number }>;
   githubApiUrl?: string;
 }) {
   const faux = options.fauxModels ? fauxProvider({ models: options.fauxModels }) : fauxProvider();

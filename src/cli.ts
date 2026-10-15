@@ -41,6 +41,7 @@ Environment:
   DUREVIEW_WEBHOOK_SECRET     GitHub webhook secret. A saved GitHub App supplies one when this is unset
   DUREVIEW_PROVIDER           openai-codex, github-copilot, xai, openai, openrouter, or deepseek
   DUREVIEW_MODEL              Model id (default: gpt-5.5)
+  DUREVIEW_MAX_OUTPUT_TOKENS  Tokens one model response may use (default: 16000)
   DUREVIEW_DEFAULT_TRIGGER    auto, once, or manual (default: manual)
   OPENAI_API_KEY              OpenAI API key. A key saved on the settings page overrides it
   OPENROUTER_API_KEY          OpenRouter API key. A saved key overrides it
@@ -49,7 +50,7 @@ Environment:
   GITHUB_APP_PRIVATE_KEY      GitHub App private key PEM, or a path to one
   GITHUB_TOKEN                Personal access token. Wins over a saved GitHub App
   DUREVIEW_UI_TOKEN           Status page password. Unset disables GET /, GET /ui, GET /ui/reviews, and GET /ui/settings
-                              Provider, model, thinking, trigger, draft skip, checkout TTL, logins, API keys,
+                              Provider, model, thinking, output token cap, trigger, draft skip, checkout TTL, logins, API keys,
                               and the GitHub App can be changed at /ui/settings
 `);
 }

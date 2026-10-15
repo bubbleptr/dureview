@@ -1,6 +1,6 @@
 import type { ModelThinkingLevel, Models } from "@earendil-works/pi-ai";
 import { isProviderName, providerLabel } from "../auth/providers.js";
-import type { EditableBaseline } from "../config.js";
+import { parseMaxOutputTokens, type EditableBaseline } from "../config.js";
 import type { ReviewTrigger } from "../review/policy.js";
 import {
   emptyConsole,
@@ -35,6 +35,7 @@ export type EffectiveConfig = {
   defaultTrigger: ReviewTrigger;
   skipDrafts: boolean;
   checkoutTtlDays: number;
+  maxOutputTokens: number;
 };
 
 export type SettingsWriteResult = { ok: true } | { ok: false; error: string };
@@ -69,6 +70,11 @@ const FIELD_META: Record<SettingKey, { label: string; envName: string; help: str
     label: "Checkout TTL",
     envName: "DUREVIEW_CHECKOUT_TTL_DAYS",
     help: "Delete checkouts older than this many days. 0 deletes every checkout no review is using. The next sweep picks this up.",
+  },
+  maxOutputTokens: {
+    label: "Max output tokens",
+    envName: "DUREVIEW_MAX_OUTPUT_TOKENS",
+    help: "Most tokens one model response may use. Each model call uses this cap.",
   },
 };
 
@@ -119,6 +125,7 @@ export class ServerSettings {
       defaultTrigger: resolved.defaultTrigger.value,
       skipDrafts: resolved.skipDrafts.value,
       checkoutTtlDays: resolved.checkoutTtlDays.value,
+      maxOutputTokens: resolved.maxOutputTokens.value,
     };
   }
 
@@ -139,6 +146,7 @@ export class ServerSettings {
       defaultTrigger: resolved.defaultTrigger.value,
       skipDrafts: resolved.skipDrafts.value,
       checkoutTtlDays: String(resolved.checkoutTtlDays.value),
+      maxOutputTokens: String(resolved.maxOutputTokens.value),
     };
     return {
       provider: resolved.provider.value,
@@ -152,6 +160,7 @@ export class ServerSettings {
         defaultTrigger: fieldView("defaultTrigger", resolved.defaultTrigger, resolved.defaultTrigger.value),
         skipDrafts: fieldView("skipDrafts", resolved.skipDrafts, resolved.skipDrafts.value ? "true" : "false"),
         checkoutTtlDays: fieldView("checkoutTtlDays", resolved.checkoutTtlDays, String(resolved.checkoutTtlDays.value)),
+        maxOutputTokens: fieldView("maxOutputTokens", resolved.maxOutputTokens, String(resolved.maxOutputTokens.value)),
       },
       form,
       console: extra.console ?? emptyConsole(),
@@ -250,6 +259,7 @@ type ParsedSettings = {
   defaultTrigger?: ReviewTrigger;
   skipDrafts?: boolean;
   checkoutTtlDays?: number;
+  maxOutputTokens?: number;
 };
 
 function applyParsed(next: Map<string, string>, values: ParsedSettings, baseline: EditableBaseline, fallbackProvider: string): void {
@@ -259,6 +269,7 @@ function applyParsed(next: Map<string, string>, values: ParsedSettings, baseline
   if (values.defaultTrigger !== undefined) putOrClear(next, "defaultTrigger", values.defaultTrigger, baseline.defaultTrigger, fallbackProvider);
   if (values.skipDrafts !== undefined) putOrClear(next, "skipDrafts", values.skipDrafts, baseline.skipDrafts, fallbackProvider);
   if (values.checkoutTtlDays !== undefined) putOrClear(next, "checkoutTtlDays", values.checkoutTtlDays, baseline.checkoutTtlDays, fallbackProvider);
+  if (values.maxOutputTokens !== undefined) putOrClear(next, "maxOutputTokens", values.maxOutputTokens, baseline.maxOutputTokens, fallbackProvider);
 }
 
 function putOrClear<T extends string | ModelThinkingLevel | ReviewTrigger | boolean | number>(
@@ -276,6 +287,7 @@ function putOrClear<T extends string | ModelThinkingLevel | ReviewTrigger | bool
       defaultTrigger: undefined,
       skipDrafts: undefined,
       checkoutTtlDays: undefined,
+      maxOutputTokens: undefined,
       provider: undefined,
     },
     fallbackProvider,
@@ -294,7 +306,8 @@ function builtinValue(key: SettingKey, resolved: ResolvedSettings): string | Mod
   if (key === "thinking") return resolved.thinking.builtin;
   if (key === "defaultTrigger") return resolved.defaultTrigger.builtin;
   if (key === "skipDrafts") return resolved.skipDrafts.builtin;
-  return resolved.checkoutTtlDays.builtin;
+  if (key === "checkoutTtlDays") return resolved.checkoutTtlDays.builtin;
+  return resolved.maxOutputTokens.builtin;
 }
 
 function acceptProvider(value: string, models: Models, current: string): string | undefined {
@@ -343,6 +356,13 @@ function parseForm(
       return { ok: false, error: "Checkout TTL must be a non-negative integer number of days." };
     }
     value.checkoutTtlDays = checkoutTtlDays;
+  }
+  if (input.maxOutputTokens !== undefined) {
+    const maxOutputTokens = parseMaxOutputTokens(input.maxOutputTokens);
+    if (maxOutputTokens === undefined) {
+      return { ok: false, error: "Max output tokens must be a positive integer." };
+    }
+    value.maxOutputTokens = maxOutputTokens;
   }
   if (input.skipDrafts !== undefined) value.skipDrafts = input.skipDrafts;
   return { ok: true, value };
