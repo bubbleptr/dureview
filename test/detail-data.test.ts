@@ -366,6 +366,148 @@ describe("review detail loader", () => {
     expect(github.compareRequests).toHaveLength(1);
   });
 
+  it("stores the reviewed diff when the pull request base has moved", async () => {
+    const dataDir = await tempDataDir();
+    const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
+    await archive.open();
+    await archive.start({
+      taskId: "retarget",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      title: "Reviewed earlier",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+      trigger: "opened",
+    });
+    await archive.finish({
+      taskId: "retarget",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      outcome: "completed",
+      verdict: "clean",
+      findingCount: 0,
+      title: "Reviewed earlier",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+    });
+    archive.close();
+
+    const movedBase = "2222222222222222222222222222222222222222";
+    const github = new MemoryGitHub();
+    github.remotePull = head(SHA_A, movedBase);
+    github.pullFiles = [
+      {
+        filename: "src/later.ts",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -0,0 +1 @@\n+live\n",
+        previousFilename: null,
+      },
+    ];
+    github.compared = [
+      {
+        filename: "src/then.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -1 +1 @@\n-old\n+reviewed\n",
+        previousFilename: null,
+      },
+    ];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    closers.push(() => service.close());
+
+    const model = await loadReviewDetail(service, "https://api.github.com", "retarget");
+    expect(model?.files.map((file) => file.filename)).toEqual(["src/then.ts"]);
+    expect(github.calls.filter((call) => call === "listPullFiles")).toEqual([]);
+    expect(github.compareRequests).toEqual([{ base: BASE_SHA, head: SHA_A }]);
+
+    github.compared = [];
+    github.remotePull = head(SHA_A, "3333333333333333333333333333333333333333");
+    const cached = await loadReviewDetail(service, "https://api.github.com", "retarget");
+    expect(cached?.files.map((file) => file.filename)).toEqual(["src/then.ts"]);
+    expect(github.compareRequests).toHaveLength(1);
+    expect(github.calls.filter((call) => call === "listPullFiles")).toEqual([]);
+  });
+
+  it("does not store live files when the base moves during the fetch", async () => {
+    const dataDir = await tempDataDir();
+    const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
+    await archive.open();
+    await archive.start({
+      taskId: "base-race",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      title: "Race",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+      trigger: "opened",
+    });
+    await archive.finish({
+      taskId: "base-race",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      outcome: "completed",
+      verdict: "clean",
+      findingCount: 0,
+      title: "Race",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+    });
+    archive.close();
+
+    const github = new MemoryGitHub();
+    github.pullQueue = [head(SHA_A), head(SHA_A, "2222222222222222222222222222222222222222")];
+    github.remotePull = head(SHA_A, "2222222222222222222222222222222222222222");
+    github.pullFiles = [
+      {
+        filename: "src/later.ts",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -0,0 +1 @@\n+live\n",
+        previousFilename: null,
+      },
+    ];
+    github.compared = [
+      {
+        filename: "src/then.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -1 +1 @@\n-old\n+reviewed\n",
+        previousFilename: null,
+      },
+    ];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    closers.push(() => service.close());
+
+    const model = await loadReviewDetail(service, "https://api.github.com", "base-race");
+    expect(model?.files.map((file) => file.filename)).toEqual(["src/then.ts"]);
+    expect(github.calls.filter((call) => call === "listPullFiles")).toHaveLength(1);
+    expect(github.compareRequests).toEqual([{ base: BASE_SHA, head: SHA_A }]);
+
+    github.compared = [];
+    github.pullFiles = [];
+    const cached = await loadReviewDetail(service, "https://api.github.com", "base-race");
+    expect(cached?.files.map((file) => file.filename)).toEqual(["src/then.ts"]);
+    expect(github.compareRequests).toHaveLength(1);
+    expect(github.calls.filter((call) => call === "listPullFiles")).toHaveLength(1);
+  });
+
   it("keeps the saved review when the file fetch hits its deadline", async () => {
     const dataDir = await tempDataDir();
     const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
@@ -516,13 +658,13 @@ describe("review detail loader", () => {
   });
 });
 
-function head(sha: string): RemotePull {
+function head(sha: string, baseSha: string = BASE_SHA): RemotePull {
   return {
     number: 7,
     title: "Charge positive amounts",
     draft: false,
     sha,
-    baseSha: BASE_SHA,
+    baseSha,
     baseRef: "main",
   };
 }

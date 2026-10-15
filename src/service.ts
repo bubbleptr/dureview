@@ -304,9 +304,10 @@ export class DureviewService {
   }
 
   /**
-   * File list at `review.sha`. The pull-request files API is the live head, so it is stored
-   * only when that head is still the reviewed SHA after the fetch. Otherwise the compare
-   * `baseSha...sha` is the diff this review saw.
+   * File list at `review.sha` against `review.baseSha`. The pull-request files API is the
+   * live head against the live base, so it is stored only when both are still the reviewed
+   * SHAs after the fetch. A moved or retargeted base keeps the head and changes the diff.
+   * Otherwise the compare `baseSha...sha` is the diff this review saw.
    */
   async #reviewedFiles(review: ReviewDetail, signal: AbortSignal): Promise<PullFile[]> {
     const request = {
@@ -314,25 +315,26 @@ export class DureviewService {
       repo: review.repo,
       installationId: review.installationId,
     };
-    const head = await this.#pullHead(request, review.number, signal);
-    if (head === review.sha) {
+    const before = await this.#pullRevision(request, review.number, signal);
+    if (reviewedRevision(before, review)) {
       const files = await this.github.listPullFiles({ ...request, number: review.number }, signal);
-      const still = await this.#pullHead(request, review.number, signal);
-      if (still === review.sha) return files;
+      const after = await this.#pullRevision(request, review.number, signal);
+      if (reviewedRevision(after, review)) return files;
     }
     return this.github.compareFiles(request, review.baseSha, review.sha, signal);
   }
 
-  async #pullHead(
+  async #pullRevision(
     request: { owner: string; repo: string; installationId: number | null },
     number: number,
     signal: AbortSignal,
-  ): Promise<string> {
+  ): Promise<{ sha: string; baseSha: string }> {
     try {
-      return (await this.github.getPull(request, number, signal)).sha;
+      const pull = await this.github.getPull(request, number, signal);
+      return { sha: pull.sha, baseSha: pull.baseSha };
     } catch (error) {
       if (signal.aborted) throw error;
-      return "";
+      return { sha: "", baseSha: "" };
     }
   }
 
@@ -480,6 +482,13 @@ export class DureviewService {
       this.archive.close();
     }
   }
+}
+
+function reviewedRevision(
+  pull: { sha: string; baseSha: string },
+  review: { sha: string; baseSha: string },
+): boolean {
+  return pull.sha === review.sha && pull.baseSha === review.baseSha;
 }
 
 function isDeadline(signal: AbortSignal, error: unknown): boolean {
