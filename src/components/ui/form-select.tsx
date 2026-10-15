@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from "./select.js";
 export type FormSelectOption = {
   value: string;
   label: string;
+  icon?: ReactNode;
 };
 
 /** Radix item values cannot be empty; the root uses "" for "nothing selected". */
@@ -50,7 +51,9 @@ export function FormSelect({
   const [uncontrolled, setUncontrolled] = useState(defaultValue ?? "");
   const selected = value ?? uncontrolled;
   const emptyLabel = placeholder ?? m.select.placeholder;
-  const label = options.find((option) => option.value === selected)?.label ?? (selected || emptyLabel);
+  const selectedOption = options.find((option) => option.value === selected);
+  const label = selectedOption?.label ?? (selected || emptyLabel);
+  const icon = selectedOption?.icon;
   const combobox = variant === "combobox" || (variant === "auto" && options.length >= LONG_LIST);
 
   function commit(next: string, form: HTMLFormElement | null): void {
@@ -67,6 +70,7 @@ export function FormSelect({
       <FormCombobox
         id={controlId}
         label={label}
+        icon={icon}
         selected={selected}
         options={options}
         disabled={disabled}
@@ -81,6 +85,7 @@ export function FormSelect({
       <FormMenu
       id={controlId}
       label={label}
+      icon={icon}
       selected={selected}
       options={options}
       disabled={disabled}
@@ -92,9 +97,19 @@ export function FormSelect({
   );
 }
 
+function OptionFace({ icon, label }: { icon?: ReactNode; label: string }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      {icon}
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
 function FormMenu({
   id,
   label,
+  icon,
   selected,
   options,
   disabled,
@@ -104,6 +119,7 @@ function FormMenu({
 }: {
   id: string;
   label: string;
+  icon?: ReactNode;
   selected: string;
   options: readonly FormSelectOption[];
   disabled: boolean;
@@ -119,12 +135,12 @@ function FormMenu({
     >
       {children}
       <SelectTrigger id={id} className={className} data-ui="select">
-        <span className="truncate">{label}</span>
+        <OptionFace icon={icon} label={label} />
       </SelectTrigger>
       <SelectContent>
         {options.map((option) => (
           <SelectItem key={option.value || EMPTY_ITEM} value={itemValue(option.value)}>
-            {option.label}
+            <OptionFace icon={option.icon} label={option.label} />
           </SelectItem>
         ))}
       </SelectContent>
@@ -135,6 +151,7 @@ function FormMenu({
 function FormCombobox({
   id,
   label,
+  icon,
   selected,
   options,
   disabled,
@@ -144,6 +161,7 @@ function FormCombobox({
 }: {
   id: string;
   label: string;
+  icon?: ReactNode;
   selected: string;
   options: readonly FormSelectOption[];
   disabled: boolean;
@@ -225,7 +243,7 @@ function FormCombobox({
           disabled={disabled}
           className={cn(TRIGGER, className)}
         >
-          <span className="truncate">{label}</span>
+          <OptionFace icon={icon} label={label} />
           <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
@@ -286,7 +304,7 @@ function FormCombobox({
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => choose(option.value)}
               >
-                {option.label}
+                <OptionFace icon={option.icon} label={option.label} />
               </li>
             );
           })}

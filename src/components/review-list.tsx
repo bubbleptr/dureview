@@ -3,7 +3,9 @@ import { fill } from "../ui/format.js";
 import { useI18n } from "../ui/i18n.js";
 import type { ReviewListModel, ReviewRowView } from "../ui/list-model.js";
 import { compareReviewRows } from "../ui/list-sort.js";
+import { providerAtStart } from "../auth/providers.js";
 import { AppShell } from "./app-shell.js";
+import { ProviderMark } from "./provider-mark.js";
 import { LocalTime } from "./local-time.js";
 import { Badge } from "./ui/badge.js";
 import { Button, buttonVariants } from "./ui/button.js";
@@ -162,10 +164,10 @@ function ReviewTable({
           <SortHead label={columns.title} sortKey="title" search={search} sort={sort} dir={dir} />
           <SortHead label={columns.trigger} sortKey="trigger" search={search} sort={sort} dir={dir} />
           <SortHead label={columns.result} sortKey="result" search={search} sort={sort} dir={dir} />
-          <SortHead label="P0" sortKey="p0" search={search} sort={sort} dir={dir} align="right" className="text-red-700 dark:text-red-400" />
-          <SortHead label="P1" sortKey="p1" search={search} sort={sort} dir={dir} align="right" className="text-orange-700 dark:text-orange-400" />
-          <SortHead label="P2" sortKey="p2" search={search} sort={sort} dir={dir} align="right" className="text-amber-700 dark:text-amber-400" />
-          <SortHead label="P3" sortKey="p3" search={search} sort={sort} dir={dir} align="right" />
+          <SortHead label="P0" sortKey="p0" search={search} sort={sort} dir={dir} align="right" className="text-chart-1" />
+          <SortHead label="P1" sortKey="p1" search={search} sort={sort} dir={dir} align="right" className="text-chart-2" />
+          <SortHead label="P2" sortKey="p2" search={search} sort={sort} dir={dir} align="right" className="text-chart-3" />
+          <SortHead label="P3" sortKey="p3" search={search} sort={sort} dir={dir} align="right" className="text-chart-4" />
           <SortHead label={columns.duration} sortKey="duration" search={search} sort={sort} dir={dir} align="right" />
           <SortHead label={columns.when} sortKey="when" search={search} sort={sort} dir={dir} />
         </TableRow>
@@ -187,7 +189,7 @@ function ReviewTable({
             </TableCell>
             <TableCell className="max-w-xs whitespace-normal">
               <div>{row.title}</div>
-              {row.modelLine ? <p className="text-xs text-muted-foreground">{row.modelLine}</p> : null}
+              {row.modelLine ? <ModelLine line={row.modelLine} /> : null}
             </TableCell>
             <TableCell>
               <span>{row.triggerLabel}</span>
@@ -195,10 +197,10 @@ function ReviewTable({
             <TableCell>
               <Badge variant={row.resultKind}>{row.resultText}</Badge>
             </TableCell>
-            <Count cell={row.p0} on={row.p0On} tone="text-red-700 dark:text-red-400" />
-            <Count cell={row.p1} on={row.p1On} tone="text-orange-700 dark:text-orange-400" />
-            <Count cell={row.p2} on={row.p2On} tone="text-amber-700 dark:text-amber-400" />
-            <Count cell={row.p3} on={row.p3On} tone="text-muted-foreground" />
+            <Count cell={row.p0} on={row.p0On} tone="text-chart-1" />
+            <Count cell={row.p1} on={row.p1On} tone="text-chart-2" />
+            <Count cell={row.p2} on={row.p2On} tone="text-chart-3" />
+            <Count cell={row.p3} on={row.p3On} tone="text-chart-4" />
             <TableCell className="text-right text-xs tabular-nums">{row.duration}</TableCell>
             <TableCell className="text-xs text-muted-foreground">
               {row.whenLabel ? <LocalTime iso={row.whenIso} label={row.whenLabel} /> : null}
@@ -236,6 +238,16 @@ function SortHead({
         {mark ? <span aria-hidden="true">{mark}</span> : null}
       </a>
     </TableHead>
+  );
+}
+
+function ModelLine({ line }: { line: string }) {
+  const provider = providerAtStart(line);
+  return (
+    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      {provider ? <ProviderMark provider={provider} /> : null}
+      <span className="min-w-0">{line}</span>
+    </p>
   );
 }
 

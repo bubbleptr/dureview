@@ -143,6 +143,12 @@ describe("status page", () => {
     expect(settings.status).toBe(200);
     const settingsHtml = await settings.text();
     expect(settingsHtml).toContain("access token expires ");
+    expect(settingsHtml).toContain("ChatGPT");
+    expect(settingsHtml).toContain("GitHub Copilot");
+    expect(settingsHtml).toContain(">xAI<");
+    expect(settingsHtml).toContain("OpenRouter");
+    expect(settingsHtml).toContain("DeepSeek");
+    expect(settingsHtml).toContain("M22.2819");
     expect(settingsHtml).toContain('datetime="2030-01-02T03:04:05.000Z"');
     expect(settingsHtml).toContain("2030-01-02 03:04 UTC");
     expect(settingsHtml).not.toContain(dataDir);
@@ -211,7 +217,9 @@ describe("status page", () => {
     expect(detailHtml).toContain(">trigger<");
     expect(detailHtml).toContain('title="manual"');
     expect(detailHtml).toContain("P1");
-    expect(detailHtml).toContain("Bug (severe)");
+    expect(detailHtml).toContain("Bug · Severe");
+    expect(detailHtml).toContain('title="0.9"');
+    expect(detailHtml).toContain('aria-label="Confidence 0.9"');
     expect(github.pullFileRequests).toEqual([{ installationId: 99, number: 7 }]);
     expect(detailHtml).not.toContain(SHA_A);
     expect(detailHtml).not.toContain(UI_TOKEN);

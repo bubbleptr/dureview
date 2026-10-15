@@ -18,7 +18,7 @@ On a pull request, a comment whose first line is `/dureview` reviews the current
 
 The author needs write, maintain, or admin permission. dureview reacts with 👀 and ignores the command from its own GitHub App (`{slug}[bot]`, from `GET /app`) or from the personal access token user (`GET /user`). Anyone else is ignored, with no reaction.
 
-Each posted finding is an inline comment. The label is the priority and the type, for example `P1 · Bug (severe)` or `P0 · Security · Critical · CWE-89`.
+Each posted finding is an inline comment. The label is the priority, the type, and a confidence band, for example `**P2 · Bug · Non-severe** · confidence high` or `P0 · Security · Critical · CWE-89`.
 
 | Type | Subtypes |
 | --- | --- |

@@ -7,7 +7,7 @@ export function SettingsCard({
   description,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   description?: ReactNode;
   children: ReactNode;
 }) {
@@ -29,7 +29,7 @@ export function SettingRow({
   monoTitle = false,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   description: ReactNode;
   htmlFor?: string;
   monoTitle?: boolean;

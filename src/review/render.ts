@@ -1,14 +1,9 @@
 import type { ReviewCommentDraft } from "../github/client.js";
 import type { ReviewRequest } from "../types.js";
+import { confidenceWord, formatConfidence } from "./confidence.js";
 import { findingMarker, fixedMarker, ledgerMarker, type LedgerEntry } from "./ledger.js";
 import { foldedBucket, type AnchoredFinding, type ClassifiedReview, type ReviewLanguage } from "./policy.js";
-import { formatFindingType, type Finding, type FindingKind, type ReviewSubmission, type Verdict } from "./schema.js";
-
-const KIND_EMOJI: Record<FindingKind, string> = {
-  bug: "🐛",
-  security: "🔒",
-  investigate: "🔎",
-};
+import { formatFindingType, type Finding, type ReviewSubmission, type Verdict } from "./schema.js";
 
 type Copy = {
   verdict: Record<Verdict, string>;
@@ -38,9 +33,9 @@ type Copy = {
 
 const EN: Copy = {
   verdict: {
-    block: "## dureview: ⛔ Block",
-    fix_recommended: "## dureview: ⚠️ Fix recommended",
-    clean: "## dureview: ✅ Nothing to report",
+    block: "## dureview: Block",
+    fix_recommended: "## dureview: Fix recommended",
+    clean: "## dureview: Nothing to report",
   },
   confidence: "confidence",
   trigger: "Trigger",
@@ -50,13 +45,13 @@ const EN: Copy = {
   finding: "Finding",
   location: "Location",
   overflow: (count, max) => `The other ${count} findings were not posted inline (this run's limit is ${max}).`,
-  investigate: (count) => `🔎 Investigate (${count})`,
+  investigate: (count) => `Investigate (${count})`,
   informational: (count) => `Flag (${count})`,
   p3: (count) => `P3 (${count})`,
   outOfRange: (count) => `Out of range (${count})`,
   checked: "Checked",
   noneListed: "(none listed)",
-  fixedHeading: "✔ Fixed since the last review:",
+  fixedHeading: "Fixed since the last review:",
   fixedItem: (title, line, fingerprint) => `- ${title} (${line} · fp:${fingerprint})`,
   overallConfidence: "overall confidence",
   reason: (reason, detail) => `${reason} (${detail})`,
@@ -67,9 +62,9 @@ const EN: Copy = {
 
 const ZH: Copy = {
   verdict: {
-    block: "## dureview：⛔ 建议阻断",
-    fix_recommended: "## dureview：⚠️ 建议修复",
-    clean: "## dureview：✅ 未发现问题",
+    block: "## dureview：建议阻断",
+    fix_recommended: "## dureview：建议修复",
+    clean: "## dureview：未发现问题",
   },
   confidence: "置信度",
   trigger: "触发条件",
@@ -79,13 +74,13 @@ const ZH: Copy = {
   finding: "问题",
   location: "位置",
   overflow: (count, max) => `其余 ${count} 条未再发行内评论（本轮上限 ${max}）。`,
-  investigate: (count) => `🔎 待核实（${count}）`,
+  investigate: (count) => `待核实（${count}）`,
   informational: (count) => `标注（${count}）`,
   p3: (count) => `P3（${count}）`,
   outOfRange: (count) => `范围外（${count}）`,
   checked: "已检查",
   noneListed: "（未列出）",
-  fixedHeading: "✔ 上一轮已修复：",
+  fixedHeading: "上一轮已修复：",
   fixedItem: (title, line, fingerprint) => `- ${title}（${line} · fp:${fingerprint}）`,
   overallConfidence: "整体置信度",
   reason: (reason, detail) => `${reason}（${detail}）`,
@@ -104,10 +99,8 @@ export function renderInlineComment(
   language: ReviewLanguage = "en",
 ): string {
   const copy = copyFor(language);
-  const emoji = KIND_EMOJI[finding.kind];
-  const badge = findingBadge(finding, language);
   const lines = [
-    `**${badge}** ${emoji} **${finding.title}**  · ${finding.category} · ${copy.confidence} ${formatConfidence(finding.confidence)}`,
+    `${findingLead(finding, language, finding.title)} · ${finding.category}`,
     "",
     finding.body.trim(),
     `**${copy.trigger}**${copy.colon}${finding.trigger.trim() || copy.noTrigger}`,
@@ -207,10 +200,6 @@ export function renderSummary(input: {
   return lines.join("\n");
 }
 
-export function formatConfidence(value: number): string {
-  return (Math.round(value * 100) / 100).toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
-}
-
 export function blobUrl(
   request: Pick<ReviewRequest, "owner" | "repo" | "sha" | "cloneUrl">,
   path: string,
@@ -272,10 +261,15 @@ function findingBadge(finding: Finding, language: ReviewLanguage): string {
   );
 }
 
+function findingLead(finding: Finding, language: ReviewLanguage, title: string): string {
+  const copy = copyFor(language);
+  const badge = findingBadge(finding, language);
+  return `**${badge}** · ${copy.confidence} ${confidenceWord(finding.confidence, language)} · **${title}**`;
+}
+
 function foldedLine(finding: Finding, copy: Copy, language: ReviewLanguage): string {
-  const emoji = KIND_EMOJI[finding.kind];
   const trigger = finding.trigger.trim() || copy.noTrigger;
-  return `- **${findingBadge(finding, language)}** ${emoji} **${oneLine(finding.title)}** · \`${locationLabel(finding)}\` — ${oneLine(finding.body)} **${copy.trigger}**${copy.colon}${oneLine(trigger)}`;
+  return `- ${findingLead(finding, language, oneLine(finding.title))} · \`${locationLabel(finding)}\` — ${oneLine(finding.body)} **${copy.trigger}**${copy.colon}${oneLine(trigger)}`;
 }
 
 function locationLabel(finding: Pick<Finding, "path" | "startLine" | "endLine">): string {

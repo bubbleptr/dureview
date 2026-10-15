@@ -225,10 +225,10 @@ const TYPE_LABELS = {
 
 const SUBTYPE_LABELS = {
   en: {
-    severe: "severe",
-    non_severe: "non-severe",
-    investigate: "investigate",
-    informational: "informational",
+    severe: "Severe",
+    non_severe: "Non-severe",
+    investigate: "Investigate",
+    informational: "Informational",
     critical: "Critical",
     warning: "Warning",
   },
@@ -271,7 +271,7 @@ export function resolveFindingClassification(input: {
 }
 
 /**
- * `P1 · Bug (severe)`, `P0 · Security · Critical · CWE-89`.
+ * `P2 · Bug · Non-severe`, `P0 · Security · Critical · CWE-89`.
  * Returns null when the stored type is missing, which is how rows from before this column render.
  */
 export function formatFindingType(input: {
@@ -287,7 +287,7 @@ export function formatFindingType(input: {
   const language = input.language === "zh" ? "zh" : "en";
   const typeLabel = TYPE_LABELS[language][type];
   const subtypeLabel = SUBTYPE_LABELS[language][subtype];
-  const body = type === "security" ? `${typeLabel} · ${subtypeLabel}` : `${typeLabel} (${subtypeLabel})`;
+  const body = `${typeLabel} · ${subtypeLabel}`;
   const cwe = normalizeCwe(input.cwe);
   const prefix =
     input.priority === 0 || input.priority === 1 || input.priority === 2 || input.priority === 3

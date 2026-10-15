@@ -23,37 +23,33 @@ import { useI18n } from "../ui/i18n.js";
 import type { Messages } from "../ui/messages.js";
 import { reviewFindingCount, reviewTreeOptions, type ReviewTreePreload } from "../ui/review-presentation.js";
 import { dragLimit, fitPanelWidths, SUMMARY_LIMIT, TREE_LIMIT } from "../ui/panel-widths.js";
+import { providerAtStart } from "../auth/providers.js";
 import { AppShell } from "./app-shell.js";
 import { useDiffStyle } from "./diff-style.js";
+import { ConfidenceSignal, FindingTypeIcon, PriorityBadge } from "./finding-marks.js";
 import { LocalTime } from "./local-time.js";
+import { ProviderMark } from "./provider-mark.js";
 import { Badge } from "./ui/badge.js";
 
-const PRIORITY_BADGE = [
-  "border-transparent bg-red-50 text-red-700 dark:bg-red-400/10 dark:text-red-300",
-  "border-transparent bg-orange-50 text-orange-800 dark:bg-orange-400/10 dark:text-orange-300",
-  "border-transparent bg-amber-50 text-amber-800 dark:bg-amber-400/10 dark:text-amber-300",
-  "border-transparent bg-muted text-muted-foreground",
-] as const;
-
 const COMMENT_ACCENT = [
-  "border-l-red-700 bg-red-50 dark:border-l-red-300 dark:bg-red-400/10",
-  "border-l-orange-700 bg-orange-50 dark:border-l-orange-300 dark:bg-orange-400/10",
-  "border-l-amber-700 bg-amber-50 dark:border-l-amber-300 dark:bg-amber-400/10",
-  "border-l-neutral-500 bg-muted/70 dark:border-l-neutral-400 dark:bg-muted/40",
+  "border-l-chart-1 bg-[color-mix(in_oklch,var(--chart-1)_12%,transparent)]",
+  "border-l-chart-2 bg-[color-mix(in_oklch,var(--chart-2)_12%,transparent)]",
+  "border-l-chart-3 bg-[color-mix(in_oklch,var(--chart-3)_12%,transparent)]",
+  "border-l-chart-4 bg-[color-mix(in_oklch,var(--chart-4)_12%,transparent)]",
 ] as const;
 
 const LINE_BOX = [
-  "bg-red-50 shadow-[inset_3px_0_0_#b91c1c,inset_0_1px_0_#b91c1c,inset_0_-1px_0_#b91c1c] dark:bg-red-400/10 dark:shadow-[inset_3px_0_0_#fca5a5,inset_0_1px_0_#fca5a5,inset_0_-1px_0_#fca5a5]",
-  "bg-orange-50 shadow-[inset_3px_0_0_#c2410c,inset_0_1px_0_#c2410c,inset_0_-1px_0_#c2410c] dark:bg-orange-400/10 dark:shadow-[inset_3px_0_0_#fdba74,inset_0_1px_0_#fdba74,inset_0_-1px_0_#fdba74]",
-  "bg-amber-50 shadow-[inset_3px_0_0_#a16207,inset_0_1px_0_#a16207,inset_0_-1px_0_#a16207] dark:bg-amber-400/10 dark:shadow-[inset_3px_0_0_#fcd34d,inset_0_1px_0_#fcd34d,inset_0_-1px_0_#fcd34d]",
-  "bg-muted/70 shadow-[inset_3px_0_0_#525252,inset_0_1px_0_#525252,inset_0_-1px_0_#525252] dark:bg-muted/40 dark:shadow-[inset_3px_0_0_#a3a3a3,inset_0_1px_0_#a3a3a3,inset_0_-1px_0_#a3a3a3]",
+  "bg-[color-mix(in_oklch,var(--chart-1)_12%,transparent)] shadow-[inset_3px_0_0_var(--chart-1),inset_0_1px_0_var(--chart-1),inset_0_-1px_0_var(--chart-1)]",
+  "bg-[color-mix(in_oklch,var(--chart-2)_12%,transparent)] shadow-[inset_3px_0_0_var(--chart-2),inset_0_1px_0_var(--chart-2),inset_0_-1px_0_var(--chart-2)]",
+  "bg-[color-mix(in_oklch,var(--chart-3)_12%,transparent)] shadow-[inset_3px_0_0_var(--chart-3),inset_0_1px_0_var(--chart-3),inset_0_-1px_0_var(--chart-3)]",
+  "bg-[color-mix(in_oklch,var(--chart-4)_12%,transparent)] shadow-[inset_3px_0_0_var(--chart-4),inset_0_1px_0_var(--chart-4),inset_0_-1px_0_var(--chart-4)]",
 ] as const;
 
 const COUNT_TONE: Record<string, string> = {
-  P0: "text-red-700 dark:text-red-300",
-  P1: "text-orange-800 dark:text-orange-300",
-  P2: "text-amber-700 dark:text-amber-300",
-  P3: "text-muted-foreground",
+  P0: "text-chart-1",
+  P1: "text-chart-2",
+  P2: "text-chart-3",
+  P3: "text-chart-4",
 };
 
 const TREE_WIDTH_KEY = "dureview-tree-width";
@@ -704,15 +700,15 @@ function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: b
       id={comment.anchor}
       className={`my-2 rounded-md border border-border border-l-[3px] px-3 py-2.5 ${accent} ${inset ? "mr-3 ml-10" : "mx-3"}`}
     >
-      <header className="mb-1 flex flex-wrap items-baseline gap-2">
-        <Badge className={PRIORITY_BADGE[comment.priority] ?? PRIORITY_BADGE[3]}>P{comment.priority}</Badge>
-        {comment.typeLabel ? <Badge variant="outline">{comment.typeLabel}</Badge> : null}
+      <header className="mb-1 flex flex-wrap items-center gap-2">
+        <PriorityBadge priority={comment.priority} />
+        <FindingTypeIcon type={comment.findingType} subtype={comment.subtype} label={comment.typeLabel} />
         {comment.tags.map((tag) => (
           <span key={tag} className="text-xs text-muted-foreground">
             {tag}
           </span>
         ))}
-        <span className="text-xs text-muted-foreground">{comment.confidence}</span>
+        <ConfidenceSignal value={comment.confidence} />
       </header>
       <h3 className="text-sm font-semibold">{comment.title}</h3>
       <p className="mt-1 text-sm">{comment.body}</p>
@@ -776,9 +772,10 @@ function CompleteSummary({ summary }: { summary: Extract<DetailSummary, { mode: 
         <ul className="-mx-3 mt-3">
           {summary.findings.map((finding) => (
             <li key={finding.anchor} className="border-t">
-              <a className="flex flex-wrap items-baseline gap-1.5 px-3 py-1.5 text-sm hover:bg-muted/50" href={`#${finding.anchor}`}>
-                <Badge className={PRIORITY_BADGE[finding.priority] ?? PRIORITY_BADGE[3]}>P{finding.priority}</Badge>
-                {finding.typeLabel ? <Badge variant="outline">{finding.typeLabel}</Badge> : null}
+              <a className="flex flex-wrap items-center gap-1.5 px-3 py-1.5 text-sm hover:bg-muted/50" href={`#${finding.anchor}`}>
+                <PriorityBadge priority={finding.priority} />
+                <FindingTypeIcon type={finding.findingType} subtype={finding.subtype} label={finding.typeLabel} />
+                <ConfidenceSignal value={finding.confidence} />
                 <span>{finding.title}</span>
                 <span className="font-mono text-xs text-muted-foreground">{finding.where}</span>
               </a>
@@ -808,7 +805,7 @@ function ReviewConfig({ settings }: { settings: DetailSettings }) {
             <Fragment key={row.key}>
               <dt className="text-muted-foreground">{configLabel(row.key, m.detail.configKeys)}</dt>
               <dd className="min-w-0 truncate" title={row.value}>
-                {row.value}
+                <SettingValue row={row} />
               </dd>
             </Fragment>
           ))}
@@ -835,6 +832,17 @@ function decodeHash(raw: string): string {
   } catch {
     return raw;
   }
+}
+
+function SettingValue({ row }: { row: { key: string; value: string } }) {
+  const provider = row.key === "model" ? providerAtStart(row.value) : null;
+  if (!provider) return row.value;
+  return (
+    <span className="inline-flex max-w-full items-center gap-1.5">
+      <ProviderMark provider={provider} />
+      <span className="min-w-0 truncate">{row.value}</span>
+    </span>
+  );
 }
 
 function configLabel(key: string, labels: Messages["detail"]["configKeys"]): string {
