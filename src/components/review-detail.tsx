@@ -547,7 +547,7 @@ function LazyPatch({
 
 function useDiffTheme(): "light" | "dark" {
   const [theme, setTheme] = useState<"light" | "dark">("light");
-  useEffect(() => {
+  useLayoutEffect(() => {
     const sync = () => setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
     sync();
     const observer = new MutationObserver(sync);

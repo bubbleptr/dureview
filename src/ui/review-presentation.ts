@@ -5,10 +5,34 @@ import { findingLineCss, findingRanges } from "./diff-focus.js";
 
 export const REVIEW_DIFF_THEME: ThemeTypes = "light";
 
+/**
+ * The tree shadow host sets `color-scheme: light dark`, so `light-dark()`
+ * follows the OS and the panel stays on the light palette when the page is
+ * `.dark`. This later layer pins the scheme to the app theme and maps the
+ * chrome onto the page tokens.
+ */
 export const REVIEW_TREE_CSS = [
-  "[data-file-tree-search-container]{display:block;padding:12px 12px 8px}",
-  "[data-file-tree-search-input]{box-sizing:border-box;width:100%;height:32px;margin:0;border:1px solid var(--border, #e5e5e5);border-radius:6px;background:transparent;color:inherit;padding:0 10px;font:inherit;font-size:13px;outline:none}",
-  "[data-file-tree-search-input]:focus{box-shadow:0 0 0 2px var(--ring, #a3a3a3)}",
+  ":host{color-scheme:light;",
+  "--trees-bg-override:var(--background);",
+  "--trees-fg-override:var(--foreground);",
+  "--trees-fg-muted-override:var(--muted-foreground);",
+  "--trees-border-color-override:var(--border);",
+  "--trees-bg-muted-override:var(--accent);",
+  "--trees-selected-bg-override:var(--accent);",
+  "--trees-selected-fg-override:var(--accent-foreground);",
+  "--trees-selected-focused-border-color-override:var(--ring);",
+  "--trees-search-bg-override:var(--background);",
+  "--trees-search-fg-override:var(--foreground);",
+  "--trees-input-bg-override:var(--background);",
+  "--trees-focus-ring-color-override:var(--ring);",
+  "--trees-accent-override:var(--foreground);",
+  "--trees-font-family-override:var(--font-mono);",
+  "--trees-file-icon-color:var(--muted-foreground);",
+  "--trees-file-icon-vermilion:var(--muted-foreground);",
+  "--trees-file-icon-cyan:var(--muted-foreground)}",
+  ":host-context(.dark){color-scheme:dark}",
+  "[data-icon-token]{color:var(--muted-foreground)}",
+  "[data-file-tree-search-input]{font-family:var(--font-sans)}",
 ].join("");
 
 export function reviewDiffOptions(input: {
@@ -25,7 +49,7 @@ export function reviewDiffOptions(input: {
   return {
     diffStyle: input.diffStyle,
     themeType: input.themeType,
-    unsafeCSS: `${REVIEW_EXPAND_CSS}${findingLineCss(findingRanges(input.lines))}`,
+    unsafeCSS: `${REVIEW_DIFF_SURFACE_CSS}${REVIEW_EXPAND_CSS}${findingLineCss(findingRanges(input.lines))}`,
     disableFileHeader: true,
     // The WASM Oniguruma engine is a separate chunk. The page highlights with Shiki's JavaScript engine.
     preferredHighlighter: "shiki-js",
@@ -35,6 +59,21 @@ export function reviewDiffOptions(input: {
 /** Keep a leftover hunk separator readable if a partial patch still emits one. */
 export const REVIEW_EXPAND_CSS =
   "[data-expand-button][data-expand-all-button]{display:flex}[data-expand-index] [data-separator-wrapper][data-separator-multi-button]{grid-template-columns:32px 32px minmax(0,1fr) auto}";
+
+/**
+ * The diff host also sets `color-scheme: light dark`. Point both scheme
+ * branches at the page tokens so the panel cannot stay on the library's
+ * white surface when the app theme is dark.
+ */
+export const REVIEW_DIFF_SURFACE_CSS = [
+  ":host{color-scheme:light;",
+  "--diffs-light-bg:var(--background);",
+  "--diffs-dark-bg:var(--background);",
+  "--diffs-light:var(--foreground);",
+  "--diffs-dark:var(--foreground);",
+  "--diffs-font-family:var(--font-mono)}",
+  ":host-context(.dark){color-scheme:dark}",
+].join("");
 
 export type ReviewTreePreload = {
   id: string;
