@@ -185,6 +185,7 @@ Settings-page values use this order: a saved UI override, then the environment v
 | `DUREVIEW_PROVIDER` | Codex when that credential exists, otherwise `openai` when `OPENAI_API_KEY` is set, otherwise `openai-codex` | `openai-codex`, `github-copilot`, `xai`, `openai`, `openrouter`, or `deepseek`. The settings page can override this. |
 | `DUREVIEW_MODEL` | `gpt-5.5` | Model id from the pi-ai catalog for the selected provider. The settings page can override this. |
 | `DUREVIEW_THINKING` | `medium` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Only levels that model supports are accepted. The settings page can override this. |
+| `DUREVIEW_MAX_OUTPUT_TOKENS` | `16000` | Most tokens one model response may use. The settings page can override this. |
 | `DUREVIEW_LOGIN_METHOD` | prompt | `device_code` or `browser`. |
 | `DUREVIEW_SKIP_DRAFTS` | off | `1` or `true` skips drafts even when `.dureview.md` sets `drafts: true`. The settings page can override this. |
 | `DUREVIEW_DEFAULT_TRIGGER` | `manual` | `auto`, `once`, or `manual`, used when the base branch has no `.dureview.md` or the file omits `trigger`. An explicit `trigger` in the file wins. The settings page can override this. |

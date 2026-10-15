@@ -223,6 +223,7 @@ function ReviewSection({ model, section }: { model: SettingsPageModel; section: 
         </summary>
         <div className="border-t px-5">
           <TtlField field={model.fields.checkoutTtlDays} value={model.form.checkoutTtlDays} />
+          <MaxOutputField field={model.fields.maxOutputTokens} value={model.form.maxOutputTokens} />
           <div className="flex flex-col gap-1 py-5">
             <p className="text-sm font-medium">{copy.fileDefaults}</p>
             <p className="max-w-prose text-sm leading-5 text-muted-foreground">{copy.fileDefaultsHelp}</p>
@@ -248,6 +249,7 @@ function SystemSection({ model, status }: { model: SettingsPageModel; status: Sh
     model.fields.defaultTrigger,
     model.fields.skipDrafts,
     model.fields.checkoutTtlDays,
+    model.fields.maxOutputTokens,
   ];
   return (
     <div className="flex flex-col gap-8">
@@ -465,6 +467,17 @@ function TtlField({ field, value }: { field: SettingsFieldView; value: string })
     <SettingRow title={text.label} description={text.help} htmlFor={field.key}>
       <div className="w-full">
         <Input id={field.key} name="checkoutTtlDays" type="number" min={0} step={1} defaultValue={value} />
+      </div>
+    </SettingRow>
+  );
+}
+
+function MaxOutputField({ field, value }: { field: SettingsFieldView; value: string }) {
+  const text = fieldCopy(field, useSettingsCopy());
+  return (
+    <SettingRow title={text.label} description={text.help} htmlFor={field.key}>
+      <div className="w-full">
+        <Input id={field.key} name="maxOutputTokens" type="number" min={1} step={1} defaultValue={value} />
       </div>
     </SettingRow>
   );

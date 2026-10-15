@@ -98,5 +98,6 @@ function formValues(form: URLSearchParams): Partial<SettingsFormValues> {
     values.skipDrafts = form.getAll("skipDrafts").some((value) => value === "true" || value === "on" || value === "1");
   }
   if (form.has("checkoutTtlDays")) values.checkoutTtlDays = form.get("checkoutTtlDays") ?? "";
+  if (form.has("maxOutputTokens")) values.maxOutputTokens = form.get("maxOutputTokens") ?? "";
   return values;
 }

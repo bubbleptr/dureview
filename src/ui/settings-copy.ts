@@ -172,6 +172,10 @@ export const settingsCopy = {
       label: "Checkout TTL",
       help: "Delete checkouts older than this many days. 0 deletes every checkout no review is using. The next sweep picks this up.",
     },
+    maxOutputTokens: {
+      label: "Max output tokens",
+      help: "Most tokens one model response may use. Each model call uses this cap.",
+    },
   },
   sources: {
     override: "Override",
@@ -372,6 +376,10 @@ const settingsCopyZh = {
     checkoutTtlDays: {
       label: "检出保留",
       help: "删除早于这么多天的检出。0 会删除没有审查在用的全部检出。下次清扫时生效。",
+    },
+    maxOutputTokens: {
+      label: "单次输出上限",
+      help: "一次模型回复最多使用的 token 数。每次模型调用都用这个上限。",
     },
   },
   sources: {

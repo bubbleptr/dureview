@@ -389,6 +389,7 @@ function settingsFixture(): SettingsPageModel {
       defaultTrigger: field("defaultTrigger", "Trigger", "DUREVIEW_DEFAULT_TRIGGER", "manual"),
       skipDrafts: field("skipDrafts", "Drafts", "DUREVIEW_SKIP_DRAFTS", "false"),
       checkoutTtlDays: field("checkoutTtlDays", "Checkout TTL", "DUREVIEW_CHECKOUT_TTL_DAYS", "30"),
+      maxOutputTokens: field("maxOutputTokens", "Max output tokens", "DUREVIEW_MAX_OUTPUT_TOKENS", "16000"),
     },
     form: {
       provider: "openai-codex",
@@ -397,6 +398,7 @@ function settingsFixture(): SettingsPageModel {
       defaultTrigger: "manual",
       skipDrafts: false,
       checkoutTtlDays: "30",
+      maxOutputTokens: "16000",
     },
     console: emptyConsole(),
     problems: [],

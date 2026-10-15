@@ -319,6 +319,13 @@ describe("DUREVIEW_DEFAULT_TRIGGER", () => {
     expect(configFromEnv({ DUREVIEW_CHECKOUT_TTL_DAYS: " 14 " }).checkoutTtlDays).toBe(14);
     expect(() => configFromEnv({ DUREVIEW_CHECKOUT_TTL_DAYS: "-1" })).toThrow(/DUREVIEW_CHECKOUT_TTL_DAYS/);
     expect(() => configFromEnv({ DUREVIEW_CHECKOUT_TTL_DAYS: "30.5" })).toThrow(/DUREVIEW_CHECKOUT_TTL_DAYS/);
+    expect(configFromEnv({}).maxOutputTokens).toBe(16000);
+    expect(configFromEnv({ DUREVIEW_MAX_OUTPUT_TOKENS: "" }).maxOutputTokens).toBe(16000);
+    expect(configFromEnv({ DUREVIEW_MAX_OUTPUT_TOKENS: "  " }).maxOutputTokens).toBe(16000);
+    expect(configFromEnv({ DUREVIEW_MAX_OUTPUT_TOKENS: " 8000 " }).maxOutputTokens).toBe(8000);
+    expect(() => configFromEnv({ DUREVIEW_MAX_OUTPUT_TOKENS: "0" })).toThrow(/DUREVIEW_MAX_OUTPUT_TOKENS/);
+    expect(() => configFromEnv({ DUREVIEW_MAX_OUTPUT_TOKENS: "-1" })).toThrow(/DUREVIEW_MAX_OUTPUT_TOKENS/);
+    expect(() => configFromEnv({ DUREVIEW_MAX_OUTPUT_TOKENS: "16.5" })).toThrow(/DUREVIEW_MAX_OUTPUT_TOKENS/);
   });
 });
 

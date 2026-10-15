@@ -126,7 +126,7 @@ export class DureviewService {
       harness = await Harness.open(
       await openNodeSqliteStorage(storageFile(options.config)),
       {
-        models: options.models,
+        models: withMaxOutputTokens(options.models, () => settings.effective().maxOutputTokens),
         registry,
         settings: {
           extensions: [extension],
@@ -169,7 +169,7 @@ export class DureviewService {
     );
   }
 
-  /** Model, thinking, trigger, draft skip, and checkout TTL after overrides. */
+  /** Model, thinking, trigger, draft skip, checkout TTL, and output token cap after overrides. */
   effectiveConfig(): EffectiveConfig {
     return this.settings.effective();
   }
@@ -691,4 +691,24 @@ function namedTimeout(value: unknown): boolean {
   if (typeof value !== "object" || value === null || !("name" in value)) return false;
   if (value.name === "TimeoutError") return true;
   return "cause" in value && namedTimeout(value.cause);
+}
+
+function cappedOutputTokens(model: { maxTokens?: number }, configured: number): number {
+  const limit = model.maxTokens;
+  return typeof limit === "number" && limit > 0 ? Math.min(configured, limit) : configured;
+}
+
+function withMaxOutputTokens(models: Models, maxOutputTokens: () => number): Models {
+  const streamSimple: Models["streamSimple"] = (model, context, options) =>
+    models.streamSimple(model, context, { ...options, maxTokens: cappedOutputTokens(model, maxOutputTokens()) });
+  const completeSimple: Models["completeSimple"] = (model, context, options) =>
+    models.completeSimple(model, context, { ...options, maxTokens: cappedOutputTokens(model, maxOutputTokens()) });
+  return new Proxy(models, {
+    get(target, property, receiver) {
+      if (property === "streamSimple") return streamSimple;
+      if (property === "completeSimple") return completeSimple;
+      const value: unknown = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
