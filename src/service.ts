@@ -255,10 +255,11 @@ export class DureviewService {
   }
 
   /**
-   * One saved review plus its pull request files.
-   * A finished review reuses the file list stored for its head SHA.
+   * One saved review plus the diff at its head SHA.
+   * A finished review reuses the file list stored for that SHA.
    * A running review always asks GitHub, because the pull request can still move.
-   * A GitHub error leaves the saved comments in place.
+   * A GitHub error or the detail page's own deadline leaves the saved comments in place.
+   * Cancelling the caller's signal still rejects.
    */
   async reviewForUi(
     taskId: string,
@@ -279,26 +280,59 @@ export class DureviewService {
       const cached = await this.archive.readPullSnapshot(review.taskId, review.sha);
       if (cached) return { files: cached, diffUnavailable: false };
     }
+    const request = {
+      owner: review.owner,
+      repo: review.repo,
+      number: review.number,
+      installationId: review.installationId,
+    };
     try {
-      const files = await this.github.listPullFiles(
-        {
-          owner: review.owner,
-          repo: review.repo,
-          number: review.number,
-          installationId: review.installationId,
-        },
-        signal,
-      );
+      const files = frozen
+        ? await this.#reviewedFiles(review, signal)
+        : await this.github.listPullFiles(request, signal);
       if (frozen) await this.#storePullSnapshot(review, files);
       return { files, diffUnavailable: false };
     } catch (error) {
-      if (signal.aborted) throw error;
+      if (signal.aborted && !isDeadline(signal, error)) throw error;
       log("error", "could not load pull request diff", {
         repo: `${review.owner}/${review.repo}`,
         pr: review.number,
         error: error instanceof Error ? error.message : String(error),
       });
       return { files: [], diffUnavailable: true };
+    }
+  }
+
+  /**
+   * File list at `review.sha`. The pull-request files API is the live head, so it is stored
+   * only when that head is still the reviewed SHA after the fetch. Otherwise the compare
+   * `baseSha...sha` is the diff this review saw.
+   */
+  async #reviewedFiles(review: ReviewDetail, signal: AbortSignal): Promise<PullFile[]> {
+    const request = {
+      owner: review.owner,
+      repo: review.repo,
+      installationId: review.installationId,
+    };
+    const head = await this.#pullHead(request, review.number, signal);
+    if (head === review.sha) {
+      const files = await this.github.listPullFiles({ ...request, number: review.number }, signal);
+      const still = await this.#pullHead(request, review.number, signal);
+      if (still === review.sha) return files;
+    }
+    return this.github.compareFiles(request, review.baseSha, review.sha, signal);
+  }
+
+  async #pullHead(
+    request: { owner: string; repo: string; installationId: number | null },
+    number: number,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      return (await this.github.getPull(request, number, signal)).sha;
+    } catch (error) {
+      if (signal.aborted) throw error;
+      return "";
     }
   }
 
@@ -446,4 +480,14 @@ export class DureviewService {
       this.archive.close();
     }
   }
+}
+
+function isDeadline(signal: AbortSignal, error: unknown): boolean {
+  return namedTimeout(signal.reason) || namedTimeout(error);
+}
+
+function namedTimeout(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || !("name" in value)) return false;
+  if (value.name === "TimeoutError") return true;
+  return "cause" in value && namedTimeout(value.cause);
 }

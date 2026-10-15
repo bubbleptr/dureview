@@ -72,4 +72,26 @@ describe("pull request files", () => {
     expect(fileCalls[0]?.authorization).toBe("Bearer ghs_install_token_canary");
     expect(fileCalls[0]?.authorization).not.toBe(tokenCall?.authorization);
   });
+
+  it("compares the reviewed base and head instead of the live pull request", async () => {
+    const config = testConfig(await tempDataDir());
+    config.githubToken = "ghp_test";
+    const client = new GithubRest(config);
+    const seen: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      seen.push(url);
+      if (url.includes("/compare/")) {
+        return Response.json({
+          files: [{ filename: "src/then.ts", status: "modified", additions: 1, deletions: 0, patch: "@@\n+reviewed\n" }],
+        });
+      }
+      return new Response(`unexpected ${url}`, { status: 500 });
+    });
+
+    const files = await client.compareFiles(reviewRequest(), "1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", new AbortController().signal);
+    expect(files.map((file) => file.filename)).toEqual(["src/then.ts"]);
+    expect(seen.some((url) => url.endsWith("/repos/acme/demo/compare/1111111111111111111111111111111111111111...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).toBe(true);
+    await expect(client.compareFiles(reviewRequest(), "main", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", new AbortController().signal)).rejects.toThrow(/SHA/);
+  });
 });

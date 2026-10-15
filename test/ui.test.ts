@@ -7,6 +7,7 @@ import type { RepoCheckout } from "../src/review/checkout.js";
 import { startHttp } from "../src/server.js";
 import { VERSION } from "../src/version.js";
 import {
+  BASE_SHA,
   MemoryGitHub,
   openTestService,
   pullPayload,
@@ -154,6 +155,14 @@ describe("status page", () => {
     expect(html).not.toContain("never billed");
     expect(github.calls.filter((call) => call === "listPullFiles")).toHaveLength(0);
 
+    github.remotePull = {
+      number: 7,
+      title: "Charge positive amounts",
+      draft: false,
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+    };
     github.pullFiles = [
       {
         filename: "src/pay.ts",

@@ -321,10 +321,14 @@ export class MemoryGitHub implements GitHub {
     return this.permissions.get(username) ?? "none";
   }
 
+  pullQueue: RemotePull[] = [];
+
   async getPull(): Promise<RemotePull> {
     this.calls.push("getPull");
-    if (!this.remotePull) throw new Error("pull is not configured");
-    return { ...this.remotePull };
+    const queued = this.pullQueue.shift();
+    const pull = queued ?? this.remotePull;
+    if (!pull) throw new Error("pull is not configured");
+    return { ...pull };
   }
 
   async reactToComment(_request: GitHubRepo, commentId: number): Promise<void> {
@@ -343,6 +347,15 @@ export class MemoryGitHub implements GitHub {
     this.pullFileRequests.push({ installationId: request.installationId, number: request.number });
     if (this.pullFilesError) throw this.pullFilesError;
     return this.pullFiles.map((file) => ({ ...file }));
+  }
+
+  compared: PullFile[] = [];
+  compareRequests: Array<{ base: string; head: string }> = [];
+
+  async compareFiles(_request: GitHubRepo, base: string, head: string): Promise<PullFile[]> {
+    this.calls.push("compareFiles");
+    this.compareRequests.push({ base, head });
+    return this.compared.map((file) => ({ ...file }));
   }
 
   async listCheckRuns(_request: GitHubRepo, sha: string, name: string): Promise<CheckRun[]> {

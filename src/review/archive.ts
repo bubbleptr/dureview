@@ -124,7 +124,7 @@ type Identity = { taskId: string; owner: string; repo: string; number: number };
 
 /**
  * Review metadata, structured comments, and the file list of a finished review.
- * A finished review is immutable at its head SHA, so that list is safe to reuse.
+ * That list is the diff at the review's head SHA, not a later pull request head.
  * A running review is not stored here: the pull request can still move.
  * Writes are serialized in-process.
  */

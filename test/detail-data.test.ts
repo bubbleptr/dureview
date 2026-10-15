@@ -6,7 +6,8 @@ import { defaultPolicy } from "../src/review/policy.js";
 import { buildReviewDetail, loadReviewDetail } from "../src/ui/detail-data.js";
 import { safeNextPath } from "../src/ui/next-path.js";
 import { STUCK_AFTER_MS } from "../src/ui/page.js";
-import { BASE_SHA, MemoryGitHub, openTestService, sampleFinding, SHA_A, tempDataDir } from "./support.js";
+import type { RemotePull } from "../src/github/client.js";
+import { BASE_SHA, MemoryGitHub, openTestService, sampleFinding, SHA_A, SHA_B, tempDataDir } from "./support.js";
 
 const PATCH = [
   "@@ -1,5 +1,6 @@",
@@ -63,6 +64,7 @@ describe("review detail loader", () => {
     archive.close();
 
     const github = new MemoryGitHub();
+    github.remotePull = head(SHA_A);
     github.pullFiles = [
       {
         filename: "src/pay.ts",
@@ -107,6 +109,7 @@ describe("review detail loader", () => {
       expect(model.settings.rows.find((row) => row.key === "head")?.value).toBe(SHA_A.slice(0, 7));
     }
     expect(github.pullFileRequests).toEqual([{ installationId: 99, number: 7 }]);
+    expect(github.compareRequests).toEqual([]);
     const serialized = JSON.stringify(model);
     expect(serialized).not.toContain(SHA_A);
     expect(serialized).not.toContain(BASE_SHA);
@@ -169,6 +172,7 @@ describe("review detail loader", () => {
     archive.close();
 
     const github = new MemoryGitHub();
+    github.remotePull = head(SHA_A);
     github.pullFiles = [
       {
         filename: "src/pay.ts",
@@ -222,6 +226,218 @@ describe("review detail loader", () => {
     const stored = await loadReviewDetail(service, "https://api.github.com", "miss");
     expect(stored?.files[0]?.filename).toBe("src/pay.ts");
     expect(github.calls.filter((call) => call === "listPullFiles")).toHaveLength(4);
+  });
+
+  it("stores the reviewed diff when the pull request head has moved", async () => {
+    const dataDir = await tempDataDir();
+    const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
+    await archive.open();
+    await archive.start({
+      taskId: "moved",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      title: "Reviewed earlier",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+      trigger: "opened",
+    });
+    await archive.finish({
+      taskId: "moved",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      outcome: "completed",
+      verdict: "clean",
+      findingCount: 0,
+      title: "Reviewed earlier",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+    });
+    archive.close();
+
+    const github = new MemoryGitHub();
+    github.remotePull = head(SHA_B);
+    github.pullFiles = [
+      {
+        filename: "src/later.ts",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -0,0 +1 @@\n+live\n",
+        previousFilename: null,
+      },
+    ];
+    github.compared = [
+      {
+        filename: "src/then.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -1 +1 @@\n-old\n+reviewed\n",
+        previousFilename: null,
+      },
+    ];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    closers.push(() => service.close());
+
+    const model = await loadReviewDetail(service, "https://api.github.com", "moved");
+    expect(model?.files.map((file) => file.filename)).toEqual(["src/then.ts"]);
+    expect(github.calls.filter((call) => call === "listPullFiles")).toEqual([]);
+    expect(github.compareRequests).toEqual([{ base: BASE_SHA, head: SHA_A }]);
+
+    github.compared = [];
+    github.remotePull = head("cccccccccccccccccccccccccccccccccccccccc");
+    const cached = await loadReviewDetail(service, "https://api.github.com", "moved");
+    expect(cached?.files.map((file) => file.filename)).toEqual(["src/then.ts"]);
+    expect(github.compareRequests).toHaveLength(1);
+  });
+
+  it("does not store live files when the head moves during the fetch", async () => {
+    const dataDir = await tempDataDir();
+    const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
+    await archive.open();
+    await archive.start({
+      taskId: "race",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      title: "Race",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+      trigger: "opened",
+    });
+    await archive.finish({
+      taskId: "race",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      outcome: "completed",
+      verdict: "clean",
+      findingCount: 0,
+      title: "Race",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+    });
+    archive.close();
+
+    const github = new MemoryGitHub();
+    github.pullQueue = [head(SHA_A), head(SHA_B)];
+    github.remotePull = head(SHA_B);
+    github.pullFiles = [
+      {
+        filename: "src/later.ts",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -0,0 +1 @@\n+live\n",
+        previousFilename: null,
+      },
+    ];
+    github.compared = [
+      {
+        filename: "src/then.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -1 +1 @@\n-old\n+reviewed\n",
+        previousFilename: null,
+      },
+    ];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    closers.push(() => service.close());
+
+    const model = await loadReviewDetail(service, "https://api.github.com", "race");
+    expect(model?.files.map((file) => file.filename)).toEqual(["src/then.ts"]);
+    expect(github.calls.filter((call) => call === "listPullFiles")).toHaveLength(1);
+    expect(github.compareRequests).toEqual([{ base: BASE_SHA, head: SHA_A }]);
+
+    github.compared = [];
+    const cached = await loadReviewDetail(service, "https://api.github.com", "race");
+    expect(cached?.files.map((file) => file.filename)).toEqual(["src/then.ts"]);
+    expect(github.compareRequests).toHaveLength(1);
+  });
+
+  it("keeps the saved review when the file fetch hits its deadline", async () => {
+    const dataDir = await tempDataDir();
+    const archive = new ReviewArchive(join(dataDir, "reviews.sqlite"));
+    await archive.open();
+    await archive.start({
+      taskId: "slow",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      title: "Slow GitHub",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+      trigger: "opened",
+    });
+    await archive.finish({
+      taskId: "slow",
+      owner: "acme",
+      repo: "demo",
+      number: 7,
+      outcome: "completed",
+      verdict: "block",
+      findingCount: 1,
+      title: "Slow GitHub",
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      installationId: 99,
+      verdictReason: "Do not merge.",
+      overallConfidence: 0.8,
+      checked: ["payment capture"],
+      policy: { ...defaultPolicy(), trigger: "auto" },
+      findings: [sampleFinding()],
+      provider: "faux",
+      modelId: "faux-1",
+    });
+    archive.close();
+
+    const github = new MemoryGitHub();
+    github.remotePull = head(SHA_A);
+    github.pullFilesError = new Error("slow");
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    closers.push(() => service.close());
+
+    const signal = AbortSignal.timeout(1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const detail = await service.reviewForUi("slow", signal);
+    expect(detail?.diffUnavailable).toBe(true);
+    expect(detail?.files).toEqual([]);
+    expect(detail?.review.verdictReason).toBe("Do not merge.");
+    expect(detail?.review.comments).toHaveLength(1);
+
+    const cancelled = new AbortController();
+    cancelled.abort();
+    github.pullFilesError = new Error("cancelled");
+    await expect(service.reviewForUi("slow", cancelled.signal)).rejects.toThrow("cancelled");
+
+    github.pullFilesError = null;
+    github.pullFiles = [
+      {
+        filename: "src/pay.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -1 +1 @@\n-old\n+kept\n",
+        previousFilename: null,
+      },
+    ];
+    const recovered = await service.reviewForUi("slow", AbortSignal.timeout(5_000));
+    expect(recovered?.diffUnavailable).toBe(false);
+    expect(recovered?.files[0]?.filename).toBe("src/pay.ts");
   });
 
   it("shows running, stuck, and a missing error reason without priority counts", () => {
@@ -299,6 +515,17 @@ describe("review detail loader", () => {
     expect(safeNextPath("https://evil.example/phish")).toBe("/ui");
   });
 });
+
+function head(sha: string): RemotePull {
+  return {
+    number: 7,
+    title: "Charge positive amounts",
+    draft: false,
+    sha,
+    baseSha: BASE_SHA,
+    baseRef: "main",
+  };
+}
 
 function detail(comments: StoredComment[]): ReviewDetail {
   return {
