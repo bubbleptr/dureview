@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { settingsCopy } from "../ui/settings-copy.js";
 import { Button } from "./ui/button.js";
 
 export const DIFF_STYLE_KEY = "dureview-diff-style";
@@ -30,18 +31,15 @@ export function useDiffStyle(): [DiffStyle, (value: DiffStyle) => void] {
 
 export function DiffStyleControl() {
   const [style, setStyle] = useDiffStyle();
+  const copy = settingsCopy.review;
   return (
-    <section className="flex flex-col gap-2 border-b pb-5">
-      <h2 className="text-sm font-medium">Diff view</h2>
-      <p className="text-sm leading-6 text-muted-foreground">Unified or split. Saved in this browser, not on the server.</p>
-      <div className="flex gap-1">
-        <Button type="button" size="sm" variant={style === "unified" ? "default" : "outline"} aria-pressed={style === "unified"} onClick={() => setStyle("unified")}>
-          Unified
-        </Button>
-        <Button type="button" size="sm" variant={style === "split" ? "default" : "outline"} aria-pressed={style === "split"} onClick={() => setStyle("split")}>
-          Split
-        </Button>
-      </div>
-    </section>
+    <div className="flex gap-1" role="group" aria-label={copy.diffGroup}>
+      <Button type="button" size="sm" variant={style === "unified" ? "default" : "outline"} aria-pressed={style === "unified"} onClick={() => setStyle("unified")}>
+        {copy.unified}
+      </Button>
+      <Button type="button" size="sm" variant={style === "split" ? "default" : "outline"} aria-pressed={style === "split"} onClick={() => setStyle("split")}>
+        {copy.split}
+      </Button>
+    </div>
   );
 }

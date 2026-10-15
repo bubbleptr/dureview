@@ -331,6 +331,7 @@ describe("review list rendering", () => {
     const runtime: ShellStatus = {
       version: status.version,
       uptime: formatUptime(status.uptimeSeconds * 1000),
+      dataDir: "/var/lib/dureview",
       provider: status.provider,
       model: status.model,
       thinking: "medium",
@@ -338,16 +339,21 @@ describe("review list rendering", () => {
       githubApp: status.githubApp,
       githubToken: status.githubToken,
     };
-    const settingsHtml = renderSettingsHtml(settingsFixture(), runtime);
-    expect(settingsHtml).toContain("0.1.0");
-    expect(settingsHtml).toContain("1m 5s");
-    expect(settingsHtml).toContain("access token expires ");
-    expect(settingsHtml).toContain('datetime="2030-01-02T03:04:05.000Z"');
-    expect(settingsHtml).toContain("2030-01-02 03:04 UTC");
-    expect(settingsHtml).toContain("GitHub App <b>yes</b>");
-    expect(settingsHtml).toContain("GitHub token <b>no</b>");
-    expect(settingsHtml).toContain("&lt;script&gt;");
-    expect(settingsHtml).not.toContain("<script>alert");
+    const modelsHtml = renderSettingsHtml(settingsFixture(), runtime, "models");
+    expect(modelsHtml).toContain("access token expires ");
+    expect(modelsHtml).toContain('datetime="2030-01-02T03:04:05.000Z"');
+    expect(modelsHtml).toContain("2030-01-02 03:04 UTC");
+    const systemHtml = renderSettingsHtml(settingsFixture(), runtime, "system");
+    expect(systemHtml).toContain("0.1.0");
+    expect(systemHtml).toContain("1m 5s");
+    expect(systemHtml).toContain("/var/lib/dureview");
+    expect(systemHtml).toContain("&lt;script&gt;");
+    expect(systemHtml).not.toContain("<script>alert");
+    const githubHtml = renderSettingsHtml(settingsFixture(), runtime, "github");
+    expect(githubHtml).toContain("GitHub App");
+    expect(githubHtml).toContain(">Yes<");
+    expect(githubHtml).toContain("GitHub token");
+    expect(githubHtml).toContain(">No<");
     expect(html).toContain("acme/demo #7");
     expect(html).toContain("/dureview");
     expect(html).toContain("P0/P1");

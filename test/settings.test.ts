@@ -302,13 +302,10 @@ describe("settings at runtime", () => {
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain("Settings");
-    expect(html).toContain("DUREVIEW_MODEL");
-    expect(html).toContain("Environment");
+    expect(html).toContain('data-section="models"');
     expect(html).toContain("faux-1");
     expect(html).toContain('data-ui="combobox"');
     expect(html).toContain(">low<");
-    expect(html).toContain("faux/");
-    expect(html).toContain(" · low");
     expect(html).not.toContain(UI_TOKEN);
     expect(html).not.toContain(SECRET);
     expect(html).not.toContain("test-token");
@@ -362,9 +359,16 @@ describe("settings at runtime", () => {
     const after = await fetch(`${http.url}/ui/settings?saved=1`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
     const afterHtml = await after.text();
     expect(afterHtml).toContain("Saved. New reviews use these settings.");
-    expect(afterHtml).toContain("Override");
-    expect(afterHtml).toContain("ui@203.0.113.4");
     expect(afterHtml).not.toContain(UI_TOKEN);
+    const system = await fetch(`${http.url}/ui/settings/system`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    const systemHtml = await system.text();
+    expect(systemHtml).toContain("DUREVIEW_MODEL");
+    expect(systemHtml).toContain("Environment");
+    expect(systemHtml).toContain("Override");
+    expect(systemHtml).toContain("ui@203.0.113.4");
+    expect(systemHtml).toContain("faux/");
+    expect(systemHtml).toContain(" · high");
+    expect(systemHtml).toContain(dataDir);
 
     const reset = await fetch(`${http.url}/ui/settings`, {
       method: "POST",
@@ -378,9 +382,27 @@ describe("settings at runtime", () => {
 
     const listed = await fetch(`${http.url}/ui/settings`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
     const listedHtml = await listed.text();
-    expect(listedHtml).toContain("faux/");
     expect(listedHtml).toContain("faux-1");
-    expect(listedHtml).toContain(" · high");
+    const listedSystem = await fetch(`${http.url}/ui/settings/system`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    const listedSystemHtml = await listedSystem.text();
+    expect(listedSystemHtml).toContain("faux/");
+    expect(listedSystemHtml).toContain("faux-1");
+    expect(listedSystemHtml).toContain(" · high");
+
+    const review = await fetch(`${http.url}/ui/settings/review`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    expect(review.status).toBe(200);
+    const reviewHtml = await review.text();
+    expect(reviewHtml).toContain('data-section="review"');
+    expect(reviewHtml).toContain("post_informational");
+    expect(reviewHtml).toContain("Unified");
+    expect(reviewHtml).not.toContain("Save key");
+
+    const query = await fetch(`${http.url}/ui/settings?section=github`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    expect(query.status).toBe(200);
+    expect(await query.text()).toContain('data-section="github"');
+
+    const missing = await fetch(`${http.url}/ui/settings/nope`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    expect(missing.status).toBe(404);
   });
 });
 

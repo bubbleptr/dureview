@@ -12,6 +12,7 @@ import { reviewDetailResponse } from "./detail.js";
 import { htmlResponse, notFoundJson, redirectResponse, unauthorizedJson } from "./headers.js";
 import { loginPostResponse } from "./login.js";
 import { settingsGetResponse, settingsPostResponse } from "./settings.js";
+import { isKnownSettingsPath, isSettingsCandidate } from "../ui/settings-sections.js";
 import { handleWebhookRequest } from "./webhook.js";
 
 export type DispatchContext = ListContext & {
@@ -30,7 +31,10 @@ export async function dispatch(ctx: DispatchContext, request: Request): Promise<
     return handleWebhookRequest(ctx.service, ctx.service.configuredWebhookSecret(), request);
   }
   if (pathname === "/ui/login") return loginDispatch(ctx, request);
-  if (pathname === "/ui/settings") return settingsDispatch(ctx, request);
+  if (isSettingsCandidate(pathname)) {
+    if (!isKnownSettingsPath(pathname)) return notFoundJson();
+    return settingsDispatch(ctx, request);
+  }
   if (method === "GET" && pathname === "/ui/stats") {
     return redirectResponse(`/ui${url.search}`);
   }
@@ -102,6 +106,7 @@ async function shellStatus(ctx: DispatchContext): Promise<ShellStatus> {
   return {
     version: status.version,
     uptime: formatUptime(status.uptimeSeconds * 1000),
+    dataDir: ctx.dataDir ?? null,
     provider: status.provider,
     model: status.model,
     thinking: live.thinking,
