@@ -653,6 +653,8 @@ describe("review detail loader", () => {
     expect(safeNextPath("/ui/stats")).toBe("/ui");
     expect(safeNextPath("/ui/reviews")).toBe("/ui/reviews");
     expect(safeNextPath("/ui/settings")).toBe("/ui/settings");
+    expect(safeNextPath("/ui/settings/github")).toBe("/ui/settings/github");
+    expect(safeNextPath("/ui/settings/nope")).toBe("/ui");
     expect(safeNextPath("/ui/reviews/task_1")).toBe("/ui/reviews/task_1");
     expect(safeNextPath("https://evil.example/phish")).toBe("/ui");
   });

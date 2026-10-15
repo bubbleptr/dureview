@@ -4,6 +4,7 @@ import type { CodexView } from "./list-model.js";
 export type ShellStatus = {
   version: string;
   uptime: string;
+  dataDir: string | null;
   provider: string;
   model: string;
   thinking: string;

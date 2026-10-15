@@ -302,13 +302,10 @@ describe("settings at runtime", () => {
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain("Settings");
-    expect(html).toContain("DUREVIEW_MODEL");
-    expect(html).toContain("Environment");
+    expect(html).toContain('data-section="models"');
     expect(html).toContain("faux-1");
     expect(html).toContain('data-ui="combobox"');
     expect(html).toContain(">low<");
-    expect(html).toContain("faux/");
-    expect(html).toContain(" · low");
     expect(html).not.toContain(UI_TOKEN);
     expect(html).not.toContain(SECRET);
     expect(html).not.toContain("test-token");
@@ -362,9 +359,16 @@ describe("settings at runtime", () => {
     const after = await fetch(`${http.url}/ui/settings?saved=1`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
     const afterHtml = await after.text();
     expect(afterHtml).toContain("Saved. New reviews use these settings.");
-    expect(afterHtml).toContain("Override");
-    expect(afterHtml).toContain("ui@203.0.113.4");
     expect(afterHtml).not.toContain(UI_TOKEN);
+    const system = await fetch(`${http.url}/ui/settings/system`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    const systemHtml = await system.text();
+    expect(systemHtml).toContain("DUREVIEW_MODEL");
+    expect(systemHtml).toContain("Environment");
+    expect(systemHtml).toContain("Override");
+    expect(systemHtml).toContain("ui@203.0.113.4");
+    expect(systemHtml).toContain("faux/");
+    expect(systemHtml).toContain(" · high");
+    expect(systemHtml).toContain(dataDir);
 
     const reset = await fetch(`${http.url}/ui/settings`, {
       method: "POST",
@@ -378,9 +382,148 @@ describe("settings at runtime", () => {
 
     const listed = await fetch(`${http.url}/ui/settings`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
     const listedHtml = await listed.text();
-    expect(listedHtml).toContain("faux/");
     expect(listedHtml).toContain("faux-1");
-    expect(listedHtml).toContain(" · high");
+    const listedSystem = await fetch(`${http.url}/ui/settings/system`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    const listedSystemHtml = await listedSystem.text();
+    expect(listedSystemHtml).toContain("faux/");
+    expect(listedSystemHtml).toContain("faux-1");
+    expect(listedSystemHtml).toContain(" · high");
+
+    const review = await fetch(`${http.url}/ui/settings/review`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    expect(review.status).toBe(200);
+    const reviewHtml = await review.text();
+    expect(reviewHtml).toContain('data-section="review"');
+    expect(reviewHtml).toContain("post_informational");
+    expect(reviewHtml).toContain("Unified");
+    expect(reviewHtml).not.toContain("Save key");
+
+    const query = await fetch(`${http.url}/ui/settings?section=github`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    expect(query.status).toBe(200);
+    expect(await query.text()).toContain('data-section="github"');
+
+    const missing = await fetch(`${http.url}/ui/settings/nope`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    expect(missing.status).toBe(404);
+  });
+
+  it("updates only the fields a section submits", async () => {
+    const dataDir = await tempDataDir();
+    const { service } = await openTestService({
+      dataDir,
+      github: new MemoryGitHub(),
+      fauxModels: TWO_MODELS,
+      thinking: "low",
+      responses: [],
+    });
+    const http = await startHttp(service, {
+      host: "127.0.0.1",
+      port: 0,
+      uiToken: UI_TOKEN,
+      dataDir,
+      provider: "faux",
+      modelId: "faux-1",
+      githubToken: true,
+    });
+    closers.push(async () => {
+      await http.close();
+      await service.close();
+    });
+    const auth = { authorization: `Bearer ${UI_TOKEN}` };
+
+    const modelsHtml = await (await fetch(`${http.url}/ui/settings/models`, { headers: auth })).text();
+    expect(modelsHtml).toContain('name="model"');
+    expect(modelsHtml).not.toContain('name="defaultTrigger"');
+    expect(modelsHtml).not.toContain('name="skipDrafts"');
+    expect(modelsHtml).not.toContain('name="checkoutTtlDays"');
+
+    const reviewHtml = await (await fetch(`${http.url}/ui/settings/review`, { headers: auth })).text();
+    expect(reviewHtml).toContain('name="defaultTrigger"');
+    expect(reviewHtml).toContain('name="skipDrafts" value="false"');
+    expect(reviewHtml).not.toContain('name="model"');
+    expect(reviewHtml).not.toContain('name="thinking"');
+    expect(reviewHtml).not.toContain('name="provider"');
+
+    const modelSave = await fetch(`${http.url}/ui/settings/models`, {
+      method: "POST",
+      redirect: "manual",
+      headers: settingsHeaders(http.url),
+      body: new URLSearchParams({
+        section: "models",
+        provider: "faux",
+        model: "faux-2",
+        thinking: "high",
+        save: "1",
+        csrf: settingsCsrfToken(UI_TOKEN),
+      }),
+    });
+    expect(modelSave.status).toBe(303);
+    expect(modelSave.headers.get("location")).toBe("/ui/settings/models?saved=1");
+
+    const reviewSave = await fetch(`${http.url}/ui/settings/review`, {
+      method: "POST",
+      redirect: "manual",
+      headers: settingsHeaders(http.url),
+      body: new URLSearchParams({
+        section: "review",
+        defaultTrigger: "auto",
+        skipDrafts: "false",
+        checkoutTtlDays: "9",
+        save: "1",
+        csrf: settingsCsrfToken(UI_TOKEN),
+      }),
+    });
+    expect(reviewSave.status).toBe(303);
+    expect(service.effectiveConfig()).toMatchObject({
+      modelId: "faux-2",
+      thinking: "high",
+      defaultTrigger: "auto",
+      skipDrafts: false,
+      checkoutTtlDays: 9,
+    });
+
+    const checked = await fetch(`${http.url}/ui/settings/review`, {
+      method: "POST",
+      redirect: "manual",
+      headers: settingsHeaders(http.url),
+      body: new URLSearchParams([
+        ["section", "review"],
+        ["defaultTrigger", "once"],
+        ["skipDrafts", "false"],
+        ["skipDrafts", "true"],
+        ["checkoutTtlDays", "4"],
+        ["save", "1"],
+        ["csrf", settingsCsrfToken(UI_TOKEN)],
+      ]),
+    });
+    expect(checked.status).toBe(303);
+    expect(service.effectiveConfig()).toMatchObject({
+      modelId: "faux-2",
+      thinking: "high",
+      defaultTrigger: "once",
+      skipDrafts: true,
+      checkoutTtlDays: 4,
+    });
+
+    const modelAgain = await fetch(`${http.url}/ui/settings/models`, {
+      method: "POST",
+      redirect: "manual",
+      headers: settingsHeaders(http.url),
+      body: new URLSearchParams({
+        section: "models",
+        provider: "faux",
+        model: "faux-1",
+        thinking: "low",
+        save: "1",
+        csrf: settingsCsrfToken(UI_TOKEN),
+      }),
+    });
+    expect(modelAgain.status).toBe(303);
+    expect(service.effectiveConfig()).toMatchObject({
+      modelId: "faux-1",
+      thinking: "low",
+      defaultTrigger: "once",
+      skipDrafts: true,
+      checkoutTtlDays: 4,
+    });
   });
 });
 

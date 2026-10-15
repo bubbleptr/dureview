@@ -25,6 +25,7 @@ export const getShellStatus = createServerFn({ method: "GET" }).handler(async ()
   return {
     version: status.version,
     uptime: formatUptime(status.uptimeSeconds * 1000),
+    dataDir: ctx.dataDir ?? null,
     provider: status.provider,
     model: status.model,
     thinking: ctx.thinking,

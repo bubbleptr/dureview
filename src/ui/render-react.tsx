@@ -5,6 +5,7 @@ import { ReviewListView } from "../components/review-list.js";
 import { SettingsForm } from "../components/settings-form.js";
 import { OverviewPage } from "../components/stats-page.js";
 import type { SettingsPageModel } from "../settings/page.js";
+import type { SettingsSection } from "./settings-sections.js";
 import type { ReviewDetailModel } from "./detail-model.js";
 import type { ReviewListModel } from "./list-model.js";
 import type { ShellStatus } from "./shell-status.js";
@@ -19,8 +20,12 @@ export function renderListHtml(model: ReviewListModel): string {
   return documentShell("Reviews · dureview", renderToStaticMarkup(<ReviewListView model={model} />));
 }
 
-export function renderSettingsHtml(model: SettingsPageModel, status: ShellStatus | null = null): string {
-  return documentShell("Settings · dureview", renderToStaticMarkup(<SettingsForm model={model} status={status} />));
+export function renderSettingsHtml(
+  model: SettingsPageModel,
+  status: ShellStatus | null = null,
+  section: SettingsSection = "models",
+): string {
+  return documentShell("Settings · dureview", renderToStaticMarkup(<SettingsForm model={model} status={status} section={section} />));
 }
 
 export function renderDetailHtml(model: ReviewDetailModel): string {

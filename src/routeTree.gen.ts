@@ -14,10 +14,11 @@ import { Route as HealthRouteImport } from './routes/health'
 import { Route as WebhookRouteImport } from './routes/webhook'
 import { Route as UiIndexRouteImport } from './routes/ui/index'
 import { Route as UiLoginRouteImport } from './routes/ui/login'
-import { Route as UiSettingsRouteImport } from './routes/ui/settings'
 import { Route as UiStatsRouteImport } from './routes/ui/stats'
 import { Route as UiReviewsIndexRouteImport } from './routes/ui/reviews/index'
 import { Route as UiReviewsTaskIdRouteImport } from './routes/ui/reviews/$taskId'
+import { Route as UiSettingsIndexRouteImport } from './routes/ui/settings/index'
+import { Route as UiSettingsSectionRouteImport } from './routes/ui/settings/$section'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -44,11 +45,6 @@ const UiLoginRoute = UiLoginRouteImport.update({
   path: '/ui/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const UiSettingsRoute = UiSettingsRouteImport.update({
-  id: '/ui/settings',
-  path: '/ui/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const UiStatsRoute = UiStatsRouteImport.update({
   id: '/ui/stats',
   path: '/ui/stats',
@@ -64,28 +60,40 @@ const UiReviewsTaskIdRoute = UiReviewsTaskIdRouteImport.update({
   path: '/ui/reviews/$taskId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const UiSettingsIndexRoute = UiSettingsIndexRouteImport.update({
+  id: '/ui/settings/',
+  path: '/ui/settings/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UiSettingsSectionRoute = UiSettingsSectionRouteImport.update({
+  id: '/ui/settings/$section',
+  path: '/ui/settings/$section',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/health': typeof HealthRoute
   '/webhook': typeof WebhookRoute
   '/ui/login': typeof UiLoginRoute
-  '/ui/settings': typeof UiSettingsRoute
   '/ui/stats': typeof UiStatsRoute
   '/ui/': typeof UiIndexRoute
   '/ui/reviews/$taskId': typeof UiReviewsTaskIdRoute
+  '/ui/settings/$section': typeof UiSettingsSectionRoute
   '/ui/reviews/': typeof UiReviewsIndexRoute
+  '/ui/settings/': typeof UiSettingsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/health': typeof HealthRoute
   '/webhook': typeof WebhookRoute
   '/ui/login': typeof UiLoginRoute
-  '/ui/settings': typeof UiSettingsRoute
   '/ui/stats': typeof UiStatsRoute
   '/ui': typeof UiIndexRoute
   '/ui/reviews/$taskId': typeof UiReviewsTaskIdRoute
+  '/ui/settings/$section': typeof UiSettingsSectionRoute
   '/ui/reviews': typeof UiReviewsIndexRoute
+  '/ui/settings': typeof UiSettingsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -93,11 +101,12 @@ export interface FileRoutesById {
   '/health': typeof HealthRoute
   '/webhook': typeof WebhookRoute
   '/ui/login': typeof UiLoginRoute
-  '/ui/settings': typeof UiSettingsRoute
   '/ui/stats': typeof UiStatsRoute
   '/ui/': typeof UiIndexRoute
   '/ui/reviews/$taskId': typeof UiReviewsTaskIdRoute
+  '/ui/settings/$section': typeof UiSettingsSectionRoute
   '/ui/reviews/': typeof UiReviewsIndexRoute
+  '/ui/settings/': typeof UiSettingsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -106,33 +115,36 @@ export interface FileRouteTypes {
     | '/health'
     | '/webhook'
     | '/ui/login'
-    | '/ui/settings'
     | '/ui/stats'
     | '/ui/'
     | '/ui/reviews/$taskId'
+    | '/ui/settings/$section'
     | '/ui/reviews/'
+    | '/ui/settings/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/health'
     | '/webhook'
     | '/ui/login'
-    | '/ui/settings'
     | '/ui/stats'
     | '/ui'
     | '/ui/reviews/$taskId'
+    | '/ui/settings/$section'
     | '/ui/reviews'
+    | '/ui/settings'
   id:
     | '__root__'
     | '/'
     | '/health'
     | '/webhook'
     | '/ui/login'
-    | '/ui/settings'
     | '/ui/stats'
     | '/ui/'
     | '/ui/reviews/$taskId'
+    | '/ui/settings/$section'
     | '/ui/reviews/'
+    | '/ui/settings/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -140,11 +152,12 @@ export interface RootRouteChildren {
   HealthRoute: typeof HealthRoute
   WebhookRoute: typeof WebhookRoute
   UiLoginRoute: typeof UiLoginRoute
-  UiSettingsRoute: typeof UiSettingsRoute
   UiStatsRoute: typeof UiStatsRoute
   UiIndexRoute: typeof UiIndexRoute
   UiReviewsTaskIdRoute: typeof UiReviewsTaskIdRoute
+  UiSettingsSectionRoute: typeof UiSettingsSectionRoute
   UiReviewsIndexRoute: typeof UiReviewsIndexRoute
+  UiSettingsIndexRoute: typeof UiSettingsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -184,13 +197,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UiLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/ui/settings': {
-      id: '/ui/settings'
-      path: '/ui/settings'
-      fullPath: '/ui/settings'
-      preLoaderRoute: typeof UiSettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/ui/stats': {
       id: '/ui/stats'
       path: '/ui/stats'
@@ -212,6 +218,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UiReviewsTaskIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/ui/settings/': {
+      id: '/ui/settings/'
+      path: '/ui/settings'
+      fullPath: '/ui/settings/'
+      preLoaderRoute: typeof UiSettingsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ui/settings/$section': {
+      id: '/ui/settings/$section'
+      path: '/ui/settings/$section'
+      fullPath: '/ui/settings/$section'
+      preLoaderRoute: typeof UiSettingsSectionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -220,11 +240,12 @@ const rootRouteChildren: RootRouteChildren = {
   HealthRoute: HealthRoute,
   WebhookRoute: WebhookRoute,
   UiLoginRoute: UiLoginRoute,
-  UiSettingsRoute: UiSettingsRoute,
   UiStatsRoute: UiStatsRoute,
   UiIndexRoute: UiIndexRoute,
   UiReviewsTaskIdRoute: UiReviewsTaskIdRoute,
+  UiSettingsSectionRoute: UiSettingsSectionRoute,
   UiReviewsIndexRoute: UiReviewsIndexRoute,
+  UiSettingsIndexRoute: UiSettingsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

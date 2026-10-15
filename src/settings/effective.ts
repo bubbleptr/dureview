@@ -164,7 +164,8 @@ export class ServerSettings {
     };
   }
 
-  save(input: SettingsFormValues, actor: string): Promise<SettingsWriteResult> {
+  /** A section posts only the fields it shows. Anything left out stays as it is. */
+  save(input: Partial<SettingsFormValues>, actor: string): Promise<SettingsWriteResult> {
     return this.#exclusive(() => {
       const parsed = parseForm(input, this.models, this.#resolved().provider.value);
       if (!parsed.ok) return parsed;
@@ -242,25 +243,22 @@ export class ServerSettings {
   }
 }
 
-function applyParsed(
-  next: Map<string, string>,
-  values: {
-    provider: string | undefined;
-    model: string;
-    thinking: ModelThinkingLevel;
-    defaultTrigger: ReviewTrigger;
-    skipDrafts: boolean;
-    checkoutTtlDays: number;
-  },
-  baseline: EditableBaseline,
-  fallbackProvider: string,
-): void {
+type ParsedSettings = {
+  provider?: string;
+  model?: string;
+  thinking?: ModelThinkingLevel;
+  defaultTrigger?: ReviewTrigger;
+  skipDrafts?: boolean;
+  checkoutTtlDays?: number;
+};
+
+function applyParsed(next: Map<string, string>, values: ParsedSettings, baseline: EditableBaseline, fallbackProvider: string): void {
   if (values.provider !== undefined) putOrClear(next, "provider", values.provider, baseline.provider, fallbackProvider);
-  putOrClear(next, "model", values.model, baseline.modelId, fallbackProvider);
-  putOrClear(next, "thinking", values.thinking, baseline.thinking, fallbackProvider);
-  putOrClear(next, "defaultTrigger", values.defaultTrigger, baseline.defaultTrigger, fallbackProvider);
-  putOrClear(next, "skipDrafts", values.skipDrafts, baseline.skipDrafts, fallbackProvider);
-  putOrClear(next, "checkoutTtlDays", values.checkoutTtlDays, baseline.checkoutTtlDays, fallbackProvider);
+  if (values.model !== undefined) putOrClear(next, "model", values.model, baseline.modelId, fallbackProvider);
+  if (values.thinking !== undefined) putOrClear(next, "thinking", values.thinking, baseline.thinking, fallbackProvider);
+  if (values.defaultTrigger !== undefined) putOrClear(next, "defaultTrigger", values.defaultTrigger, baseline.defaultTrigger, fallbackProvider);
+  if (values.skipDrafts !== undefined) putOrClear(next, "skipDrafts", values.skipDrafts, baseline.skipDrafts, fallbackProvider);
+  if (values.checkoutTtlDays !== undefined) putOrClear(next, "checkoutTtlDays", values.checkoutTtlDays, baseline.checkoutTtlDays, fallbackProvider);
 }
 
 function putOrClear<T extends string | ModelThinkingLevel | ReviewTrigger | boolean | number>(
@@ -311,50 +309,43 @@ function sameValue(left: string | boolean | number, right: string | boolean | nu
 }
 
 function parseForm(
-  input: SettingsFormValues,
+  input: Partial<SettingsFormValues>,
   models: Models,
   currentProvider: string,
-):
-  | { ok: false; error: string }
-  | {
-      ok: true;
-      value: {
-        provider: string | undefined;
-        model: string;
-        thinking: ModelThinkingLevel;
-        defaultTrigger: ReviewTrigger;
-        skipDrafts: boolean;
-        checkoutTtlDays: number;
-      };
-    } {
-  const requested = (input.provider ?? "").trim();
-  let provider: string | undefined;
-  if (requested !== "") {
-    const accepted = acceptProvider(requested, models, currentProvider);
-    if (!accepted) return { ok: false, error: "Provider is not one this server can use." };
-    provider = accepted;
+): { ok: false; error: string } | { ok: true; value: ParsedSettings } {
+  const value: ParsedSettings = {};
+  if (input.provider !== undefined) {
+    const requested = input.provider.trim();
+    if (requested !== "") {
+      const accepted = acceptProvider(requested, models, currentProvider);
+      if (!accepted) return { ok: false, error: "Provider is not one this server can use." };
+      value.provider = accepted;
+    }
   }
-  const model = parseModelId(input.model);
-  const thinking = parseThinkingSetting(input.thinking);
-  const defaultTrigger = parseTriggerSetting(input.defaultTrigger);
-  const checkoutTtlDays = parseTtlDaysSetting(input.checkoutTtlDays);
-  if (model === undefined) return { ok: false, error: "Model id is empty or not a catalog id." };
-  if (thinking === undefined) return { ok: false, error: "Thinking level is not a known level." };
-  if (defaultTrigger === undefined) return { ok: false, error: "Default trigger must be auto, once, or manual." };
-  if (checkoutTtlDays === undefined) {
-    return { ok: false, error: "Checkout TTL must be a non-negative integer number of days." };
+  if (input.model !== undefined) {
+    const model = parseModelId(input.model);
+    if (model === undefined) return { ok: false, error: "Model id is empty or not a catalog id." };
+    value.model = model;
   }
-  return {
-    ok: true,
-    value: {
-      provider,
-      model,
-      thinking,
-      defaultTrigger,
-      skipDrafts: input.skipDrafts,
-      checkoutTtlDays,
-    },
-  };
+  if (input.thinking !== undefined) {
+    const thinking = parseThinkingSetting(input.thinking);
+    if (thinking === undefined) return { ok: false, error: "Thinking level is not a known level." };
+    value.thinking = thinking;
+  }
+  if (input.defaultTrigger !== undefined) {
+    const defaultTrigger = parseTriggerSetting(input.defaultTrigger);
+    if (defaultTrigger === undefined) return { ok: false, error: "Default trigger must be auto, once, or manual." };
+    value.defaultTrigger = defaultTrigger;
+  }
+  if (input.checkoutTtlDays !== undefined) {
+    const checkoutTtlDays = parseTtlDaysSetting(input.checkoutTtlDays);
+    if (checkoutTtlDays === undefined) {
+      return { ok: false, error: "Checkout TTL must be a non-negative integer number of days." };
+    }
+    value.checkoutTtlDays = checkoutTtlDays;
+  }
+  if (input.skipDrafts !== undefined) value.skipDrafts = input.skipDrafts;
+  return { ok: true, value };
 }
 
 function storedProblems(raw: ReadonlyMap<string, string>): string[] {

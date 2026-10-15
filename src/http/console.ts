@@ -7,6 +7,7 @@ import {
   readSetupState,
   statesMatch,
 } from "../github/manifest.js";
+import { settingsReturnPath } from "../ui/settings-sections.js";
 import { jsonResponse, redirectResponse } from "./headers.js";
 
 const SETTINGS_PATH = "/ui/settings";
@@ -44,39 +45,39 @@ export async function settingsActionResponse(service: DureviewService, request: 
   if (!action) return null;
   if (action === "login") {
     const result = await service.startSubscriptionLogin(form.get("provider") ?? "", form.get("enterprise") ?? "");
-    if (!result.ok) return pageWithError(result.error);
-    return redirectResponse(SETTINGS_PATH);
+    if (!result.ok) return pageWithError(form, result.error);
+    return redirectResponse(settingsReturnPath(form.get("section")));
   }
   if (action === "logout") {
     const result = await service.logoutSubscription(form.get("provider") ?? "");
-    if (!result.ok) return pageWithError(result.error);
-    return redirectResponse(SETTINGS_PATH);
+    if (!result.ok) return pageWithError(form, result.error);
+    return redirectResponse(settingsReturnPath(form.get("section")));
   }
   if (action === "api-key") {
     const result = await service.saveApiKey(form.get("provider") ?? "", form.get("key") ?? "");
-    if (!result.ok) return pageWithError(result.error);
-    return redirectResponse(`${SETTINGS_PATH}?key=saved`);
+    if (!result.ok) return pageWithError(form, result.error);
+    return redirectResponse(settingsReturnPath(form.get("section"), "key=saved"));
   }
   if (action === "api-key-clear") {
     const result = await service.clearApiKey(form.get("provider") ?? "");
-    if (!result.ok) return pageWithError(result.error);
-    return redirectResponse(SETTINGS_PATH);
+    if (!result.ok) return pageWithError(form, result.error);
+    return redirectResponse(settingsReturnPath(form.get("section")));
   }
   if (action === "github-manifest") {
     const origin = manifestOrigin(request);
-    if (!origin.ok) return pageWithError(origin.error);
+    if (!origin.ok) return pageWithError(form, origin.error);
     const org = parseGitHubOrg(form.get("org") ?? "");
-    if (org === undefined) return pageWithError("Organization must be a GitHub slug, or blank for your user.");
+    if (org === undefined) return pageWithError(form, "Organization must be a GitHub slug, or blank for your user.");
     const handoff = service.beginGitHubSetup(origin.origin, org);
-    if (!handoff) return pageWithError("GitHub API URL is not a host this page can open.");
+    if (!handoff) return pageWithError(form, "GitHub API URL is not a host this page can open.");
     return handoff;
   }
   if (action === "github-clear") {
     const result = await service.clearGitHubApp();
-    if (!result.ok) return pageWithError(result.error);
-    return redirectResponse(SETTINGS_PATH);
+    if (!result.ok) return pageWithError(form, result.error);
+    return redirectResponse(settingsReturnPath(form.get("section")));
   }
-  return pageWithError("Unknown settings action.");
+  return pageWithError(form, "Unknown settings action.");
 }
 
 const GITHUB_SETUP_FAILED = "GitHub setup did not finish. Start it again from this page.";
@@ -104,6 +105,6 @@ function problemText(value: string | null): string | null {
   return text.length > 0 ? text : null;
 }
 
-function pageWithError(error: string): Response {
-  return redirectResponse(`${SETTINGS_PATH}?problem=${encodeURIComponent(error)}`);
+function pageWithError(form: URLSearchParams, error: string): Response {
+  return redirectResponse(settingsReturnPath(form.get("section"), `problem=${encodeURIComponent(error)}`));
 }
