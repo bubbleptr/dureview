@@ -7,7 +7,7 @@ import { codexPhrase, formatUptime } from "../ui/page.js";
 import { loadDashboard } from "../ui/status.js";
 import { buildStatsPage } from "../ui/stats-data.js";
 import { resolveLocale, type Locale } from "../ui/locale.js";
-import { requestPathAndQuery } from "../ui/next-path.js";
+import { loginNextFromSearch, loginReturnPath, requestPathAndQuery } from "../ui/next-path.js";
 import { renderListHtml, renderLoginHtml, renderOverviewHtml } from "../ui/render-react.js";
 import { gateGetPage, uiSession } from "./auth.js";
 import { reviewDetailResponse } from "./detail.js";
@@ -62,7 +62,8 @@ async function loginDispatch(ctx: DispatchContext, request: Request): Promise<Re
   if (!ctx.uiToken) return notFoundJson();
   if (request.method === "GET") {
     if (uiSession(request, ctx.uiToken) === "ok") return redirectResponse("/ui");
-    return htmlResponse(renderLoginHtml({ next: "/ui", locale: resolveLocale(request), location: requestPathAndQuery(request) }), 401);
+    const next = loginNextFromSearch(new URL(request.url).search);
+    return htmlResponse(renderLoginHtml({ next, locale: resolveLocale(request), location: loginReturnPath(next) }), 401);
   }
   if (request.method === "POST") return loginPostResponse(request, ctx.uiToken);
   return notFoundJson();

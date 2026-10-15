@@ -1,7 +1,13 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
+import { ClientChart } from "../src/components/client-chart.js";
+import { distributionChartConfig, failureChartConfig } from "../src/components/stats-charts.js";
+import { chartTooltipEntries } from "../src/components/ui/chart.js";
 import { settingsCsrfToken } from "../src/http/csrf.js";
 import { startHttp } from "../src/server.js";
-import { safeUiReturn } from "../src/ui/next-path.js";
+import { I18nProvider } from "../src/ui/i18n.js";
+import { loginNextFromSearch, loginReturnPath, safeUiReturn } from "../src/ui/next-path.js";
 import { runningLabel } from "../src/ui/page.js";
 import {
   localeFromAcceptLanguage,
@@ -10,7 +16,7 @@ import {
   messageKeys,
   resolveLocale,
 } from "../src/ui/locale.js";
-import { messages } from "../src/ui/messages.js";
+import { messages, seriesLabel } from "../src/ui/messages.js";
 import { settingsCatalog } from "../src/ui/settings-copy.js";
 import { MemoryGitHub, openTestService, reviewRequest, scriptedReview, tempDataDir } from "./support.js";
 
@@ -81,6 +87,50 @@ describe("locale detection", () => {
     }
   });
 
+  it("keeps a validated login destination across a language switch", () => {
+    const destination = "/ui/reviews/task_1";
+    const returned = loginReturnPath(destination);
+    expect(returned).toBe(`/ui/login?next=${encodeURIComponent(destination)}`);
+    expect(safeUiReturn(returned)).toBe(returned);
+    expect(loginNextFromSearch(`?next=${encodeURIComponent(destination)}`)).toBe(destination);
+    expect(loginReturnPath("https://evil.example/phish")).toBe("/ui/login");
+    expect(loginNextFromSearch("?next=https://evil.example/phish")).toBe("/ui");
+    expect(loginNextFromSearch("")).toBe("/ui");
+  });
+
+  it("translates distribution tooltip headings and the count series", () => {
+    const config = distributionChartConfig(
+      [{ name: "Bug" }, { name: "P0" }, { name: "data integrity" }],
+      "zh-CN",
+      messages["zh-CN"].overview.count,
+    );
+    const bug = chartTooltipEntries(config, "Bug", [{ dataKey: "count", name: "count", value: 3 }]);
+    expect(bug.heading).toBe("缺陷");
+    expect(bug.rows[0]?.name).toBe("次数");
+    expect(chartTooltipEntries(config, "P0", [{ dataKey: "count", value: 1 }]).heading).toBe("P0");
+    expect(chartTooltipEntries(config, "data integrity", [{ dataKey: "count", value: 2 }]).heading).toBe("数据一致性");
+    expect(seriesLabel("correctness", "en")).toBe("Correctness");
+    expect(seriesLabel("connection reset", "zh-CN")).toBe("connection reset");
+
+    const failure = failureChartConfig([{ name: "connection reset" }, { name: "Bug" }], messages["zh-CN"].overview.count);
+    const reason = chartTooltipEntries(failure, "connection reset", [{ dataKey: "count", name: "count", value: 1 }]);
+    expect(reason.heading).toBe("connection reset");
+    expect(reason.rows[0]?.name).toBe("次数");
+    expect(chartTooltipEntries(failure, "Bug", [{ dataKey: "count", value: 1 }]).heading).toBe("Bug");
+
+    const trend = chartTooltipEntries({ "gpt-5": { label: "gpt-5" } }, "10月13日", [{ dataKey: "gpt-5", name: "gpt-5", value: 1200 }]);
+    expect(trend.heading).toBe("10月13日");
+    expect(trend.rows[0]?.name).toBe("gpt-5");
+  });
+
+  it("translates the chart loading status", () => {
+    const html = renderToStaticMarkup(
+      createElement(I18nProvider, { locale: "zh-CN" }, createElement(ClientChart, { render: () => null })),
+    );
+    expect(html).toContain("正在加载图表。");
+    expect(html).not.toContain("Loading the chart.");
+  });
+
   it("labels a running review in the active language", () => {
     const now = Date.parse("2026-10-13T16:00:00.000Z");
     const started = new Date(now - 5 * 60 * 1000).toISOString();
@@ -121,14 +171,40 @@ describe("locale switch without scripts", () => {
       await service.close();
     });
 
+    const destination = "/ui/reviews/1";
     const rejected = await fetch(`${http.url}/ui/login`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ token: "wrong-token", next: "/ui/reviews/1" }),
+      body: new URLSearchParams({ token: "wrong-token", next: destination }),
     });
     const rejectedHtml = await rejected.text();
-    const loginHref = "/ui/locale?locale=zh-CN&amp;next=%2Fui%2Flogin";
-    expect(rejectedHtml).toContain(`href="${loginHref}"`);
+    expect(rejectedHtml).toContain(localeLink("zh-CN", loginReturnPath(destination)));
+    expect(rejectedHtml).toContain(`name="next" value="${destination}"`);
+
+    const carried = await fetch(`${http.url}${localeHref("zh-CN", loginReturnPath(destination))}`, {
+      redirect: "manual",
+    });
+    expect(carried.status).toBe(303);
+    expect(carried.headers.get("location")).toBe(loginReturnPath(destination));
+    const returned = await fetch(`${http.url}${carried.headers.get("location")}`, {
+      headers: { cookie: "dureview-locale=zh-CN" },
+    });
+    const returnedHtml = await returned.text();
+    expect(returnedHtml).toContain("登录");
+    expect(returnedHtml).toContain(`name="next" value="${destination}"`);
+    const signedIn = await fetch(`${http.url}/ui/login`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: UI_TOKEN, next: destination }),
+    });
+    expect(signedIn.status).toBe(303);
+    expect(signedIn.headers.get("location")).toBe(destination);
+
+    const poisoned = await fetch(`${http.url}/ui/login?next=${encodeURIComponent("https://evil.example/phish")}`);
+    const poisonedHtml = await poisoned.text();
+    expect(poisonedHtml).toContain('name="next" value="/ui"');
+    expect(poisonedHtml).not.toContain("evil.example");
 
     const switched = await fetch(`${http.url}/ui/locale?locale=zh-CN&next=${encodeURIComponent("/ui/login")}`, {
       redirect: "manual",

@@ -15,6 +15,17 @@ export function safeNextPath(value: string | null | undefined): string {
   return "/ui";
 }
 
+export function loginNextFromSearch(search: string): string {
+  const query = search.startsWith("?") ? search.slice(1) : search;
+  return safeNextPath(new URLSearchParams(query).get("next"));
+}
+
+export function loginReturnPath(next: string | null | undefined): string {
+  const safe = safeNextPath(next);
+  if (safe === "/ui") return "/ui/login";
+  return `/ui/login?${new URLSearchParams({ next: safe }).toString()}`;
+}
+
 const UI_RETURN_LIMIT = 2048;
 
 /**

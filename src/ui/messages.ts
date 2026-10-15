@@ -48,6 +48,7 @@ const en = {
     tokensTitle: "Tokens by day",
     tokensCaption: "Each line is one model, and that model keeps its color. Days use this browser's time zone. Position shows token volume, not cost.",
     emptyTokens: "No token usage in this range.",
+    loadingChart: "Loading the chart.",
     usageNoteKnown: "Daily totals use this browser's timezone. Each point is input + output + cache-read tokens. Reasoning tokens are already inside output.",
     usageNoteUnknown: "Token totals are unknown for every review in this range. Older runs were stored before usage was captured, so they are left blank instead of counted as zero.",
     usageOmittedOne: "{count} review has no usage and is omitted from the trend.",
@@ -221,6 +222,13 @@ const en = {
     block: "Block",
     fixRecommended: "Fix recommended",
     clean: "Clean",
+    correctness: "Correctness",
+    dataIntegrity: "Data integrity",
+    concurrency: "Concurrency",
+    errorHandling: "Error handling",
+    performance: "Performance",
+    apiContract: "API contract",
+    testGap: "Test gap",
   },
   server: {
     formTooLarge: "That form was too large to read.",
@@ -303,6 +311,7 @@ const zhCN = {
     tokensTitle: "每日 token",
     tokensCaption: "每条线是一个模型，颜色保持不变。日期用本机时区。位置表示 token 量，不表示费用。",
     emptyTokens: "这个范围内没有 token 用量。",
+    loadingChart: "正在加载图表。",
     usageNoteKnown: "按日本机时区合计。每个点是输入、输出和缓存读取 token 之和。推理 token 已含在输出里。",
     usageNoteUnknown: "这个范围内的审查都没有 token 记录。更早的运行是在开始记录用量之前保存的，所以留空，不记成零。",
     usageOmittedOne: "{count} 次审查没有用量，未计入趋势。",
@@ -476,6 +485,13 @@ const zhCN = {
     block: "阻止",
     fixRecommended: "建议修改",
     clean: "干净",
+    correctness: "正确性",
+    dataIntegrity: "数据一致性",
+    concurrency: "并发",
+    errorHandling: "错误处理",
+    performance: "性能",
+    apiContract: "接口约定",
+    testGap: "测试缺口",
   },
   server: {
     formTooLarge: "表单太大，读不下来。",
@@ -513,7 +529,7 @@ export const messages: Record<Locale, Messages> = {
   "zh-CN": zhCN,
 };
 
-const SERIES_KEYS = {
+const SERIES_KEYS: Record<string, keyof Messages["series"]> = {
   Bug: "bug",
   Flag: "flag",
   Security: "security",
@@ -523,10 +539,17 @@ const SERIES_KEYS = {
   Block: "block",
   "Fix recommended": "fixRecommended",
   Clean: "clean",
-} as const;
+  correctness: "correctness",
+  "data integrity": "dataIntegrity",
+  concurrency: "concurrency",
+  "error handling": "errorHandling",
+  performance: "performance",
+  "api contract": "apiContract",
+  "test gap": "testGap",
+};
 
 export function seriesLabel(name: string, locale: Locale): string {
-  const key = SERIES_KEYS[name as keyof typeof SERIES_KEYS];
+  const key = SERIES_KEYS[name];
   if (!key) return name;
   return messages[locale].series[key];
 }
