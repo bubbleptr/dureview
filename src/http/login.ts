@@ -1,5 +1,6 @@
 import { uiSessionCookie, uiTokenMatches, safeNextPath } from "../ui/auth.js";
 import { resolveLocale } from "../ui/locale.js";
+import { requestPathAndQuery } from "../ui/next-path.js";
 import { messages } from "../ui/messages.js";
 import { renderLoginHtml } from "../ui/render-react.js";
 import { readRawBody } from "./body.js";
@@ -14,7 +15,7 @@ export async function loginPostResponse(request: Request, token: string): Promis
   const presented = form.get("token") ?? "";
   if (!uiTokenMatches(presented, token)) {
     const locale = resolveLocale(request);
-    return htmlResponse(renderLoginHtml({ next, error: messages[locale].login.badToken, locale }), 401);
+    return htmlResponse(renderLoginHtml({ next, error: messages[locale].login.badToken, locale, location: requestPathAndQuery(request) }), 401);
   }
   return redirectResponse(next, uiSessionCookie(token));
 }

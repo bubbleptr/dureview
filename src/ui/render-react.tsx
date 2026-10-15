@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { LoginForm } from "../components/login-form.js";
 import { ReviewDetailView } from "../components/review-detail.js";
@@ -9,6 +10,7 @@ import type { SettingsSection } from "./settings-sections.js";
 import type { ReviewDetailModel } from "./detail-model.js";
 import { I18nProvider } from "./i18n.js";
 import type { Locale } from "./locale.js";
+import { PageLocationProvider } from "./page-location.js";
 import { messages } from "./messages.js";
 import type { ReviewListModel } from "./list-model.js";
 import type { ShellStatus } from "./shell-status.js";
@@ -16,29 +18,13 @@ import type { StatsPageModel } from "./stats-model.js";
 import { sectionDocumentTitle } from "./settings-copy.js";
 import { reviewTreePreload } from "./review-preload.js";
 
-export function renderLoginHtml(input: { next: string; error?: string; locale?: Locale }): string {
+export function renderLoginHtml(input: { next: string; error?: string; locale?: Locale; location?: string }): string {
   const locale = input.locale ?? "en";
-  return documentShell(
-    messages[locale].login.documentTitle,
-    renderToStaticMarkup(
-      <I18nProvider locale={locale}>
-        <LoginForm next={input.next} error={input.error} />
-      </I18nProvider>,
-    ),
-    locale,
-  );
+  return renderPage(locale, input.location ?? "/ui/login", messages[locale].login.documentTitle, <LoginForm next={input.next} error={input.error} />);
 }
 
-export function renderListHtml(model: ReviewListModel, locale: Locale = "en"): string {
-  return documentShell(
-    messages[locale].reviews.documentTitle,
-    renderToStaticMarkup(
-      <I18nProvider locale={locale}>
-        <ReviewListView model={model} />
-      </I18nProvider>,
-    ),
-    locale,
-  );
+export function renderListHtml(model: ReviewListModel, locale: Locale = "en", location = "/ui/reviews"): string {
+  return renderPage(locale, location, messages[locale].reviews.documentTitle, <ReviewListView model={model} />);
 }
 
 export function renderSettingsHtml(
@@ -46,37 +32,26 @@ export function renderSettingsHtml(
   status: ShellStatus | null = null,
   section: SettingsSection = "models",
   locale: Locale = "en",
+  location = "/ui/settings",
 ): string {
-  return documentShell(
-    sectionDocumentTitle(section, locale),
-    renderToStaticMarkup(
-      <I18nProvider locale={locale}>
-        <SettingsForm model={model} status={status} section={section} />
-      </I18nProvider>,
-    ),
-    locale,
-  );
+  return renderPage(locale, location, sectionDocumentTitle(section, locale), <SettingsForm model={model} status={status} section={section} />);
 }
 
-export function renderDetailHtml(model: ReviewDetailModel, locale: Locale = "en"): string {
-  return documentShell(
-    model.pageTitle,
-    renderToStaticMarkup(
-      <I18nProvider locale={locale}>
-        <ReviewDetailView model={model} tree={reviewTreePreload(model.files)} />
-      </I18nProvider>,
-    ),
-    locale,
-  );
+export function renderDetailHtml(model: ReviewDetailModel, locale: Locale = "en", location = "/ui"): string {
+  return renderPage(locale, location, model.pageTitle, <ReviewDetailView model={model} tree={reviewTreePreload(model.files)} />);
 }
 
-export function renderOverviewHtml(model: StatsPageModel, locale: Locale = "en"): string {
+export function renderOverviewHtml(model: StatsPageModel, locale: Locale = "en", location = "/ui"): string {
+  return renderPage(locale, location, messages[locale].overview.documentTitle, <OverviewPage model={model} />);
+}
+
+function renderPage(locale: Locale, location: string, title: string, node: ReactNode): string {
   return documentShell(
-    messages[locale].overview.documentTitle,
+    title,
     renderToStaticMarkup(
-      <I18nProvider locale={locale}>
-        <OverviewPage model={model} />
-      </I18nProvider>,
+      <PageLocationProvider location={location}>
+        <I18nProvider locale={locale}>{node}</I18nProvider>
+      </PageLocationProvider>,
     ),
     locale,
   );

@@ -1,13 +1,15 @@
-import { localeHref } from "../ui/locale.js";
 import { useI18n } from "../ui/i18n.js";
+import { localeHref } from "../ui/locale.js";
+import { usePageLocation } from "../ui/page-location.js";
 
 const OPTIONS = [
   ["en", "EN"],
   ["zh-CN", "中"],
 ] as const;
 
-export function LanguageSwitch({ returnTo }: { returnTo: string }) {
+export function LanguageSwitch() {
   const { locale, m } = useI18n();
+  const returnTo = usePageLocation();
   return (
     <div role="group" aria-label={m.language.label} className="language-switch flex items-center rounded-md p-0.5">
       {OPTIONS.map(([value, short]) => {

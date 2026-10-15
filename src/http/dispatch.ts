@@ -7,6 +7,7 @@ import { codexPhrase, formatUptime } from "../ui/page.js";
 import { loadDashboard } from "../ui/status.js";
 import { buildStatsPage } from "../ui/stats-data.js";
 import { resolveLocale, type Locale } from "../ui/locale.js";
+import { requestPathAndQuery } from "../ui/next-path.js";
 import { renderListHtml, renderLoginHtml, renderOverviewHtml } from "../ui/render-react.js";
 import { gateGetPage, uiSession } from "./auth.js";
 import { reviewDetailResponse } from "./detail.js";
@@ -61,7 +62,7 @@ async function loginDispatch(ctx: DispatchContext, request: Request): Promise<Re
   if (!ctx.uiToken) return notFoundJson();
   if (request.method === "GET") {
     if (uiSession(request, ctx.uiToken) === "ok") return redirectResponse("/ui");
-    return htmlResponse(renderLoginHtml({ next: "/ui", locale: resolveLocale(request) }), 401);
+    return htmlResponse(renderLoginHtml({ next: "/ui", locale: resolveLocale(request), location: requestPathAndQuery(request) }), 401);
   }
   if (request.method === "POST") return loginPostResponse(request, ctx.uiToken);
   return notFoundJson();
@@ -79,7 +80,8 @@ async function listDispatch(ctx: DispatchContext, request: Request, pathname: st
   if (gate === "disabled") return notFoundJson();
   if (gate === "challenge") return unauthorizedJson();
   const locale = resolveLocale(request);
-  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(pathname), locale }), 401);
+  const location = requestPathAndQuery(request);
+  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(pathname), locale, location }), 401);
   const live = ctx.service.effectiveConfig();
   const model = await buildReviewList(
     { ...ctx, provider: live.provider, modelId: live.modelId, thinking: live.thinking },
@@ -87,7 +89,7 @@ async function listDispatch(ctx: DispatchContext, request: Request, pathname: st
     Date.now(),
     locale,
   );
-  return htmlResponse(renderListHtml(model, locale));
+  return htmlResponse(renderListHtml(model, locale, location));
 }
 
 async function overviewDispatch(ctx: DispatchContext, request: Request, pathname: string): Promise<Response> {
@@ -95,9 +97,10 @@ async function overviewDispatch(ctx: DispatchContext, request: Request, pathname
   if (gate === "disabled") return notFoundJson();
   if (gate === "challenge") return unauthorizedJson();
   const locale = resolveLocale(request);
-  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(pathname), locale }), 401);
+  const location = requestPathAndQuery(request);
+  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(pathname), locale, location }), 401);
   const model = await buildStatsPage(ctx.service, searchParamsFrom(new URL(request.url).search), Date.now(), locale);
-  return htmlResponse(renderOverviewHtml(model, locale));
+  return htmlResponse(renderOverviewHtml(model, locale, location));
 }
 
 async function shellStatus(ctx: DispatchContext, locale: Locale): Promise<ShellStatus> {

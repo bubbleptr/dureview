@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { settingsCsrfToken } from "../src/http/csrf.js";
 import { startHttp } from "../src/server.js";
+import { safeUiReturn } from "../src/ui/next-path.js";
 import { runningLabel } from "../src/ui/page.js";
 import {
   localeFromAcceptLanguage,
@@ -11,7 +12,7 @@ import {
 } from "../src/ui/locale.js";
 import { messages } from "../src/ui/messages.js";
 import { settingsCatalog } from "../src/ui/settings-copy.js";
-import { MemoryGitHub, openTestService, tempDataDir } from "./support.js";
+import { MemoryGitHub, openTestService, reviewRequest, scriptedReview, tempDataDir } from "./support.js";
 
 const UI_TOKEN = "ui-token-canary-not-in-page";
 
@@ -58,10 +59,26 @@ describe("locale detection", () => {
     expect(messageKeys(settingsCatalog("zh-CN"))).toEqual(messageKeys(settingsCatalog("en")));
   });
 
-  it("builds a same-origin switch link", () => {
+  it("keeps the current path and query on a same-origin UI return", () => {
+    const detail = "/ui/reviews/shot1?sort=when&dir=desc&page=2";
+    const list = "/ui/reviews?repo=acme%2Fdemo&result=clean&sort=when&dir=desc&page=2";
+    expect(safeUiReturn(detail)).toBe(detail);
+    expect(safeUiReturn(list)).toBe(list);
+    expect(localeHref("zh-CN", detail)).toBe(`/ui/locale?locale=zh-CN&next=${encodeURIComponent(detail)}`);
     expect(localeHref("zh-CN", "/ui/login")).toBe("/ui/locale?locale=zh-CN&next=%2Fui%2Flogin");
-    expect(localeHref("en", "https://evil.example/phish")).toBe("/ui/locale?locale=en&next=%2Fui");
     expect(localeHref("zh-CN", "/ui/settings/github")).toBe("/ui/locale?locale=zh-CN&next=%2Fui%2Fsettings%2Fgithub");
+    for (const blocked of [
+      "https://evil.example/phish",
+      "//evil.example/phish",
+      "/ui/../secret",
+      "/ui/%2e%2e/secret",
+      "/ui-evil",
+      "/ui/reviews/..%2f..%2fsecret",
+      `/ui/${"a".repeat(3000)}`,
+    ]) {
+      expect(safeUiReturn(blocked)).toBe("/ui");
+      expect(localeHref("en", blocked)).toBe("/ui/locale?locale=en&next=%2Fui");
+    }
   });
 
   it("labels a running review in the active language", () => {
@@ -145,7 +162,7 @@ describe("locale switch without scripts", () => {
     });
     const settingsHtml = await bad.text();
     expect(bad.status).toBe(400);
-    expect(settingsHtml).toContain('href="/ui/locale?locale=zh-CN&amp;next=%2Fui%2Fsettings%2Fmodels"');
+    expect(settingsHtml).toContain('href="/ui/locale?locale=zh-CN&amp;next=%2Fui%2Fsettings"');
 
     const evil = await fetch(`${http.url}/ui/locale?locale=zh-CN&next=${encodeURIComponent("https://evil.example/phish")}`, {
       redirect: "manual",
@@ -159,5 +176,64 @@ describe("locale switch without scripts", () => {
     });
     expect(ignored.headers.get("location")).toBe("/ui/reviews");
     expect(ignored.headers.get("set-cookie")).toBeNull();
+
+    const traversal = await fetch(`${http.url}/ui/locale?locale=en&next=${encodeURIComponent("/ui/../secret")}`, {
+      redirect: "manual",
+    });
+    expect(traversal.headers.get("location")).toBe("/ui");
+    const prefixed = await fetch(`${http.url}/ui/locale?locale=en&next=${encodeURIComponent("/ui-evil")}`, {
+      redirect: "manual",
+    });
+    expect(prefixed.headers.get("location")).toBe("/ui");
+  });
+
+  it("returns to the open review and the filtered list", async () => {
+    const dataDir = await tempDataDir();
+    const { service } = await openTestService({
+      dataDir,
+      github: new MemoryGitHub(),
+      fauxModels: [{ id: "faux-1", reasoning: true }],
+      thinking: "low",
+      responses: scriptedReview("kept on this page"),
+    });
+    const http = await startHttp(service, {
+      host: "127.0.0.1",
+      port: 0,
+      uiToken: UI_TOKEN,
+      dataDir,
+      provider: "faux",
+      modelId: "faux-1",
+    });
+    closers.push(async () => {
+      await http.close();
+      await service.close();
+    });
+    const queued = await service.enqueue(reviewRequest(), { kind: "sha" }, "opened");
+    await service.wait(queued.taskId);
+    const auth = { authorization: `Bearer ${UI_TOKEN}` };
+
+    const detailPath = `/ui/reviews/${String(queued.taskId)}`;
+    const detail = await fetch(`${http.url}${detailPath}`, { headers: auth });
+    expect(detail.status).toBe(200);
+    expect(await detail.text()).toContain(localeLink("zh-CN", detailPath));
+    const detailSwitch = await fetch(`${http.url}${localeHref("zh-CN", detailPath)}`, { redirect: "manual" });
+    expect(detailSwitch.status).toBe(303);
+    expect(detailSwitch.headers.get("location")).toBe(detailPath);
+    expect(detailSwitch.headers.get("set-cookie")).toContain("dureview-locale=zh-CN");
+
+    const listPath = "/ui/reviews?repo=acme%2Fdemo&result=clean&sort=when&dir=desc&page=2";
+    const list = await fetch(`${http.url}${listPath}`, { headers: auth });
+    expect(list.status).toBe(200);
+    expect(await list.text()).toContain(localeLink("zh-CN", listPath));
+    const listSwitch = await fetch(`${http.url}${localeHref("en", listPath)}`, { redirect: "manual" });
+    expect(listSwitch.headers.get("location")).toBe(listPath);
+
+    const section = await fetch(`${http.url}/ui/settings/github`, { headers: auth });
+    expect(section.status).toBe(200);
+    expect(await section.text()).toContain(localeLink("zh-CN", "/ui/settings/github"));
   });
 });
+
+function localeLink(locale: "en" | "zh-CN", path: string): string {
+  return `href="${localeHref(locale, path).replaceAll("&", "&amp;")}"`;
+}

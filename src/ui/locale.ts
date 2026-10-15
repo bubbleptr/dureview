@@ -1,4 +1,4 @@
-import { safeNextPath } from "./next-path.js";
+import { safeUiReturn } from "./next-path.js";
 
 export const LOCALES = ["en", "zh-CN"] as const;
 
@@ -61,7 +61,7 @@ export function localeCookie(locale: Locale): string {
 }
 
 export function localeHref(locale: Locale, returnTo: string): string {
-  const params = new URLSearchParams({ locale, next: safeNextPath(returnTo) });
+  const params = new URLSearchParams({ locale, next: safeUiReturn(returnTo) });
   return `/ui/locale?${params.toString()}`;
 }
 

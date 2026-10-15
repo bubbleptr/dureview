@@ -5,6 +5,7 @@ import type { DureviewService } from "../service.js";
 import type { ShellStatus } from "../ui/shell-status.js";
 import { safeNextPath } from "../ui/auth.js";
 import { resolveLocale } from "../ui/locale.js";
+import { requestPathAndQuery } from "../ui/next-path.js";
 import { messages } from "../ui/messages.js";
 import { renderLoginHtml, renderSettingsHtml } from "../ui/render-react.js";
 import { readRawBody } from "./body.js";
@@ -26,14 +27,15 @@ export async function settingsGetResponse(
   if (gate === "disabled") return notFoundJson();
   if (gate === "challenge") return unauthorizedJson();
   const locale = resolveLocale(request);
+  const location = requestPathAndQuery(request);
   if (gate === "login") {
     if (isSettingsPoll(request) || isGitHubSetupReturn(request)) return unauthorizedJson();
-    return htmlResponse(renderLoginHtml({ next: safeNextPath(new URL(request.url).pathname), locale }), 401);
+    return htmlResponse(renderLoginHtml({ next: safeNextPath(new URL(request.url).pathname), locale, location }), 401);
   }
   if (isSettingsPoll(request)) return settingsPollResponse(service);
   if (isGitHubSetupReturn(request)) return settingsGitHubReturn(service, request);
   const model = withSettingsCsrf(await service.settingsPage(settingsPageQuery(request)), uiToken);
-  return htmlResponse(renderSettingsHtml(model, status, settingsSectionFromUrl(new URL(request.url)), locale));
+  return htmlResponse(renderSettingsHtml(model, status, settingsSectionFromUrl(new URL(request.url)), locale, location));
 }
 
 export async function settingsPostResponse(
@@ -46,14 +48,15 @@ export async function settingsPostResponse(
   if (gate === "disabled") return notFoundJson();
   if (gate === "challenge") return unauthorizedJson();
   const locale = resolveLocale(request);
-  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(new URL(request.url).pathname), locale }), 401);
+  const location = requestPathAndQuery(request);
+  if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(new URL(request.url).pathname), locale, location }), 401);
   if (!postIsSameOrigin(request)) return htmlResponse(messages[locale].server.crossSite, 403);
   let raw: Buffer;
   try {
     raw = await readRawBody(request, BODY_LIMIT);
   } catch {
     const model = withSettingsCsrf(await service.settingsPage({ error: messages.en.server.formTooLarge }), uiToken);
-    return htmlResponse(renderSettingsHtml(model, status, settingsSectionFromUrl(new URL(request.url)), locale), 400);
+    return htmlResponse(renderSettingsHtml(model, status, settingsSectionFromUrl(new URL(request.url)), locale, location), 400);
   }
   const form = new URLSearchParams(raw.toString("utf8"));
   if (!csrfTokenMatches(form.get("csrf"), uiToken)) return htmlResponse(messages[locale].server.crossSite, 403);
@@ -66,7 +69,7 @@ export async function settingsPostResponse(
     : await service.saveSettings(formValues(form), actor);
   if (!result.ok) {
     const model = withSettingsCsrf(await service.settingsPage({ error: result.error }), uiToken);
-    return htmlResponse(renderSettingsHtml(model, status, postedSection(request, form), locale), 400);
+    return htmlResponse(renderSettingsHtml(model, status, postedSection(request, form), locale, location), 400);
   }
   return redirectResponse(settingsReturnPath(form.get("section"), "saved=1"));
 }

@@ -1,8 +1,9 @@
 import { useLayoutEffect } from "react";
-import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+import { HeadContent, Outlet, Scripts, createRootRoute, useLocation } from "@tanstack/react-router";
 import { applySavedAppearance, THEME_BOOT } from "../components/theme.js";
 import { I18nProvider, useI18n } from "../ui/i18n.js";
 import { getUiLocale } from "../ui/locale-fn.js";
+import { PageLocationProvider } from "../ui/page-location.js";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -22,6 +23,7 @@ export const Route = createRootRoute({
 
 function RootComponent() {
   const { locale } = Route.useLoaderData();
+  const pageLocation = useLocation({ select: (location) => location.pathname + location.searchStr });
   useLayoutEffect(() => {
     applySavedAppearance();
   }, []);
@@ -32,9 +34,11 @@ function RootComponent() {
         <HeadContent />
       </head>
       <body className="h-dvh overflow-hidden bg-background font-sans text-foreground antialiased">
-        <I18nProvider locale={locale}>
-          <Outlet />
-        </I18nProvider>
+        <PageLocationProvider location={pageLocation}>
+          <I18nProvider locale={locale}>
+            <Outlet />
+          </I18nProvider>
+        </PageLocationProvider>
         <Scripts />
       </body>
     </html>

@@ -11,7 +11,7 @@ export function LoginForm({ next, error }: { next: string; error?: string }) {
   return (
     <div className="relative flex h-full min-h-0 items-center justify-center overflow-auto bg-background p-6">
       <div className="absolute top-3 right-3 flex items-center gap-1">
-        <LanguageSwitch returnTo="/ui/login" />
+        <LanguageSwitch />
         <ThemeToggle />
       </div>
       <Card className="w-full max-w-sm">
