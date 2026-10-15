@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { isProviderName, PROVIDER_IDS, type ProviderName } from "./auth/providers.js";
 import { BUILTIN_DEFAULT_TRIGGER, type ReviewTrigger } from "./review/policy.js";
+
+export type { ProviderName };
 
 /**
  * Default chat model in pi-ai's `openai-codex` catalog.
@@ -17,8 +20,6 @@ export const DEFAULT_SKIP_DRAFTS = false;
 export const DEFAULT_CHECKOUT_TTL_DAYS = 30;
 
 export const DEFAULT_PROVIDER = "openai-codex" as const;
-
-export type ProviderName = "openai-codex" | "openai";
 
 const THINKING_LEVELS = new Set<ModelThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -58,6 +59,7 @@ export type EditableBaseline = {
   defaultTrigger: ReviewTrigger | undefined;
   skipDrafts: boolean | undefined;
   checkoutTtlDays: number | undefined;
+  provider: ProviderName | undefined;
 };
 
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
@@ -91,6 +93,7 @@ export function editableBaseline(env: NodeJS.ProcessEnv = process.env): Editable
     defaultTrigger: triggerFromEnv(env.DUREVIEW_DEFAULT_TRIGGER),
     skipDrafts: skipDraftsFromEnv(env.DUREVIEW_SKIP_DRAFTS),
     checkoutTtlDays: checkoutTtlFromEnv(env.DUREVIEW_CHECKOUT_TTL_DAYS),
+    provider: parseProvider(env.DUREVIEW_PROVIDER),
   };
 }
 
@@ -107,6 +110,7 @@ export function baselineFromConfig(
     defaultTrigger: config.defaultTrigger,
     skipDrafts: config.skipDrafts,
     checkoutTtlDays: config.checkoutTtlDays,
+    provider: undefined,
   };
 }
 
@@ -114,16 +118,16 @@ export function isThinkingLevel(value: string): value is ModelThinkingLevel {
   return THINKING_LEVELS.has(value as ModelThinkingLevel);
 }
 
+/**
+ * Env that is half-set is a mistake. A missing webhook secret or GitHub credential
+ * is finished on the settings page, so the process is allowed to start.
+ */
 export function assertServeConfig(config: Config): void {
-  if (!config.webhookSecret) {
-    throw new Error("DUREVIEW_WEBHOOK_SECRET is required to verify GitHub webhook signatures.");
-  }
-  const app = Boolean(config.githubAppId && config.githubAppPrivateKey);
-  if (!app && !config.githubToken) {
-    throw new Error("Set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY, or GITHUB_TOKEN.");
-  }
   if (config.githubAppId && !config.githubAppPrivateKey) {
     throw new Error("GITHUB_APP_ID is set but no GitHub App private key was found.");
+  }
+  if (config.githubAppPrivateKey && !config.githubAppId) {
+    throw new Error("GitHub App private key is set but GITHUB_APP_ID is missing.");
   }
 }
 
@@ -159,8 +163,8 @@ function skipDraftsFromEnv(value: string | undefined): boolean | undefined {
 
 function parseProvider(value: string | undefined): ProviderName | undefined {
   if (value === undefined || value === "") return undefined;
-  if (value === "openai-codex" || value === "openai") return value;
-  throw new Error(`DUREVIEW_PROVIDER must be "openai-codex" or "openai", got ${value}.`);
+  if (isProviderName(value)) return value;
+  throw new Error(`DUREVIEW_PROVIDER must be one of ${PROVIDER_IDS.join(", ")}, got ${value}.`);
 }
 
 function parseThinking(value: string): ModelThinkingLevel {

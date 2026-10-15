@@ -17,7 +17,7 @@ import {
   reviewDurationMs,
 } from "../src/ui/page.js";
 import { renderListHtml, renderSettingsHtml } from "../src/ui/render-react.js";
-import type { SettingsPageModel } from "../src/settings/page.js";
+import { emptyConsole, type SettingsPageModel } from "../src/settings/page.js";
 import type { ShellStatus } from "../src/ui/shell-status.js";
 import type { DashboardStatus } from "../src/ui/status.js";
 import type { ReviewSummary } from "../src/review/archive.js";
@@ -375,7 +375,9 @@ function settingsFixture(): SettingsPageModel {
     provider: "openai-codex",
     modelOptions: ["gpt-5.5"],
     thinkingByModel: { "gpt-5.5": ["medium"] },
+    catalogs: [{ provider: "openai-codex", label: "ChatGPT", models: [{ id: "gpt-5.5", thinking: ["medium"] }] }],
     fields: {
+      provider: field("provider", "Provider", "DUREVIEW_PROVIDER", "openai-codex"),
       model: field("model", "Model", "DUREVIEW_MODEL", "gpt-5.5"),
       thinking: field("thinking", "Thinking", "DUREVIEW_THINKING", "medium"),
       defaultTrigger: field("defaultTrigger", "Trigger", "DUREVIEW_DEFAULT_TRIGGER", "manual"),
@@ -383,15 +385,18 @@ function settingsFixture(): SettingsPageModel {
       checkoutTtlDays: field("checkoutTtlDays", "Checkout TTL", "DUREVIEW_CHECKOUT_TTL_DAYS", "30"),
     },
     form: {
+      provider: "openai-codex",
       model: "gpt-5.5",
       thinking: "medium",
       defaultTrigger: "manual",
       skipDrafts: false,
       checkoutTtlDays: "30",
     },
+    console: emptyConsole(),
     problems: [],
     audit: [],
     error: null,
+    notice: null,
     saved: false,
   };
 }

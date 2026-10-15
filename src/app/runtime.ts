@@ -1,6 +1,9 @@
 import { join } from "node:path";
 import { assertServeConfig, configFromEnv, editableBaseline, type Config } from "../config.js";
-import { createReviewModels, resolveProvider } from "../auth/session.js";
+import { authFile, createReviewModels, resolveProvider } from "../auth/session.js";
+import { FileCredentialStore } from "../auth/store.js";
+import { activeGitHub, activeWebhookSecret } from "../github/access.js";
+import { GitHubAppFile } from "../github/app-file.js";
 import { GithubRest } from "../github/client.js";
 import { log } from "../log.js";
 import { checkoutProtectionKey, cleanupCheckouts, GitCheckout } from "../review/checkout.js";
@@ -45,8 +48,8 @@ export function listContext(runtime: AppRuntime): ListContext {
     provider: effective.provider,
     modelId: effective.modelId,
     thinking: effective.thinking,
-    githubApp: Boolean(runtime.config.githubAppId && runtime.config.githubAppPrivateKey),
-    githubToken: Boolean(runtime.config.githubToken),
+    githubApp: runtime.service.githubAuthKind() === "app",
+    githubToken: runtime.service.githubAuthKind() === "token",
     startedAt: runtime.startedAt,
   };
 }
@@ -54,7 +57,9 @@ export function listContext(runtime: AppRuntime): ListContext {
 async function openRuntime(): Promise<AppRuntime> {
   const config = configFromEnv();
   assertServeConfig(config);
-  const models = createReviewModels(config);
+  const credentials = new FileCredentialStore(authFile(config));
+  const models = createReviewModels(config, credentials);
+  const githubApps = await GitHubAppFile.open(join(config.dataDir, "github-app.json"));
   const provider = await resolveProvider(config, models);
   const model = models.getModel(provider, config.modelId);
   if (!model) {
@@ -64,11 +69,18 @@ async function openRuntime(): Promise<AppRuntime> {
   }
   const auth = await models.checkAuth(provider);
   if (!auth) {
-    log("warn", "No credentials for the model provider yet. Run `dureview login` or set OPENAI_API_KEY.", {
+    log("warn", "No credentials for the model provider yet. Sign in on the settings page, run `dureview login`, or set an API key.", {
       provider,
     });
   }
-  const github = new GithubRest(config);
+  const githubAuth = activeGitHub(config, githubApps.current());
+  if (!activeWebhookSecret(config, githubApps.current()).secret) {
+    log("warn", "Webhook secret is not set. Create a GitHub App on the settings page or set DUREVIEW_WEBHOOK_SECRET.");
+  }
+  if (githubAuth.kind === "none") {
+    log("warn", "GitHub credentials are not set. Create a GitHub App on the settings page or set GITHUB_APP_ID or GITHUB_TOKEN.");
+  }
+  const github = new GithubRest(config, () => githubApps.current());
   let service: DureviewService | undefined;
   const checkout = new GitCheckout(
     github,
@@ -84,6 +96,8 @@ async function openRuntime(): Promise<AppRuntime> {
     provider,
     modelId: config.modelId,
     baseline: editableBaseline(),
+    credentials,
+    githubApps,
   });
   const effective = service.effectiveConfig();
   if (modelChoiceError(models, provider, effective.modelId, effective.thinking)) {
@@ -102,7 +116,7 @@ async function openRuntime(): Promise<AppRuntime> {
     provider,
     model: effective.modelId,
     thinking: effective.thinking,
-    github: config.githubAppId ? "app" : "pat",
+    github: githubAuth.kind,
     ui: config.uiToken ? "enabled" : "disabled",
     dataDir: config.dataDir,
   });

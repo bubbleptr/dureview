@@ -1,14 +1,32 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Models } from "@earendil-works/pi-ai";
+import type { Credential, Models } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, type ConversationId, type TaskId } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { storageFile } from "./auth/session.js";
+import { LoginSessions } from "./auth/device-login.js";
+import { authFile, resolveProvider, storageFile } from "./auth/session.js";
+import { FileCredentialStore } from "./auth/store.js";
+import { isSubscriptionProvider } from "./auth/providers.js";
+import { apiKeyView, assertApiKeyProvider, parseApiKey, publicAuthError, subscriptionView } from "./auth/reveal.js";
 import { baselineFromConfig, type Config, type EditableBaseline } from "./config.js";
+import { GitHubAppFile } from "./github/app-file.js";
+import { activeGitHub, activeWebhookSecret, githubSetupView } from "./github/access.js";
+import { probeInstallations } from "./github/probe.js";
+import {
+  buildManifest,
+  exchangeAppManifest,
+  githubSetupCookie,
+  handoffResponse,
+  manifestCreateUrl,
+  manifestHandoffPage,
+  newSetupState,
+  statesMatch,
+} from "./github/manifest.js";
+import { githubWebOrigin } from "./github/web.js";
 import { ServerSettings, type EffectiveConfig, type SettingsWriteResult } from "./settings/effective.js";
-import type { SettingsFormValues, SettingsPageModel } from "./settings/page.js";
+import type { ConsoleView, SettingsFormValues, SettingsPageModel } from "./settings/page.js";
 import type { GitHub } from "./github/client.js";
 import { verifyGithubSignature } from "./github/signature.js";
 import { parseWebhook, type ReviewCommand } from "./github/webhook.js";
@@ -38,11 +56,17 @@ export type ServiceOptions = {
   baseline?: EditableBaseline;
   /** When omitted, overrides are stored beside the review archive. */
   settings?: ServerSettings;
+  credentials?: FileCredentialStore;
+  logins?: LoginSessions;
+  githubApps?: GitHubAppFile;
 };
 
 export type WebhookResponse = { status: number; body: Record<string, unknown> };
 
 export class DureviewService {
+  #githubState: { state: string; expires: number } | null = null;
+  #githubNotice: string | null = null;
+
   private constructor(
     readonly harness: Harness,
     private readonly rootId: ConversationId,
@@ -52,6 +76,10 @@ export class DureviewService {
     private readonly reviews: ReviewLog,
     private readonly archive: ReviewArchive,
     private readonly settings: ServerSettings,
+    private readonly credentials: FileCredentialStore,
+    private readonly logins: LoginSessions,
+    private readonly githubApps: GitHubAppFile,
+    private readonly models: Models,
   ) {}
 
   static async open(options: ServiceOptions): Promise<DureviewService> {
@@ -116,7 +144,25 @@ export class DureviewService {
     }
     const root = await harness.root(BACKGROUND_CONTEXT);
     harness.resume();
-    return new DureviewService(harness, root.id, task, options.config, options.github, reviews, archive, settings);
+    const credentials = options.credentials ?? new FileCredentialStore(authFile(options.config));
+    const logins =
+      options.logins ??
+      new LoginSessions((provider, interaction) => options.models.login(provider, "oauth", interaction, { agentName: "dureview" }));
+    const githubApps = options.githubApps ?? (await GitHubAppFile.open(join(options.config.dataDir, "github-app.json")));
+    return new DureviewService(
+      harness,
+      root.id,
+      task,
+      options.config,
+      options.github,
+      reviews,
+      archive,
+      settings,
+      credentials,
+      logins,
+      githubApps,
+      options.models,
+    );
   }
 
   /** Model, thinking, trigger, draft skip, and checkout TTL after overrides. */
@@ -128,8 +174,106 @@ export class DureviewService {
     return this.settings.effective().checkoutTtlDays * 24 * 60 * 60 * 1000;
   }
 
-  settingsPage(extra?: { error?: string | null; saved?: boolean }): Promise<SettingsPageModel> {
-    return this.settings.page(extra);
+  async settingsPage(extra?: { error?: string | null; saved?: boolean; notice?: string | null }): Promise<SettingsPageModel> {
+    await this.#refreshProviderFallback();
+    this.logins.acknowledgeDone();
+    const storedNotice = this.#takeGitHubNotice();
+    const notice = extra?.notice ?? storedNotice;
+    return this.settings.page({ ...extra, notice, console: await this.consoleView() });
+  }
+
+  async consoleView(): Promise<ConsoleView> {
+    const subscriptions = [];
+    for (const provider of ["openai-codex", "github-copilot", "xai"] as const) {
+      try {
+        subscriptions.push(subscriptionView(provider, await this.credentials.read(provider), false));
+      } catch {
+        subscriptions.push(subscriptionView(provider, undefined, true));
+      }
+    }
+    const apiKeys = [];
+    for (const provider of ["openai", "openrouter", "deepseek"] as const) {
+      let credential: Credential | undefined;
+      try {
+        credential = await this.credentials.read(provider);
+      } catch {
+        credential = undefined;
+      }
+      apiKeys.push(apiKeyView(provider, credential, process.env));
+    }
+    return { subscriptions, apiKeys, logins: this.logins.snapshot(), github: await this.#githubView() };
+  }
+
+  loginSnapshot(): ConsoleView["logins"] {
+    return this.logins.snapshot();
+  }
+
+  startSubscriptionLogin(provider: string, enterprise: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const started = this.logins.start(provider, enterprise);
+    if (!started.ok) return Promise.resolve(started);
+    return this.logins.waitForCode(provider, 3000).then(() => ({ ok: true as const }));
+  }
+
+  async logoutSubscription(provider: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (!isSubscriptionProvider(provider)) return { ok: false, error: "Unknown provider." };
+    this.logins.abort(provider);
+    await this.models.logout(provider);
+    await this.#refreshProviderFallback();
+    return { ok: true };
+  }
+
+  async saveApiKey(provider: string, key: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const id = assertApiKeyProvider(provider);
+    const parsed = parseApiKey(key);
+    if (!id || !parsed) return { ok: false, error: "Enter an API key at least 8 characters long, with no spaces." };
+    const current = await this.credentials.read(id);
+    if (current?.type === "oauth") return { ok: false, error: "Log out of the subscription before saving an API key." };
+    await this.credentials.modify(id, async () => ({ type: "api_key", key: parsed }));
+    return { ok: true };
+  }
+
+  async clearApiKey(provider: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const id = assertApiKeyProvider(provider);
+    if (!id) return { ok: false, error: "Unknown provider." };
+    const current = await this.credentials.read(id);
+    if (current?.type === "api_key") await this.credentials.delete(id);
+    return { ok: true };
+  }
+
+  beginGitHubSetup(origin: string, org: string): Response | null {
+    const web = githubWebOrigin(this.config.githubApiUrl);
+    const action = web ? manifestCreateUrl(this.config.githubApiUrl, org) : null;
+    if (!web || !action) return null;
+    const state = newSetupState();
+    this.#githubState = { state, expires: Date.now() + 10 * 60 * 1000 };
+    const manifest = buildManifest(origin, state);
+    return handoffResponse(manifestHandoffPage(action, manifest), githubSetupCookie(state), web);
+  }
+
+  async finishGitHubSetup(state: string, code: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const expected = this.#githubState;
+    this.#githubState = null;
+    if (!expected || expected.expires < Date.now() || !statesMatch(expected.state, state)) {
+      return { ok: false, error: "GitHub setup expired. Start it again from settings." };
+    }
+    try {
+      const app = await exchangeAppManifest({ code, apiUrl: this.config.githubApiUrl });
+      await this.githubApps.save(app);
+      this.#githubNotice = "GitHub App saved.";
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: publicAuthError(error) };
+    }
+  }
+
+  async clearGitHubApp(): Promise<{ ok: true } | { ok: false; error: string }> {
+    await this.githubApps.clear();
+    return { ok: true };
+  }
+
+  githubAuthKind(): "app" | "token" | "none" {
+    const active = activeGitHub(this.config, this.githubApps.current());
+    return active.kind === "app" ? "app" : active.kind;
   }
 
   saveSettings(input: SettingsFormValues, actor: string): Promise<SettingsWriteResult> {
@@ -357,14 +501,16 @@ export class DureviewService {
 
   /** Secret configured for `X-Hub-Signature-256`. The HTTP layer verifies with this before enqueueing. */
   configuredWebhookSecret(): string | undefined {
-    return this.config.webhookSecret;
+    return activeWebhookSecret(this.config, this.githubApps.current()).secret;
   }
 
   async handleWebhook(raw: Buffer, signature: string | undefined, event: string | undefined): Promise<WebhookResponse> {
-    if (!this.config.webhookSecret) {
+    await this.#refreshProviderFallback();
+    const secret = this.configuredWebhookSecret();
+    if (!secret) {
       return { status: 500, body: { error: "webhook secret is not configured" } };
     }
-    if (!verifyGithubSignature(raw, signature, this.config.webhookSecret)) {
+    if (!verifyGithubSignature(raw, signature, secret)) {
       return { status: 401, body: { error: "invalid signature" } };
     }
     let payload: unknown;
@@ -472,6 +618,37 @@ export class DureviewService {
       taskId: String(queued.taskId),
     });
     return { status: 202, body: { taskId: queued.taskId, deduped: queued.deduped } };
+  }
+
+  async #githubView(): Promise<ConsoleView["github"]> {
+    const stored = this.githubApps.current();
+    const active = activeGitHub(this.config, stored);
+    const probe =
+      active.kind === "app"
+        ? await probeInstallations({
+            apiUrl: this.config.githubApiUrl,
+            appId: active.appId,
+            privateKey: active.privateKey,
+          })
+        : null;
+    return githubSetupView({
+      config: this.config,
+      stored,
+      unreadable: this.githubApps.unreadable(),
+      probe,
+    });
+  }
+
+  async #refreshProviderFallback(): Promise<void> {
+    if (this.config.provider) return;
+    const detected = await resolveProvider({ ...this.config, provider: undefined }, this.models);
+    this.settings.setFallbackProvider(detected);
+  }
+
+  #takeGitHubNotice(): string | null {
+    const notice = this.#githubNotice;
+    this.#githubNotice = null;
+    return notice;
   }
 
   async close(): Promise<void> {

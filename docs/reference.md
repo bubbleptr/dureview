@@ -134,7 +134,9 @@ The overview is counts (reviews, average and p95 duration, findings, average tok
 
 The sidebar links to the overview, the review list, and settings. Its footer is the theme control. The settings page shows the version, uptime, provider and model, thinking level, whether `auth.json` has a Codex login and when that access token expires, and yes or no for GitHub App and GitHub token.
 
-The model dropdown is the pi-ai catalog for the provider the process already selected. The thinking dropdown lists the levels that model supports. `gpt-5.6-sol` includes `max`. The server rejects an unknown model and a thinking level outside that list. The default trigger and draft skip are read when the next webhook arrives. The checkout TTL is read on the next sweep.
+The provider control lists ChatGPT (`openai-codex`), GitHub Copilot, xAI, OpenAI, OpenRouter, and DeepSeek when that catalog has a usable model. The model control is a search field over the pi-ai catalog for the selected provider. OpenRouter ids may contain `~` and `/`. The thinking control lists the levels that model supports. `gpt-5.6-sol` includes `max`. The server rejects an unknown model and a thinking level outside that list. The default trigger and draft skip are read when the next webhook arrives. The checkout TTL is read on the next sweep.
+
+Subscription login on that page is a device code for ChatGPT (the Codex path), GitHub Copilot, and xAI. The page shows the verification URL and the code, then polls until the provider finishes. API keys are OpenAI, OpenRouter, and DeepSeek. A saved key overrides the environment variable. After a save, the page shows the last four characters and does not return the full key. The GitHub App button uses GitHub's manifest flow. Environment credentials still win: an env app over a saved app, `GITHUB_TOKEN` over a saved app when the env app is unset, and `DUREVIEW_WEBHOOK_SECRET` or `GITHUB_WEBHOOK_SECRET` over the secret stored with the app.
 
 ## Ignore globs
 

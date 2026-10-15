@@ -7,6 +7,7 @@ import { safeNextPath } from "../ui/auth.js";
 import { renderLoginHtml, renderSettingsHtml } from "../ui/render-react.js";
 import { readRawBody } from "./body.js";
 import { gateGetPage } from "./auth.js";
+import { isGitHubSetupReturn, isSettingsPoll, settingsActionResponse, settingsGitHubReturn, settingsPageQuery, settingsPollResponse } from "./console.js";
 import { htmlResponse, notFoundJson, redirectResponse, unauthorizedJson } from "./headers.js";
 
 const BODY_LIMIT = 8_192;
@@ -21,9 +22,13 @@ export async function settingsGetResponse(
   const gate = gateGetPage(request, uiToken);
   if (gate === "disabled") return notFoundJson();
   if (gate === "challenge") return unauthorizedJson();
-  if (gate === "login") return htmlResponse(renderLoginHtml({ next: SETTINGS_PATH }), 401);
-  const saved = new URL(request.url).searchParams.get("saved") === "1";
-  const model = await service.settingsPage({ saved });
+  if (gate === "login") {
+    if (isSettingsPoll(request) || isGitHubSetupReturn(request)) return unauthorizedJson();
+    return htmlResponse(renderLoginHtml({ next: SETTINGS_PATH }), 401);
+  }
+  if (isSettingsPoll(request)) return settingsPollResponse(service);
+  if (isGitHubSetupReturn(request)) return settingsGitHubReturn(service, request);
+  const model = await service.settingsPage(settingsPageQuery(request));
   return htmlResponse(renderSettingsHtml(model, status));
 }
 
@@ -45,6 +50,8 @@ export async function settingsPostResponse(
     return htmlResponse(renderSettingsHtml(model, status), 400);
   }
   const form = new URLSearchParams(raw.toString("utf8"));
+  const action = await settingsActionResponse(service, request, form);
+  if (action) return action;
   const actor = settingsActor(request);
   const reset = form.get("reset");
   const result = reset
@@ -73,5 +80,6 @@ function formValues(form: URLSearchParams): SettingsFormValues {
     defaultTrigger: (form.get("defaultTrigger") ?? "") as ReviewTrigger,
     skipDrafts: skip === "true" || skip === "on" || skip === "1",
     checkoutTtlDays: form.get("checkoutTtlDays") ?? "",
+    provider: form.get("provider") ?? "",
   };
 }

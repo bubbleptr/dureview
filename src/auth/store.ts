@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 
@@ -88,9 +88,12 @@ export class FileCredentialStore implements CredentialStore {
 
   async #save(data: AuthFile): Promise<void> {
     await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
+    await chmod(dirname(this.file), 0o700);
     const tmp = `${this.file}.${process.pid}.tmp`;
     await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+    await chmod(tmp, 0o600);
     await rename(tmp, this.file);
+    await chmod(this.file, 0o600);
   }
 }
 

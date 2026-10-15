@@ -480,6 +480,7 @@ export async function openTestService(options: {
   modelId?: string;
   thinking?: Config["thinking"];
   fauxModels?: Array<{ id: string; reasoning?: boolean }>;
+  githubApiUrl?: string;
 }) {
   const faux = options.fauxModels ? fauxProvider({ models: options.fauxModels }) : fauxProvider();
   faux.setResponses(options.responses ?? []);
@@ -490,6 +491,7 @@ export async function openTestService(options: {
   if (options.defaultTrigger) config.defaultTrigger = options.defaultTrigger;
   if (options.modelId) config.modelId = options.modelId;
   if (options.thinking) config.thinking = options.thinking;
+  if (options.githubApiUrl) config.githubApiUrl = options.githubApiUrl;
   const service = await DureviewService.open({
     config,
     models,
