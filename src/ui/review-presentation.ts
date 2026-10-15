@@ -20,12 +20,15 @@ export function reviewDiffOptions(input: {
   themeType: "light" | "dark";
   unsafeCSS: string;
   disableFileHeader: true;
+  preferredHighlighter: "shiki-js";
 } {
   return {
     diffStyle: input.diffStyle,
     themeType: input.themeType,
     unsafeCSS: `${REVIEW_EXPAND_CSS}${findingLineCss(findingRanges(input.lines))}`,
     disableFileHeader: true,
+    // The WASM Oniguruma engine is a separate chunk. The page highlights with Shiki's JavaScript engine.
+    preferredHighlighter: "shiki-js",
   };
 }
 

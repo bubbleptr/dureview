@@ -81,10 +81,10 @@ export type DetailSettings =
   | { recorded: true; rows: Array<{ key: string; value: string }> };
 
 /**
- * Serializable detail page. Diff lines are included. Full SHAs, tokens, and
- * filesystem paths are not.
+ * Fields the shell can render before the file list arrives.
+ * Full SHAs, tokens, and filesystem paths are not included.
  */
-export type ReviewDetailModel = {
+export type ReviewDetailHeader = {
   pageTitle: string;
   backHref: "/ui/reviews";
   pullHref: string | null;
@@ -96,6 +96,13 @@ export type ReviewDetailModel = {
   duration: string;
   whenIso: string;
   whenLabel: string;
+};
+
+/**
+ * Serializable detail page. Diff lines are included. Full SHAs, tokens, and
+ * filesystem paths are not.
+ */
+export type ReviewDetailModel = ReviewDetailHeader & {
   diffUnavailable: boolean;
   hiddenFiles: number;
   noChangedFiles: boolean;

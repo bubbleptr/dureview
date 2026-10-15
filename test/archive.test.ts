@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { ReviewArchive, reviewResult } from "../src/review/archive.js";
 import { reviewFilterFromSearch } from "../src/ui/query.js";
@@ -395,6 +395,47 @@ describe("review list query", () => {
       now,
     );
     expect(rejected.form).toEqual({ repo: "", result: "", since: "", from: "", to: "", q: "x" });
+  });
+
+  it("stores a pull snapshot for the head SHA and ignores a corrupt one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dureview-archive-"));
+    const file = join(dir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    await archive.start(row("9", "acme", "demo", 4, "opened", "Snapshot"));
+    await archive.finish({
+      taskId: "9",
+      owner: "acme",
+      repo: "demo",
+      number: 4,
+      outcome: "completed",
+      verdict: "clean",
+      findingCount: 0,
+      sha: "a".repeat(40),
+      findings: [],
+    });
+    const files = [
+      {
+        filename: "src/pay.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\n-old\n+new\n",
+        previousFilename: null,
+      },
+    ];
+    await archive.writePullSnapshot("9", "b".repeat(40), files);
+    await archive.writePullSnapshot("9", "a".repeat(40), files);
+    expect(await archive.readPullSnapshot("9", "b".repeat(40))).toBeNull();
+    expect(await archive.readPullSnapshot("9", "a".repeat(40))).toEqual(files);
+    archive.close();
+
+    const db = new DatabaseSync(file);
+    db.prepare("UPDATE pull_snapshots SET files_json = ?").run("{");
+    db.close();
+    await archive.open();
+    expect(await archive.readPullSnapshot("9", "a".repeat(40))).toBeNull();
+    archive.close();
   });
 });
 

@@ -7,6 +7,7 @@ import type { RepoCheckout } from "../src/review/checkout.js";
 import { startHttp } from "../src/server.js";
 import { VERSION } from "../src/version.js";
 import {
+  BASE_SHA,
   MemoryGitHub,
   openTestService,
   pullPayload,
@@ -154,6 +155,14 @@ describe("status page", () => {
     expect(html).not.toContain("never billed");
     expect(github.calls.filter((call) => call === "listPullFiles")).toHaveLength(0);
 
+    github.remotePull = {
+      number: 7,
+      title: "Charge positive amounts",
+      draft: false,
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+    };
     github.pullFiles = [
       {
         filename: "src/pay.ts",
@@ -182,7 +191,7 @@ describe("status page", () => {
     expect(detailHtml).toContain("Reviews");
     expect(detailHtml).toContain("src/pay.ts");
     const detailText = detailHtml.replace(/<[^>]+>/g, "");
-    const lineAt = detailText.indexOf("if (amount > 0) return { ok: true };");
+    const lineAt = detailText.indexOf("if (amount &gt; 0) return { ok: true };");
     expect(lineAt).toBeGreaterThanOrEqual(0);
     expect(detailText.indexOf("never billed")).toBeGreaterThan(lineAt);
     expect(detailHtml).toContain(">trigger<");
@@ -194,7 +203,13 @@ describe("status page", () => {
     expect(detailHtml).not.toContain(UI_TOKEN);
     const stored = await readFile(join(dataDir, "reviews.sqlite"));
     expect(stored.toString("utf8")).toContain("never billed");
-    expect(stored.toString("utf8")).not.toContain("if (amount > 0) return { ok: true };");
+    expect(stored.toString("utf8")).toContain("if (amount > 0) return { ok: true };");
+    const lists = github.calls.filter((call) => call === "listPullFiles").length;
+    const again = await fetch(`${http.url}/ui/reviews/${body.taskId}`, {
+      headers: { authorization: `Bearer ${UI_TOKEN}` },
+    });
+    expect(again.status).toBe(200);
+    expect(github.calls.filter((call) => call === "listPullFiles").length).toBe(lists);
 
     const ui = await fetch(`${http.url}/ui/`, { headers: { authorization: `Bearer ${UI_TOKEN}` } });
     expect(ui.status).toBe(200);

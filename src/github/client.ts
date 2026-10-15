@@ -118,10 +118,15 @@ export interface GitHub {
   /** 👀 on an accepted `/dureview` comment. GitHub treats a repeat as the same reaction. */
   reactToComment(request: GitHubRepo, commentId: number, signal: AbortSignal): Promise<void>;
   /**
-   * Changed files for a pull request, including each file's patch when GitHub sends one.
-   * Callers fetch this when a review is opened. It is not stored.
+   * Changed files for a pull request's current head, including each file's patch when GitHub sends one.
+   * This is not the file list at an older SHA.
    */
   listPullFiles(request: GitHubRepo & { number: number }, signal: AbortSignal): Promise<PullFile[]>;
+  /**
+   * Files in the three-dot diff `base...head`. `head` may be an older commit, so this is the
+   * diff a finished review actually saw. GitHub returns at most 300 files from this endpoint.
+   */
+  compareFiles(request: GitHubRepo, base: string, head: string, signal: AbortSignal): Promise<PullFile[]>;
   /**
    * Check runs named `name` on `sha`, including in-progress runs (`filter=all`).
    * Used to reuse the run this task already opened after a crash between the create
@@ -460,6 +465,23 @@ export class GithubRest implements GitHub {
       next = linkNext(response.headers.get("link"));
     }
     return collected;
+  }
+
+  async compareFiles(request: GitHubRepo, base: string, head: string, signal: AbortSignal): Promise<PullFile[]> {
+    if (!COMMIT_SHA.test(base) || !COMMIT_SHA.test(head)) {
+      throw new Error("GitHub compare requires a base SHA and a head SHA.");
+    }
+    const basehead = `${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+    const payload = await this.#json<unknown>(
+      request,
+      "GET",
+      `/repos/${request.owner}/${request.repo}/compare/${basehead}`,
+      signal,
+    );
+    if (!isRecord(payload) || !Array.isArray(payload.files)) {
+      throw new Error("GitHub compare did not return a file list.");
+    }
+    return parsePullFiles(payload.files);
   }
 
   async listCheckRuns(request: GitHubRepo, sha: string, name: string, signal: AbortSignal): Promise<CheckRun[]> {

@@ -10,6 +10,7 @@ import type {
   DetailLineView,
   DetailSettings,
   DetailSummary,
+  ReviewDetailHeader,
   ReviewDetailModel,
 } from "./detail-model.js";
 import {
@@ -21,17 +22,36 @@ import {
   reviewDurationMs,
   runningLabel,
 } from "./page.js";
-import type { ReviewPresentation } from "./review-presentation.js";
+import type { ReviewTreePreload } from "./review-presentation.js";
 
 const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export type DetailPayload =
   | { kind: "login"; next: string }
   | { kind: "missing" }
-  | { kind: "detail"; model: ReviewDetailModel; presentation: ReviewPresentation };
+  | { kind: "error" }
+  | { kind: "detail"; model: ReviewDetailModel; tree: ReviewTreePreload | null };
+
+export type ReviewHeaderPayload =
+  | { kind: "login"; next: string }
+  | { kind: "missing" }
+  | { kind: "header"; header: ReviewDetailHeader };
+
+/** Title and result for the shell. Does not load the pull request diff. */
+export async function loadReviewHeader(
+  service: DureviewService,
+  githubApiUrl: string,
+  taskId: string,
+  now = Date.now(),
+): Promise<ReviewDetailHeader | null> {
+  if (!TASK_ID.test(taskId)) return null;
+  const review = await service.savedReview(taskId);
+  if (!review) return null;
+  return reviewHeader(review, githubApiUrl, now);
+}
 
 /**
- * Saved review plus the live pull request diff.
+ * Saved review plus the pull request diff.
  * Returns null when the task id is unknown. A GitHub failure is still a model,
  * with `diffUnavailable` set, so the saved comments can render.
  */
@@ -63,14 +83,28 @@ export function buildReviewDetail(input: {
 }): ReviewDetailModel {
   const now = input.now ?? Date.now();
   const review = input.review;
-  const kind = reviewResult(review);
   const placed = placeReview(input.files, review.comments);
+  return {
+    ...reviewHeader(review, input.githubApiUrl, now),
+    diffUnavailable: input.diffUnavailable,
+    hiddenFiles: placed.hiddenFiles,
+    noChangedFiles: placed.files.length === 0 && !input.diffUnavailable,
+    outsideTitle: placed.files.length === 0 && !input.diffUnavailable ? "Comments" : "Other files",
+    files: placed.files.map(fileView),
+    outside: placed.outside.map(commentView),
+    summary: summaryView(review, now),
+    settings: settingsView(review),
+  };
+}
+
+export function reviewHeader(review: ReviewDetail, githubApiUrl: string, now = Date.now()): ReviewDetailHeader {
+  const kind = reviewResult(review);
   const whenIso = review.finishedAt ?? review.startedAt;
   const pullLabel = `${review.owner}/${review.repo} #${review.number}`;
   return {
     pageTitle: pullLabel,
     backHref: "/ui/reviews",
-    pullHref: pullRequestUrl(input.githubApiUrl, review.owner, review.repo, review.number),
+    pullHref: pullRequestUrl(githubApiUrl, review.owner, review.repo, review.number),
     pullLabel,
     heading: review.title || "Untitled",
     resultKind: kind,
@@ -82,14 +116,6 @@ export function buildReviewDetail(input: {
         : formatDuration(reviewDurationMs(review.startedAt, review.finishedAt, now)),
     whenIso,
     whenLabel: formatTime(whenIso),
-    diffUnavailable: input.diffUnavailable,
-    hiddenFiles: placed.hiddenFiles,
-    noChangedFiles: placed.files.length === 0 && !input.diffUnavailable,
-    outsideTitle: placed.files.length === 0 && !input.diffUnavailable ? "Comments" : "Other files",
-    files: placed.files.map(fileView),
-    outside: placed.outside.map(commentView),
-    summary: summaryView(review, now),
-    settings: settingsView(review),
   };
 }
 
