@@ -62,6 +62,8 @@ export type StatsPageModel = {
   filtered: boolean;
   empty: boolean;
   adoptionCards: StatsCard[];
+  /** Set when a closed pull request has posted comments with no outcome. */
+  unclassifiedNote: string | null;
   adoptionTrend: AdoptionTrendPoint[];
   recurring: RecurringGroup[];
   hotspots: HotspotRow[];

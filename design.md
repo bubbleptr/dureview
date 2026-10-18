@@ -90,7 +90,7 @@ SaaS landing page. This is an operator console for pull-request review.
   Dropdowns use the shadcn Select. A list of eight or more options, and the
   model catalog, use a combobox with a filter. Keyboard highlight in that
   combobox scrolls the active option into view.
-- Adoption counts a posted inline comment as adopted when a later commit changes its lines, or when its review thread is resolved and the pull request has a later commit. Pending comments are on pull requests that are still open and are not in the rate. An incidental edit of the same lines counts as adopted; the overview says so.
+- Adoption counts a posted inline comment as adopted when a later commit changes its lines, or when its review thread is resolved and the pull request has a later commit. Pending comments are on pull requests that are still open and are not in the rate. A posted comment on a closed pull request with no outcome is unclassified, shown as a short note, and is not in the rate. An incidental edit of the same lines counts as adopted; the overview says so.
 - Keep URL filters (`repo`, `result`, `since`, `from`, `to`, `q` on the review
   list; `range`, `repo`, and `tz` on the overview), auth, and server functions.
   Client-only `sort`, `dir`, and `page` must not change those queries' meaning.

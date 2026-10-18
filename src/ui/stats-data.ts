@@ -24,6 +24,7 @@ export async function buildStatsPage(
     filtered: statsFormIsFiltered(parsed.form),
     empty: snapshot.reviews === 0,
     adoptionCards: adoptionCards(snapshot, locale),
+    unclassifiedNote: unclassifiedNote(snapshot, locale),
     adoptionTrend: adoptionTrend(snapshot, locale),
     recurring: recurring(snapshot, locale),
     hotspots: hotspots(snapshot, locale),
@@ -67,6 +68,12 @@ function adoptionCards(snapshot: StatsSnapshot, locale: Locale): StatsPageModel[
     { label: copy.ignored, value: formatCount(ignored, locale), detail: copy.ignoredDetail },
     { label: copy.pending, value: formatCount(pending, locale), detail: copy.pendingDetail },
   ];
+}
+
+function unclassifiedNote(snapshot: StatsSnapshot, locale: Locale): string | null {
+  const count = snapshot.adoption.unclassified;
+  if (count < 1) return null;
+  return fill(messages[locale].overview.unclassifiedNote, { count: formatCount(count, locale) });
 }
 
 function adoptionTrend(snapshot: StatsSnapshot, locale: Locale): StatsPageModel["adoptionTrend"] {

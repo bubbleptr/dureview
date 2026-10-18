@@ -1,4 +1,9 @@
 import { createHmac } from "node:crypto";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { OverviewPage } from "../src/components/stats-page.js";
+import { I18nProvider } from "../src/ui/i18n.js";
+import { buildStatsPage } from "../src/ui/stats-data.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -398,7 +403,7 @@ describe("adoption webhook", () => {
     const changed = await again.recordAdoption([{ id: 1, adoption: "ignored", head: SHA_A }]);
     expect(changed).toBe(0);
     const stats = await again.stats({ repo: "", since: null, tzOffsetMinutes: 0 });
-    expect(stats.adoption).toEqual({ adopted: 2, ignored: 1, pending: 0 });
+    expect(stats.adoption).toEqual({ adopted: 2, ignored: 1, pending: 0, unclassified: 0 });
     expect(stats.durations.find((row) => row.taskId === "shift")?.outlier).toBe(true);
     expect(stats.durations.find((row) => row.taskId === "touch")?.outlier).toBe(false);
     expect(stats.hotspots).toEqual(expect.arrayContaining([expect.objectContaining({ repo: "acme/demo", directory: "src" })]));
@@ -751,6 +756,102 @@ describe("adoption webhook", () => {
     expect(check.prepare("SELECT posted, adoption FROM findings").get()).toEqual({ posted: 1, adoption: null });
     check.close();
   });
+
+  it("does not write outcomes when the pull request reopens during classification", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "inflight", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "inflight", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.compared = [diffFile("src/pay.ts", "modified", deleteLine(2))];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const list = github.listReviewComments.bind(github);
+    github.listReviewComments = async (request, signal, options) => {
+      await deliver(service, pullPayload(SHA_B, "reopened"));
+      return list(request, signal, options);
+    };
+    const closed = await deliver(service, closedPayload(SHA_B));
+    expect(closed.status).toBe(200);
+    expect(closed.body).toMatchObject({ classified: 0 });
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    expect(check.prepare("SELECT COUNT(*) AS n FROM pull_closes").get()).toEqual({ n: 0 });
+    check.close();
+  });
+
+  it("does not write outcomes when the stored close head changed during classification", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "moved", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "moved", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.compared = [diffFile("src/pay.ts", "modified", deleteLine(2))];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const original = ReviewArchive.prototype.closedPull;
+    ReviewArchive.prototype.closedPull = async function (owner, repo, number) {
+      const row = await original.call(this, owner, repo, number);
+      if (!row) return row;
+      return { ...row, request: { ...row.request, sha: "c".repeat(40) } };
+    };
+    try {
+      const closed = await deliver(service, closedPayload(SHA_B));
+      expect(closed.body).toMatchObject({ ok: true, classified: 0 });
+    } finally {
+      ReviewArchive.prototype.closedPull = original;
+    }
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    expect(check.prepare("SELECT sha FROM pull_closes").get()).toEqual({ sha: SHA_B });
+    check.close();
+  });
+
+  it("counts an open pull request as pending and a closed one as unclassified", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "open", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z", 8);
+    insertFinding(db, "open", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null, 8);
+    insertReview(db, "closed", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z", 7);
+    insertFinding(db, "closed", SHA_A, "bbbbbbbbbbbb", "src/pay.ts", 2, 2, 1, null, 7);
+    db.prepare(
+      `INSERT INTO pull_closes (
+        owner, repo, number, sha, base_sha, base_ref, title, clone_url, installation_id, draft, merged, closed_at
+      ) VALUES ('acme', 'demo', 7, ?, ?, 'main', 'Charge', 'https://github.com/acme/demo.git', 99, 0, 1, '2026-10-12T00:00:00.000Z')`,
+    ).run(SHA_B, BASE_SHA);
+    db.close();
+
+    const { service } = await openTestService({ dataDir, github: new MemoryGitHub(), responses: [] });
+    const model = await buildStatsPage(service, new URLSearchParams("range=all"));
+    await service.close();
+    expect(model.adoptionCards.find((card) => card.label === "Pending")?.value).toBe("1");
+    expect(model.unclassifiedNote).toBe(
+      "1 unclassified. The pull request is closed and the outcome could not be decided. Not in the rate.",
+    );
+    const html = renderToStaticMarkup(
+      createElement(I18nProvider, { locale: "en" }, createElement(OverviewPage, { model })),
+    );
+    expect(html).toContain("1 unclassified.");
+    expect(html).toContain("Still open");
+  });
 });
 
 function diffFile(filename: string, status: string, patch: string | null): AdoptionDiffFile {
@@ -773,12 +874,19 @@ function deliver(service: DureviewService, payload: Record<string, unknown>) {
   return service.handleWebhook(raw, signature, "pull_request");
 }
 
-function insertReview(db: DatabaseSync, taskId: string, sha: string, startedAt: string, finishedAt: string): void {
+function insertReview(
+  db: DatabaseSync,
+  taskId: string,
+  sha: string,
+  startedAt: string,
+  finishedAt: string,
+  number = 7,
+): void {
   db.prepare(
     `INSERT INTO reviews (
       task_id, owner, repo, number, title, sha, base_sha, base_ref, trigger, started_at, finished_at, outcome, verdict
-    ) VALUES (?, 'acme', 'demo', 7, 'Charge', ?, ?, 'main', 'opened', ?, ?, 'completed', 'fix_recommended')`,
-  ).run(taskId, sha, BASE_SHA, startedAt, finishedAt);
+    ) VALUES (?, 'acme', 'demo', ?, 'Charge', ?, ?, 'main', 'opened', ?, ?, 'completed', 'fix_recommended')`,
+  ).run(taskId, number, sha, BASE_SHA, startedAt, finishedAt);
 }
 
 function insertFinding(
@@ -791,11 +899,12 @@ function insertFinding(
   end: number,
   posted: number,
   skip: string | null,
+  number = 7,
 ): void {
   db.prepare(
     `INSERT INTO findings (
       task_id, owner, repo, number, sha, title, body, trigger_text, priority, kind, category, confidence,
       path, start_line, end_line, fingerprint, posted, skip_reason, created_at
-    ) VALUES (?, 'acme', 'demo', 7, ?, ?, 'body', 'trigger', 1, 'bug', 'correctness', 0.9, ?, ?, ?, ?, ?, ?, '2026-10-10T00:00:00.000Z')`,
-  ).run(taskId, sha, fingerprint, path, start, end, fingerprint, posted, skip);
+    ) VALUES (?, 'acme', 'demo', ?, ?, ?, 'body', 'trigger', 1, 'bug', 'correctness', 0.9, ?, ?, ?, ?, ?, ?, '2026-10-10T00:00:00.000Z')`,
+  ).run(taskId, number, sha, fingerprint, path, start, end, fingerprint, posted, skip);
 }

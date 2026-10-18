@@ -46,6 +46,7 @@ const en = {
     adoptedDetail: "Lines changed, or the thread was resolved after a later commit",
     ignoredDetail: "Closed with those lines untouched",
     pendingDetail: "Still open",
+    unclassifiedNote: "{count} unclassified. The pull request is closed and the outcome could not be decided. Not in the rate.",
     emptyAdoption: "No posted comments have a decision in this range.",
     adoptionTrendTitle: "Adoption over time",
     adoptionTrendCaption:
@@ -351,6 +352,7 @@ const zhCN = {
     adoptedDetail: "相关行有改动，或讨论串在后续提交后被解决",
     ignoredDetail: "拉取请求已关闭，这些行没有改动",
     pendingDetail: "拉取请求仍打开",
+    unclassifiedNote: "{count} 条无法判定。拉取请求已关闭，结果没法确定，不计入采纳率。",
     emptyAdoption: "这个范围内没有已判定的已发布评论。",
     adoptionTrendTitle: "采纳率趋势",
     adoptionTrendCaption:

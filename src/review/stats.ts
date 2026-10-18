@@ -59,8 +59,8 @@ export type StatsSnapshot = {
   topRepos: Array<{ repo: string; reviews: number; findings: number }>;
   topPulls: Array<{ repo: string; number: number; title: string; reviews: number; findings: number }>;
   repos: string[];
-  /** Posted inline comments only. Pending is an unset outcome, which is an open pull request or a close that has not been classified. */
-  adoption: { adopted: number; ignored: number; pending: number };
+  /** Posted inline comments only. Pending is unset with no stored close. Unclassified is unset after the pull request closed. */
+  adoption: { adopted: number; ignored: number; pending: number; unclassified: number };
   adoptionTrend: Array<{ day: string; adopted: number; ignored: number }>;
   recurring: Array<{ category: string; count: number; titles: Array<{ title: string; count: number }> }>;
   hotspots: Array<{ repo: string; directory: string; count: number }>;
@@ -318,7 +318,12 @@ export function queryReviewStats(db: DatabaseSync, filter: StatsQuery): StatsSna
     `SELECT
        SUM(CASE WHEN f.posted = 1 AND f.skip_reason IS NULL AND f.adoption = 'adopted' THEN 1 ELSE 0 END) AS adopted,
        SUM(CASE WHEN f.posted = 1 AND f.skip_reason IS NULL AND f.adoption = 'ignored' THEN 1 ELSE 0 END) AS ignored,
-       SUM(CASE WHEN f.posted = 1 AND f.skip_reason IS NULL AND f.adoption IS NULL THEN 1 ELSE 0 END) AS pending
+       SUM(CASE WHEN f.posted = 1 AND f.skip_reason IS NULL AND f.adoption IS NULL AND NOT EXISTS (
+         SELECT 1 FROM pull_closes c WHERE c.owner = f.owner AND c.repo = f.repo AND c.number = f.number
+       ) THEN 1 ELSE 0 END) AS pending,
+       SUM(CASE WHEN f.posted = 1 AND f.skip_reason IS NULL AND f.adoption IS NULL AND EXISTS (
+         SELECT 1 FROM pull_closes c WHERE c.owner = f.owner AND c.repo = f.repo AND c.number = f.number
+       ) THEN 1 ELSE 0 END) AS unclassified
      FROM findings f
      JOIN reviews r ON r.task_id = f.task_id
      WHERE ${scope.clause}`,
@@ -459,6 +464,7 @@ export function queryReviewStats(db: DatabaseSync, filter: StatsQuery): StatsSna
       adopted: int(adoption, "adopted"),
       ignored: int(adoption, "ignored"),
       pending: int(adoption, "pending"),
+      unclassified: int(adoption, "unclassified"),
     },
     adoptionTrend: adoptionTrend.map((row) => ({
       day: text(row, "day"),

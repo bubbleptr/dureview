@@ -643,6 +643,13 @@ export class DureviewService {
         updates.push({ id: finding.id, adoption, head: request.sha });
       }
     }
+    if (updates.length > 0) {
+      // GitHub calls above can outlast a reopen, or a newer close. Those outcomes belong to this head only.
+      const still = await this.archive.closedPull(request.owner, request.repo, request.number);
+      if (!still || still.request.sha.toLowerCase() !== request.sha.toLowerCase()) {
+        return { status: 200, body: { ok: true, classified: 0, merged } };
+      }
+    }
     const classified = await this.archive.recordAdoption(updates);
     if (incomplete) return { status: 500, body: { error: "could not classify adoption" } };
     return { status: 200, body: { ok: true, classified, merged } };

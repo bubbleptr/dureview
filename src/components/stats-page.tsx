@@ -58,6 +58,7 @@ export function OverviewPage({ model }: { model: StatsPageModel }) {
           <p className="text-sm leading-6 text-muted-foreground">{copy.adoptionCaption}</p>
         </div>
         <StatStrip stats={model.adoptionCards} />
+        {model.unclassifiedNote ? <p className="text-sm text-muted-foreground">{model.unclassifiedNote}</p> : null}
         <FigureBlock title={copy.adoptionTrendTitle} caption={copy.adoptionTrendCaption}>
           {model.adoptionTrend.length === 0 ? (
             <Empty>{copy.emptyAdoption}</Empty>
