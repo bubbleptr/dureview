@@ -574,6 +574,92 @@ describe("adoption webhook", () => {
     check.close();
   });
 
+  it("leaves findings unset when the review comment list is truncated", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "truncated", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "truncated", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.reviewCommentsTruncated = true;
+    github.reviewComments = [
+      {
+        id: 1,
+        body: "<!-- dureview:finding aaaaaaaaaaaa truncated -->",
+        path: "src/pay.ts",
+        line: 2,
+        threadId: "T1",
+        inReplyToId: null,
+        reviewId: 1,
+        resolved: true,
+      },
+    ];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const closed = await deliver(service, closedPayload(SHA_B));
+    expect(closed.status).toBe(500);
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    check.close();
+  });
+
+  it("does not restore a close when a retry still holds the row from before reopen", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "stale", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "stale", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.threadError = new Error("GitHub GraphQL response had no data.");
+    github.reviewComments = [
+      {
+        id: 1,
+        body: "<!-- dureview:finding aaaaaaaaaaaa stale -->",
+        path: "src/pay.ts",
+        line: 2,
+        threadId: "T1",
+        inReplyToId: null,
+        reviewId: 1,
+        resolved: true,
+      },
+    ];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    expect((await deliver(service, closedPayload(SHA_B))).status).toBe(500);
+    github.threadError = null;
+    const lookups = () => github.calls.filter((call) => call === "listReviewComments").length;
+    const before = lookups();
+    const proto = ReviewArchive.prototype;
+    const original = proto.closesAwaitingAdoption;
+    proto.closesAwaitingAdoption = async function (maxAttempts: number) {
+      const rows = await original.call(this, maxAttempts);
+      await this.forgetClosedPull("acme", "demo", 7);
+      return rows;
+    };
+    try {
+      await service.retryClosedAdoption();
+    } finally {
+      proto.closesAwaitingAdoption = original;
+    }
+    expect(lookups()).toBe(before);
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    expect(check.prepare("SELECT COUNT(*) AS n FROM pull_closes").get()).toEqual({ n: 0 });
+    check.close();
+  });
+
   it("retries a failed close without a second webhook delivery", async () => {
     const dataDir = await tempDataDir();
     const file = join(dataDir, "reviews.sqlite");

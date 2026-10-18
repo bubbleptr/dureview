@@ -103,7 +103,8 @@ export interface GitHub {
   ): Promise<PullReview>;
   /**
    * Inline review comments, including dureview markers and thread ids.
-   * `threads: "required"` throws when the GraphQL thread lookup fails.
+   * `threads: "required"` throws when the GraphQL thread lookup fails or the REST list is truncated.
+   * A truncated list must not be classified: a missing comment would look unresolved.
    * The default keeps the comments and treats threads as unresolved, so a publish can reply instead of resolving.
    */
   listReviewComments(
@@ -203,8 +204,13 @@ export class GithubRest implements GitHub {
     );
   }
 
-  listIssueComments(request: ReviewRequest, signal: AbortSignal): Promise<IssueComment[]> {
-    return this.#pages(request, `/repos/${request.owner}/${request.repo}/issues/${request.number}/comments`, signal);
+  async listIssueComments(request: ReviewRequest, signal: AbortSignal): Promise<IssueComment[]> {
+    const page = await this.#pages<IssueComment>(
+      request,
+      `/repos/${request.owner}/${request.repo}/issues/${request.number}/comments`,
+      signal,
+    );
+    return page.rows;
   }
 
   createIssueComment(request: ReviewRequest, body: string, signal: AbortSignal): Promise<IssueComment> {
@@ -219,8 +225,13 @@ export class GithubRest implements GitHub {
     });
   }
 
-  listReviews(request: ReviewRequest, signal: AbortSignal): Promise<PullReview[]> {
-    return this.#pages(request, `/repos/${request.owner}/${request.repo}/pulls/${request.number}/reviews`, signal);
+  async listReviews(request: ReviewRequest, signal: AbortSignal): Promise<PullReview[]> {
+    const page = await this.#pages<PullReview>(
+      request,
+      `/repos/${request.owner}/${request.repo}/pulls/${request.number}/reviews`,
+      signal,
+    );
+    return page.rows;
   }
 
   async createReview(
@@ -249,11 +260,15 @@ export class GithubRest implements GitHub {
     signal: AbortSignal,
     options?: { threads: "required" },
   ): Promise<PullReviewComment[]> {
-    const rows = await this.#pages<RestReviewComment>(
+    const page = await this.#pages<RestReviewComment>(
       request,
       `/repos/${request.owner}/${request.repo}/pulls/${request.number}/comments`,
       signal,
     );
+    if (page.truncated && options?.threads === "required") {
+      throw new Error("GitHub review comment list was truncated.");
+    }
+    const rows = page.rows;
     let threads = new Map<number, { threadId: string; resolved: boolean }>();
     try {
       threads = await this.#threadIndex(request, signal);
@@ -368,10 +383,10 @@ export class GithubRest implements GitHub {
     request: ReviewRequest,
     path: string,
     signal: AbortSignal,
-  ): Promise<Array<T & { body: string }>> {
+  ): Promise<{ rows: Array<T & { body: string }>; truncated: boolean }> {
     const collected: Array<T & { body: string }> = [];
-    let next: string | undefined = path;
-    for (let page = 0; page < 10 && next; page++) {
+    let next: string | undefined = withPerPage(path, COMMENT_PAGE_SIZE);
+    for (let page = 0; page < COMMENT_PAGE_CAP && next; page++) {
       const response = await this.#send(request, "GET", next, signal);
       const rows = (await response.json()) as T[];
       if (!Array.isArray(rows)) throw new Error(`GitHub ${path} did not return a list`);
@@ -381,7 +396,7 @@ export class GithubRest implements GitHub {
       }
       next = linkNext(response.headers.get("link"));
     }
-    return collected;
+    return { rows: collected, truncated: next !== undefined };
   }
 
   async #text(request: { installationId: number | null }, path: string, signal: AbortSignal, accept: string): Promise<string> {
@@ -712,6 +727,15 @@ export function parsePullFiles(payload: unknown): PullFile[] {
 function nonNegative(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return 0;
   return value;
+}
+
+/** GitHub defaults to 30. Ten pages of that hide every comment after the first 300. */
+const COMMENT_PAGE_SIZE = 100;
+const COMMENT_PAGE_CAP = 10;
+
+function withPerPage(path: string, perPage: number): string {
+  if (/[?&]per_page=/.test(path)) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}per_page=${perPage}`;
 }
 
 function linkNext(header: string | null): string | undefined {

@@ -554,7 +554,7 @@ export class DureviewService {
     if (parsed.kind === "ping") return { status: 200, body: { ok: true } };
     if (parsed.kind === "ignore") return { status: 200, body: { ignored: true, reason: parsed.reason } };
     if (parsed.kind === "command") return this.#command(parsed.command);
-    if (parsed.kind === "closed") return this.#classifyAdoption(parsed.request, parsed.merged);
+    if (parsed.kind === "closed") return this.#classifyAdoption(parsed.request, parsed.merged, "webhook");
     return this.#pullRequest(parsed.request, parsed.action);
   }
 
@@ -564,8 +564,20 @@ export class DureviewService {
    * GitHub does not redeliver that 500; the checkout sweep retries the stored close.
    * The close is stored first: a review that archives after this delivery classifies against it.
    */
-  async #classifyAdoption(request: ReviewRequest, merged: boolean): Promise<WebhookResponse> {
-    await this.archive.rememberClosedPull(request, merged);
+  async #classifyAdoption(
+    request: ReviewRequest,
+    merged: boolean,
+    source: "webhook" | "stored",
+  ): Promise<WebhookResponse> {
+    if (source === "webhook") {
+      await this.archive.rememberClosedPull(request, merged);
+    } else {
+      // The in-memory close can outlive a reopen. Re-inserting it would classify later reviews against that head.
+      const current = await this.archive.closedPull(request.owner, request.repo, request.number);
+      if (!current) return { status: 200, body: { ok: true, classified: 0, merged } };
+      request = current.request;
+      merged = current.merged;
+    }
     const findings = await this.archive.unclassifiedPosts(request.owner, request.repo, request.number);
     if (findings.length === 0) return { status: 200, body: { ok: true, classified: 0, merged } };
     const signal = AbortSignal.timeout(20_000);
@@ -645,7 +657,7 @@ export class DureviewService {
     for (const closed of pending) {
       const { owner, repo, number } = closed.request;
       try {
-        const result = await this.#classifyAdoption(closed.request, closed.merged);
+        const result = await this.#classifyAdoption(closed.request, closed.merged, "stored");
         const left = await this.archive.unclassifiedPosts(owner, repo, number);
         if (result.status === 200 && left.length === 0) continue;
       } catch (error) {
@@ -663,7 +675,7 @@ export class DureviewService {
   async #classifyClosedPull(event: ReviewFinished): Promise<void> {
     const closed = await this.archive.closedPull(event.owner, event.repo, event.number);
     if (!closed) return;
-    const result = await this.#classifyAdoption(closed.request, closed.merged);
+    const result = await this.#classifyAdoption(closed.request, closed.merged, "stored");
     if (result.status !== 200) {
       log("error", "could not classify adoption after archive", {
         repo: `${event.owner}/${event.repo}`,

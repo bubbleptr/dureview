@@ -268,6 +268,8 @@ export class MemoryGitHub implements GitHub {
 
   /** When set, a required thread lookup throws instead of reporting every thread unresolved. */
   threadError: Error | null = null;
+  /** A required comment list stopped early. Adoption must not classify from the pages it did see. */
+  reviewCommentsTruncated = false;
 
   async listReviewComments(
     _request?: GitHubRepo,
@@ -275,6 +277,9 @@ export class MemoryGitHub implements GitHub {
     options?: { threads: "required" },
   ): Promise<PullReviewComment[]> {
     this.calls.push("listReviewComments");
+    if (options?.threads === "required" && this.reviewCommentsTruncated) {
+      throw new Error("GitHub review comment list was truncated.");
+    }
     if (options?.threads === "required" && this.threadError) throw this.threadError;
     return this.reviewComments.map((comment) => ({ ...comment }));
   }

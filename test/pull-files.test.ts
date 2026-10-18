@@ -153,6 +153,31 @@ describe("pull request files", () => {
     expect(diff?.files).toHaveLength(COMPARE_FILE_CAP);
   });
 
+  it("pages review comments by 100 and leaves a truncated list unclassified", async () => {
+    const config = testConfig(await tempDataDir());
+    config.githubToken = "ghp_test";
+    const client = new GithubRest(config);
+    let commentGets = 0;
+    const seen: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      seen.push(url);
+      if (!url.includes("/pulls/7/comments")) return new Response(`unexpected ${url}`, { status: 500 });
+      commentGets += 1;
+      const next = `https://api.github.com/repos/acme/demo/pulls/7/comments?page=${commentGets + 1}&per_page=100`;
+      return Response.json([{ id: commentGets, body: "note", path: "src/pay.ts", line: 1 }], {
+        headers: { link: `<${next}>; rel="next"` },
+      });
+    });
+    const signal = new AbortController().signal;
+    await expect(client.listReviewComments(reviewRequest(), signal, { threads: "required" })).rejects.toThrow(/truncated/);
+    expect(commentGets).toBe(10);
+    expect(seen[0]).toContain("/pulls/7/comments?per_page=100");
+    const published = await client.listReviewComments(reviewRequest(), signal);
+    expect(published).toHaveLength(10);
+    expect(commentGets).toBe(20);
+  });
+
   it("requires the thread lookup for adoption and still publishes when that lookup fails", async () => {
     const config = testConfig(await tempDataDir());
     config.githubToken = "ghp_test";
