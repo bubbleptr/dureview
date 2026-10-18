@@ -266,8 +266,16 @@ export class MemoryGitHub implements GitHub {
     return { id, body: review.body };
   }
 
-  async listReviewComments(): Promise<PullReviewComment[]> {
+  /** When set, a required thread lookup throws instead of reporting every thread unresolved. */
+  threadError: Error | null = null;
+
+  async listReviewComments(
+    _request?: GitHubRepo,
+    _signal?: AbortSignal,
+    options?: { threads: "required" },
+  ): Promise<PullReviewComment[]> {
     this.calls.push("listReviewComments");
+    if (options?.threads === "required" && this.threadError) throw this.threadError;
     return this.reviewComments.map((comment) => ({ ...comment }));
   }
 
@@ -353,19 +361,24 @@ export class MemoryGitHub implements GitHub {
   compareRequests: Array<{ base: string; head: string }> = [];
 
   compareError: Error | null = null;
-  compareSpans: Array<{ base: string; head: string; dots: 2 | 3 }> = [];
+  /** Histories diverged, so the three-dot patch is not relative to the reviewed head. */
+  compareDiverged = false;
+  compareSpans: Array<{ base: string; head: string; kind: "files" | "since-review" }> = [];
 
-  async compareFiles(
-    _request: GitHubRepo,
-    base: string,
-    head: string,
-    _signal?: AbortSignal,
-    dots: 2 | 3 = 3,
-  ): Promise<PullFile[]> {
+  async compareFiles(_request: GitHubRepo, base: string, head: string): Promise<PullFile[]> {
     this.calls.push("compareFiles");
     this.compareRequests.push({ base, head });
-    this.compareSpans.push({ base, head, dots });
+    this.compareSpans.push({ base, head, kind: "files" });
     if (this.compareError) throw this.compareError;
+    return this.compared.map((file) => ({ ...file }));
+  }
+
+  async compareSinceReview(_request: GitHubRepo, reviewSha: string, head: string): Promise<PullFile[] | null> {
+    this.calls.push("compareSinceReview");
+    this.compareRequests.push({ base: reviewSha, head });
+    this.compareSpans.push({ base: reviewSha, head, kind: "since-review" });
+    if (this.compareError) throw this.compareError;
+    if (this.compareDiverged) return null;
     return this.compared.map((file) => ({ ...file }));
   }
 

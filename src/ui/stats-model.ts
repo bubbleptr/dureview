@@ -75,6 +75,8 @@ export type StatsPageModel = {
   categories: StatsBar[];
   verdicts: StatsBar[];
   failures: StatsBar[];
+  /** Failed reviews in the range. Reason rows are capped, so this is the total, not their sum. */
+  failedReviews: number;
   expensive: StatsRankRow[];
   topRepos: StatsRankRow[];
   topPulls: StatsRankRow[];

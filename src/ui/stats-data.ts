@@ -39,6 +39,7 @@ export async function buildStatsPage(
     ),
     verdicts: verdictBars(snapshot),
     failures: shareBars(snapshot.failures.map((row) => ({ name: clip(row.reason, 80), count: row.count }))),
+    failedReviews: snapshot.failed,
     expensive: snapshot.expensive.map((row) => rank(`${row.repo} #${row.number}`, row.title, row.reviews, null, row.totalTokens, row.costUsd, locale)),
     topRepos: snapshot.topRepos.map((row) => rank(row.repo, "", row.reviews, row.findings, null, null, locale)),
     topPulls: snapshot.topPulls.map((row) =>

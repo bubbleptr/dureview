@@ -101,8 +101,16 @@ export interface GitHub {
     review: { sha: string; body: string; event?: ReviewEvent; comments: ReviewCommentDraft[] },
     signal: AbortSignal,
   ): Promise<PullReview>;
-  /** Inline review comments on the pull request, including dureview markers and thread ids. */
-  listReviewComments(request: ReviewRequest, signal: AbortSignal): Promise<PullReviewComment[]>;
+  /**
+   * Inline review comments, including dureview markers and thread ids.
+   * `threads: "required"` throws when the GraphQL thread lookup fails.
+   * The default keeps the comments and treats threads as unresolved, so a publish can reply instead of resolving.
+   */
+  listReviewComments(
+    request: ReviewRequest,
+    signal: AbortSignal,
+    options?: { threads: "required" },
+  ): Promise<PullReviewComment[]>;
   resolveReviewThread(request: ReviewRequest, threadId: string, signal: AbortSignal): Promise<void>;
   replyToReviewComment(
     request: ReviewRequest,
@@ -125,10 +133,16 @@ export interface GitHub {
    */
   listPullFiles(request: GitHubRepo & { number: number }, signal: AbortSignal): Promise<PullFile[]>;
   /**
-   * Files in `base...head` (three-dot) by default. `dots: 2` is `base..head`, commits reachable
-   * from `head` but not from `base`. GitHub returns at most 300 files from this endpoint.
+   * Files in `base...head`. GitHub's compare route only accepts that three-dot form; `base..head` is a 404.
+   * GitHub returns at most 300 files from this endpoint.
    */
-  compareFiles(request: GitHubRepo, base: string, head: string, signal: AbortSignal, dots?: 2 | 3): Promise<PullFile[]>;
+  compareFiles(request: GitHubRepo, base: string, head: string, signal: AbortSignal): Promise<PullFile[]>;
+  /**
+   * File diff of commits after `reviewSha`, with patch line numbers on that commit.
+   * Uses `reviewSha...head`. The patch is review-head-relative only when `reviewSha` is the merge base.
+   * Returns null when the histories diverged, so callers leave those findings unclassified.
+   */
+  compareSinceReview(request: GitHubRepo, reviewSha: string, head: string, signal: AbortSignal): Promise<PullFile[] | null>;
   /**
    * Check runs named `name` on `sha`, including in-progress runs (`filter=all`).
    * Used to reuse the run this task already opened after a crash between the create
@@ -221,7 +235,11 @@ export class GithubRest implements GitHub {
     }
   }
 
-  async listReviewComments(request: ReviewRequest, signal: AbortSignal): Promise<PullReviewComment[]> {
+  async listReviewComments(
+    request: ReviewRequest,
+    signal: AbortSignal,
+    options?: { threads: "required" },
+  ): Promise<PullReviewComment[]> {
     const rows = await this.#pages<RestReviewComment>(
       request,
       `/repos/${request.owner}/${request.repo}/pulls/${request.number}/comments`,
@@ -231,6 +249,7 @@ export class GithubRest implements GitHub {
     try {
       threads = await this.#threadIndex(request, signal);
     } catch (error) {
+      if (options?.threads === "required") throw error;
       log("warn", "Could not load review threads; fixed findings will be replied to instead of resolved", {
         repo: `${request.owner}/${request.repo}`,
         pr: request.number,
@@ -473,17 +492,36 @@ export class GithubRest implements GitHub {
     return collected;
   }
 
-  async compareFiles(
+  async compareFiles(request: GitHubRepo, base: string, head: string, signal: AbortSignal): Promise<PullFile[]> {
+    const payload = await this.#comparePayload(request, base, head, signal);
+    return parsePullFiles(payload.files);
+  }
+
+  async compareSinceReview(
+    request: GitHubRepo,
+    reviewSha: string,
+    head: string,
+    signal: AbortSignal,
+  ): Promise<PullFile[] | null> {
+    const payload = await this.#comparePayload(request, reviewSha, head, signal);
+    const mergeBase = isRecord(payload.merge_base_commit) ? payload.merge_base_commit.sha : undefined;
+    if (typeof mergeBase !== "string" || !COMMIT_SHA.test(mergeBase)) {
+      throw new Error("GitHub compare did not return a merge base.");
+    }
+    if (mergeBase.toLowerCase() !== reviewSha.toLowerCase()) return null;
+    return parsePullFiles(payload.files);
+  }
+
+  async #comparePayload(
     request: GitHubRepo,
     base: string,
     head: string,
     signal: AbortSignal,
-    dots: 2 | 3 = 3,
-  ): Promise<PullFile[]> {
+  ): Promise<Record<string, unknown> & { files: unknown[] }> {
     if (!COMMIT_SHA.test(base) || !COMMIT_SHA.test(head)) {
       throw new Error("GitHub compare requires a base SHA and a head SHA.");
     }
-    const basehead = `${encodeURIComponent(base)}${dots === 2 ? ".." : "..."}${encodeURIComponent(head)}`;
+    const basehead = `${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
     const payload = await this.#json<unknown>(
       request,
       "GET",
@@ -493,7 +531,7 @@ export class GithubRest implements GitHub {
     if (!isRecord(payload) || !Array.isArray(payload.files)) {
       throw new Error("GitHub compare did not return a file list.");
     }
-    return parsePullFiles(payload.files);
+    return { ...payload, files: payload.files };
   }
 
   async listCheckRuns(request: GitHubRepo, sha: string, name: string, signal: AbortSignal): Promise<CheckRun[]> {

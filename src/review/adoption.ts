@@ -12,15 +12,16 @@ export type AdoptionDiffFile = {
   patch: string | null;
 };
 
-export type AdoptionStatus = "adopted" | "ignored" | "pending";
+export type AdoptionStatus = "adopted" | "ignored" | "pending" | "unclassified";
 
 /**
  * Decide whether one posted inline comment was adopted.
  *
  * Incidental edits count as adopted: a later diff that touches the finding's
  * lines is adopted even when the author was not responding to the comment.
- * Line numbers are the review head (the old side of `reviewSha..finalHead`),
- * so edits above the finding shift later lines without counting as a touch.
+ * Line numbers are the review head, so an edit above the finding shifts later
+ * lines without counting as a touch. A file GitHub changed without a patch
+ * (a large diff) stays unclassified: a missing patch is not an untouched file.
  */
 export function classifyFindingAdoption(input: {
   pullOpen: boolean;
@@ -32,8 +33,10 @@ export function classifyFindingAdoption(input: {
 }): AdoptionStatus {
   if (input.pullOpen) return "pending";
   const laterCommits = input.reviewSha !== input.finalHeadSha;
-  if (linesTouched(input.finding, input.files)) return "adopted";
+  const touch = linesTouched(input.finding, input.files);
+  if (touch === "touched") return "adopted";
   if (input.threadResolved && laterCommits) return "adopted";
+  if (touch === "unknown") return "unclassified";
   return "ignored";
 }
 
@@ -51,16 +54,21 @@ export function findingThreadResolved(
   return false;
 }
 
-export function linesTouched(finding: AdoptionSpan, files: readonly AdoptionDiffFile[]): boolean {
+export function linesTouched(finding: AdoptionSpan, files: readonly AdoptionDiffFile[]): "touched" | "untouched" | "unknown" {
   const start = Math.min(finding.startLine, finding.endLine);
   const end = Math.max(finding.startLine, finding.endLine);
+  let unknown = false;
   for (const file of files) {
     if (file.filename !== finding.path && file.previousFilename !== finding.path) continue;
     const status = file.status.toLowerCase();
-    if (status === "removed" || status === "added") return true;
-    if (patchTouchesLines(file.patch, start, end)) return true;
+    if (status === "removed" || status === "added") return "touched";
+    if (file.patch == null) {
+      unknown = true;
+      continue;
+    }
+    if (patchTouchesLines(file.patch, start, end)) return "touched";
   }
-  return false;
+  return unknown ? "unknown" : "untouched";
 }
 
 /**
@@ -68,8 +76,7 @@ export function linesTouched(finding: AdoptionSpan, files: readonly AdoptionDiff
  * directly before one. Context lines, including ones shifted by an earlier hunk,
  * do not count.
  */
-export function patchTouchesLines(patch: string | null | undefined, startLine: number, endLine: number): boolean {
-  if (!patch) return false;
+export function patchTouchesLines(patch: string, startLine: number, endLine: number): boolean {
   const start = Math.min(startLine, endLine);
   const end = Math.max(startLine, endLine);
   if (start < 1) return false;

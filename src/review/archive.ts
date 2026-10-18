@@ -16,12 +16,14 @@ import {
   type Priority,
 } from "./schema.js";
 import { queryReviewStats, type StatsQuery, type StatsSnapshot } from "./stats.js";
+import type { ReviewRequest } from "../types.js";
 import type { ReviewUsage } from "./usage.js";
 
 /** SQLite file in the data directory. Mode 0600. Finished reviews also store their pull file list. */
 export const REVIEWS_DB_FILE = "reviews.sqlite";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
+const COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
 const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const TRIGGERS = new Set(["opened", "synchronize", "reopened", "ready_for_review", "command", "unknown"]);
 const FINGERPRINT = /^[0-9a-f]{12}$/;
@@ -237,6 +239,21 @@ export class ReviewArchive {
       CREATE INDEX IF NOT EXISTS findings_task ON findings(task_id);
       CREATE INDEX IF NOT EXISTS findings_repo ON findings(owner, repo, number);
       CREATE INDEX IF NOT EXISTS findings_category ON findings(category, priority);
+      CREATE TABLE IF NOT EXISTS pull_closes (
+        owner TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        sha TEXT NOT NULL,
+        base_sha TEXT NOT NULL,
+        base_ref TEXT NOT NULL,
+        title TEXT NOT NULL,
+        clone_url TEXT NOT NULL,
+        installation_id INTEGER,
+        draft INTEGER NOT NULL,
+        merged INTEGER NOT NULL,
+        closed_at TEXT NOT NULL,
+        PRIMARY KEY (owner, repo, number)
+      ) STRICT;
       CREATE INDEX IF NOT EXISTS findings_fingerprint ON findings(fingerprint);
       CREATE INDEX IF NOT EXISTS findings_created ON findings(created_at);
       CREATE INDEX IF NOT EXISTS findings_language ON findings(language);
@@ -591,6 +608,88 @@ export class ReviewArchive {
         throw error;
       }
       return changed;
+    });
+  }
+
+  /**
+   * Remember a closed pull request so a review that archives later can still be classified.
+   * A later close replaces the head SHA. Already-written adoption outcomes stay put.
+   */
+  rememberClosedPull(request: ReviewRequest, merged: boolean): Promise<void> {
+    if (!NAME.test(request.owner) || !NAME.test(request.repo)) return Promise.resolve();
+    if (!Number.isInteger(request.number) || request.number < 1) return Promise.resolve();
+    const sha = request.sha.trim().toLowerCase();
+    const baseSha = request.baseSha.trim().toLowerCase();
+    if (!COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha)) return Promise.resolve();
+    const cloneUrl = request.cloneUrl.trim();
+    if (!cloneUrl.startsWith("https://") || cloneUrl.length > 500) return Promise.resolve();
+    const installationId = cleanInstallation(request.installationId);
+    const closedAt = new Date().toISOString();
+    return this.#exclusive(() => {
+      this.#database()
+        .prepare(
+          `INSERT INTO pull_closes (
+            owner, repo, number, sha, base_sha, base_ref, title, clone_url, installation_id, draft, merged, closed_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(owner, repo, number) DO UPDATE SET
+            sha = excluded.sha,
+            base_sha = excluded.base_sha,
+            base_ref = excluded.base_ref,
+            title = excluded.title,
+            clone_url = excluded.clone_url,
+            installation_id = excluded.installation_id,
+            draft = excluded.draft,
+            merged = excluded.merged,
+            closed_at = excluded.closed_at`,
+        )
+        .run(
+          request.owner,
+          request.repo,
+          request.number,
+          sha,
+          baseSha,
+          clip(request.baseRef, 200),
+          clip(request.title, 300),
+          cloneUrl,
+          installationId,
+          request.draft ? 1 : 0,
+          merged ? 1 : 0,
+          closedAt,
+        );
+    });
+  }
+
+  /** The latest close for this pull request, or null when it is still open or was never seen. */
+  closedPull(owner: string, repo: string, number: number): Promise<{ request: ReviewRequest; merged: boolean } | null> {
+    if (!NAME.test(owner) || !NAME.test(repo) || !Number.isInteger(number) || number < 1) return Promise.resolve(null);
+    return this.#exclusive(() => {
+      const row = this.#database()
+        .prepare(
+          `SELECT sha, base_sha, base_ref, title, clone_url, installation_id, draft, merged
+           FROM pull_closes WHERE owner = ? AND repo = ? AND number = ?`,
+        )
+        .get(owner, repo, number);
+      if (!row) return null;
+      const sha = str(row, "sha");
+      const baseSha = str(row, "base_sha");
+      const cloneUrl = str(row, "clone_url");
+      if (!COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha) || !cloneUrl.startsWith("https://")) return null;
+      const installation = row.installation_id;
+      return {
+        merged: int(row, "merged") === 1,
+        request: {
+          owner,
+          repo,
+          number,
+          sha,
+          baseSha,
+          baseRef: str(row, "base_ref"),
+          title: str(row, "title"),
+          cloneUrl,
+          installationId: typeof installation === "number" ? cleanInstallation(installation) : null,
+          draft: int(row, "draft") === 1,
+        },
+      };
     });
   }
 

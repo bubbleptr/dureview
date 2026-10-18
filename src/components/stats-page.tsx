@@ -50,7 +50,7 @@ export function OverviewPage({ model }: { model: StatsPageModel }) {
         </div>
       </div>
 
-      {model.failures.length > 0 ? <FailureBanner rows={model.failures} /> : null}
+      {model.failedReviews > 0 ? <FailureBanner failed={model.failedReviews} rows={model.failures} /> : null}
 
       <section className="flex min-w-0 flex-col gap-6">
         <div className="flex max-w-prose flex-col gap-1">
@@ -203,10 +203,9 @@ export function OverviewPage({ model }: { model: StatsPageModel }) {
   );
 }
 
-function FailureBanner({ rows }: { rows: StatsPageModel["failures"] }) {
+export function FailureBanner({ failed, rows }: { failed: number; rows: StatsPageModel["failures"] }) {
   const { m, locale } = useI18n();
-  const total = rows.reduce((sum, row) => sum + row.count, 0);
-  const headline = total === 1 ? m.overview.failureAlertOne : fill(m.overview.failureAlert, { count: formatCount(total, locale) });
+  const headline = failed === 1 ? m.overview.failureAlertOne : fill(m.overview.failureAlert, { count: formatCount(failed, locale) });
   return (
     <div role="alert" className="border border-border px-4 py-3">
       <p className="text-sm font-medium">{headline}</p>

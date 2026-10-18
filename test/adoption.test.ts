@@ -19,6 +19,8 @@ import {
   MemoryGitHub,
   openTestService,
   pullPayload,
+  reviewRequest,
+  scriptedReview,
   SECRET,
   SHA_A,
   SHA_B,
@@ -77,7 +79,7 @@ describe("adoption classifier", () => {
       " line three",
     ].join("\n");
     expect(patchTouchesLines(shifted, 20, 22)).toBe(false);
-    expect(linesTouched(SPAN, [diffFile("src/pay.ts", "modified", shifted)])).toBe(false);
+    expect(linesTouched(SPAN, [diffFile("src/pay.ts", "modified", shifted)])).toBe("untouched");
     expect(
       classifyFindingAdoption({
         pullOpen: false,
@@ -137,15 +139,46 @@ describe("adoption classifier", () => {
     ).toBe("ignored");
   });
 
+  it("does not treat a missing patch as an untouched file", () => {
+    expect(linesTouched(SPAN, [diffFile("src/pay.ts", "modified", null)])).toBe("unknown");
+    expect(
+      classifyFindingAdoption({
+        pullOpen: false,
+        reviewSha: SHA_A,
+        finalHeadSha: SHA_B,
+        threadResolved: false,
+        finding: SPAN,
+        files: [diffFile("src/pay.ts", "modified", null)],
+      }),
+    ).toBe("unclassified");
+    const renamed: AdoptionDiffFile = {
+      filename: "src/billing.ts",
+      previousFilename: "src/pay.ts",
+      status: "renamed",
+      patch: null,
+    };
+    expect(linesTouched(SPAN, [renamed])).toBe("unknown");
+    expect(
+      classifyFindingAdoption({
+        pullOpen: false,
+        reviewSha: SHA_A,
+        finalHeadSha: SHA_B,
+        threadResolved: true,
+        finding: SPAN,
+        files: [diffFile("src/pay.ts", "modified", null)],
+      }),
+    ).toBe("adopted");
+  });
+
   it("treats a deleted file and a rename that edits the old path as adopted", () => {
-    expect(linesTouched(SPAN, [diffFile("src/pay.ts", "removed", null)])).toBe(true);
+    expect(linesTouched(SPAN, [diffFile("src/pay.ts", "removed", null)])).toBe("touched");
     const renamed: AdoptionDiffFile = {
       filename: "src/billing.ts",
       previousFilename: "src/pay.ts",
       status: "renamed",
       patch: deleteLine(21),
     };
-    expect(linesTouched(SPAN, [renamed])).toBe(true);
+    expect(linesTouched(SPAN, [renamed])).toBe("touched");
   });
 });
 
@@ -249,7 +282,7 @@ describe("adoption webhook", () => {
     const first = await deliver(service, closedPayload(SHA_B));
     expect(first.status).toBe(200);
     expect(first.body).toMatchObject({ ok: true, classified: 3, merged: true });
-    expect(github.compareSpans).toEqual([{ base: SHA_A, head: SHA_B, dots: 2 }]);
+    expect(github.compareSpans).toEqual([{ base: SHA_A, head: SHA_B, kind: "since-review" }]);
 
     const second = await deliver(service, closedPayload(SHA_B));
     expect(second.body).toMatchObject({ ok: true, classified: 0 });
@@ -310,6 +343,120 @@ describe("adoption webhook", () => {
 
     const check = new DatabaseSync(file, { readOnly: true });
     expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: "adopted" });
+    check.close();
+  });
+
+  it("leaves a large file unclassified when GitHub omits the patch", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "wide", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "wide", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.compared = [diffFile("src/pay.ts", "modified", null)];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const closed = await deliver(service, closedPayload(SHA_B));
+    expect(closed.status).toBe(200);
+    expect(closed.body).toMatchObject({ ok: true, classified: 0 });
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    check.close();
+  });
+
+  it("leaves findings unset when the compare is not relative to the reviewed head", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "diverged", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "diverged", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.compareDiverged = true;
+    github.compared = [diffFile("src/pay.ts", "modified", deleteLine(2))];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const closed = await deliver(service, closedPayload(SHA_B));
+    expect(closed.status).toBe(200);
+    expect(closed.body).toMatchObject({ ok: true, classified: 0 });
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    check.close();
+  });
+
+  it("leaves findings unset when the thread lookup fails, then records them once it succeeds", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "threads", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "threads", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 20, 22, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.threadError = new Error("GitHub GraphQL response had no data.");
+    github.reviewComments = [
+      {
+        id: 1,
+        body: "<!-- dureview:finding aaaaaaaaaaaa threads -->",
+        path: "src/pay.ts",
+        line: 21,
+        threadId: "T1",
+        inReplyToId: null,
+        reviewId: 1,
+        resolved: true,
+      },
+    ];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const failed = await deliver(service, closedPayload(SHA_B));
+    expect(failed.status).toBe(500);
+    github.threadError = null;
+    const retried = await deliver(service, closedPayload(SHA_B));
+    expect(retried.status).toBe(200);
+    expect(retried.body).toMatchObject({ ok: true, classified: 1 });
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: "adopted" });
+    check.close();
+  });
+
+  it("classifies a comment that is archived after the pull request already closed", async () => {
+    const dataDir = await tempDataDir();
+    const github = new MemoryGitHub();
+    github.compared = [diffFile("src/pay.ts", "modified", deleteLine(2))];
+    const { service } = await openTestService({
+      dataDir,
+      github,
+      responses: scriptedReview("charge() reports success without billing."),
+    });
+    const closed = await deliver(service, closedPayload(SHA_B));
+    expect(closed.body).toMatchObject({ ok: true, classified: 0, merged: true });
+
+    const queued = await service.enqueue(reviewRequest(SHA_A), { kind: "sha" }, "opened");
+    const settled = await service.wait(queued.taskId);
+    expect(settled.state.outcome.status).toBe("completed");
+    await service.close();
+
+    const check = new DatabaseSync(join(dataDir, "reviews.sqlite"), { readOnly: true });
+    expect(check.prepare("SELECT posted, adoption, adoption_head FROM findings").get()).toEqual({
+      posted: 1,
+      adoption: "adopted",
+      adoption_head: SHA_B,
+    });
     check.close();
   });
 });

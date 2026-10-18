@@ -38,7 +38,7 @@ import { loadReviewFilePair, matchReviewedFile, type ReviewFileContents } from "
 import { ReviewArchive, REVIEWS_DB_FILE, type ReviewDetail, type ReviewFilter, type ReviewList } from "./review/archive.js";
 import type { StatsQuery, StatsSnapshot } from "./review/stats.js";
 import type { PullFile } from "./github/client.js";
-import { ReviewLog, type ReviewLogEntry } from "./review/history.js";
+import { ReviewLog, type ReviewFinished, type ReviewLogEntry } from "./review/history.js";
 import { createReviewRuntime, enqueueReview, type EnqueueMode, type EnqueueResult, type ReviewHooks, type ReviewResult } from "./review/task.js";
 import { permissionAllowsCommand, shouldReviewPull, type PullReviewAction } from "./review/trigger.js";
 import type { ReviewRequest } from "./types.js";
@@ -103,6 +103,9 @@ export class DureviewService {
         models: options.models,
         provider: options.provider,
       }));
+    const adoption = {
+      afterArchive: (_event: ReviewFinished): Promise<void> => Promise.resolve(),
+    };
     const { extension, task } = createReviewRuntime({
       checkout: options.checkout,
       github: options.github,
@@ -118,6 +121,13 @@ export class DureviewService {
           log("error", "could not record review", { error: error instanceof Error ? error.message : String(error) });
         }
         await archive.finish(event);
+        try {
+          await adoption.afterArchive(event);
+        } catch (error) {
+          log("error", "could not classify adoption after archive", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       },
     });
     const registry = createRegistry();
@@ -154,7 +164,7 @@ export class DureviewService {
       options.logins ??
       new LoginSessions((provider, interaction) => options.models.login(provider, "oauth", interaction, { agentName: "dureview" }));
     const githubApps = options.githubApps ?? (await GitHubAppFile.open(join(options.config.dataDir, "github-app.json")));
-    return new DureviewService(
+    const service = new DureviewService(
       harness,
       root.id,
       task,
@@ -168,6 +178,8 @@ export class DureviewService {
       githubApps,
       options.models,
     );
+    adoption.afterArchive = (event) => service.#classifyClosedPull(event);
+    return service;
   }
 
   /** Model, thinking, trigger, draft skip, checkout TTL, and output token cap after overrides. */
@@ -546,14 +558,16 @@ export class DureviewService {
   /**
    * On pull_request closed, classify each posted inline comment once.
    * A delivery that cannot read GitHub leaves those rows unset so a retry can finish them.
+   * The close is stored first: a review that archives after this delivery classifies against it.
    */
   async #classifyAdoption(request: ReviewRequest, merged: boolean): Promise<WebhookResponse> {
+    await this.archive.rememberClosedPull(request, merged);
     const findings = await this.archive.unclassifiedPosts(request.owner, request.repo, request.number);
     if (findings.length === 0) return { status: 200, body: { ok: true, classified: 0, merged } };
     const signal = AbortSignal.timeout(20_000);
     let comments;
     try {
-      comments = await this.github.listReviewComments(request, signal);
+      comments = await this.github.listReviewComments(request, signal, { threads: "required" });
     } catch (error) {
       log("error", "could not classify adoption", {
         repo: `${request.owner}/${request.repo}`,
@@ -575,7 +589,15 @@ export class DureviewService {
       let files: PullFile[] = [];
       if (sha !== request.sha) {
         try {
-          files = await this.github.compareFiles(repo, sha, request.sha, signal, 2);
+          const compared = await this.github.compareSinceReview(repo, sha, request.sha, signal);
+          if (compared === null) {
+            log("warn", "adoption diff is not relative to the reviewed head", {
+              repo: `${request.owner}/${request.repo}`,
+              pr: request.number,
+            });
+            continue;
+          }
+          files = compared;
         } catch (error) {
           incomplete = true;
           log("error", "could not compare commits for adoption", {
@@ -595,13 +617,26 @@ export class DureviewService {
           finding,
           files,
         });
-        if (adoption === "pending") continue;
+        if (adoption !== "adopted" && adoption !== "ignored") continue;
         updates.push({ id: finding.id, adoption, head: request.sha });
       }
     }
     const classified = await this.archive.recordAdoption(updates);
     if (incomplete) return { status: 500, body: { error: "could not classify adoption" } };
     return { status: 200, body: { ok: true, classified, merged } };
+  }
+
+  /** A review that finishes after the pull request closed still gets an adoption outcome. */
+  async #classifyClosedPull(event: ReviewFinished): Promise<void> {
+    const closed = await this.archive.closedPull(event.owner, event.repo, event.number);
+    if (!closed) return;
+    const result = await this.#classifyAdoption(closed.request, closed.merged);
+    if (result.status !== 200) {
+      log("error", "could not classify adoption after archive", {
+        repo: `${event.owner}/${event.repo}`,
+        pr: event.number,
+      });
+    }
   }
 
   /**
