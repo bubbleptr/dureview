@@ -28,6 +28,8 @@ export function classifyFindingAdoption(input: {
   reviewSha: string;
   finalHeadSha: string;
   threadResolved: boolean;
+  /** GitHub omitted files past the compare cap, so a path that is absent may still have changed. */
+  diffCapped?: boolean;
   finding: AdoptionSpan;
   files: readonly AdoptionDiffFile[];
 }): AdoptionStatus {
@@ -37,21 +39,39 @@ export function classifyFindingAdoption(input: {
   if (touch === "touched") return "adopted";
   if (input.threadResolved && laterCommits) return "adopted";
   if (touch === "unknown") return "unclassified";
+  if (input.diffCapped && !listedFile(input.finding, input.files)) return "unclassified";
   return "ignored";
 }
 
+function listedFile(finding: AdoptionSpan, files: readonly AdoptionDiffFile[]): boolean {
+  return files.some((file) => file.filename === finding.path || file.previousFilename === finding.path);
+}
+
+type ThreadComment = { body: string; resolved: boolean; threadId?: string | null };
+
+/**
+ * The archive row's task id is on the comment this review posted.
+ * An older resolved thread for the same fingerprint is a different comment.
+ */
 export function findingThreadResolved(
-  fingerprint: string,
-  comments: readonly { body: string; resolved: boolean }[],
+  finding: { fingerprint: string; taskId: string },
+  comments: readonly ThreadComment[],
 ): boolean {
-  if (!/^[0-9a-f]{12}$/.test(fingerprint)) return false;
-  const marker = `dureview:finding ${fingerprint} `;
-  const footer = `fp:${fingerprint}`;
-  for (const comment of comments) {
-    if (!comment.resolved) continue;
-    if (comment.body.includes(marker) || comment.body.includes(footer)) return true;
-  }
-  return false;
+  if (!/^[0-9a-f]{12}$/.test(finding.fingerprint) || finding.taskId.length === 0) return false;
+  const marker = `<!-- dureview:finding ${finding.fingerprint} ${finding.taskId} -->`;
+  const posted = comments.find((comment) => comment.body.includes(marker));
+  if (posted) return threadResolved(posted, comments);
+  const footer = `fp:${finding.fingerprint}`;
+  const loose = comments.filter((comment) => comment.body.includes(footer) && !comment.body.includes("dureview:finding "));
+  const threadIds = new Set(loose.map((comment, index) => comment.threadId ?? `solo:${index}`));
+  const only = loose[0];
+  if (!only || threadIds.size !== 1) return false;
+  return threadResolved(only, comments);
+}
+
+function threadResolved(comment: ThreadComment, comments: readonly ThreadComment[]): boolean {
+  if (!comment.threadId) return comment.resolved;
+  return comments.some((item) => item.threadId === comment.threadId && item.resolved);
 }
 
 export function linesTouched(finding: AdoptionSpan, files: readonly AdoptionDiffFile[]): "touched" | "untouched" | "unknown" {
@@ -73,8 +93,9 @@ export function linesTouched(finding: AdoptionSpan, files: readonly AdoptionDiff
 
 /**
  * True when a unified diff deletes a line in `[start, end]` or inserts a line
- * directly before one. Context lines, including ones shifted by an earlier hunk,
- * do not count.
+ * directly before one. A deletion followed by an addition replaces that line;
+ * the added text does not also count as an insertion before the next line.
+ * Context lines, including ones shifted by an earlier hunk, do not count.
  */
 export function patchTouchesLines(patch: string, startLine: number, endLine: number): boolean {
   const start = Math.min(startLine, endLine);
@@ -82,9 +103,20 @@ export function patchTouchesLines(patch: string, startLine: number, endLine: num
   if (start < 1) return false;
   let oldLine = 0;
   let inHunk = false;
+  let deleted = 0;
+  let added = 0;
+  const covers = (line: number) => line >= start && line <= end;
+  const flush = (): boolean => {
+    const inserted = added - deleted;
+    const touches = inserted > 0 && covers(oldLine);
+    deleted = 0;
+    added = 0;
+    return touches;
+  };
   for (const line of patch.split("\n")) {
     const hunk = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(line);
     if (hunk?.[1]) {
+      if (inHunk && flush()) return true;
       const oldStart = Number(hunk[1]);
       const oldCount = hunk[2] === undefined ? 1 : Number(hunk[2]);
       oldLine = oldCount === 0 ? oldStart + 1 : oldStart;
@@ -93,15 +125,20 @@ export function patchTouchesLines(patch: string, startLine: number, endLine: num
     }
     if (!inHunk || line.startsWith("\\")) continue;
     if (line.startsWith("+")) {
-      if (oldLine >= start && oldLine <= end) return true;
+      added += 1;
       continue;
     }
     if (line.startsWith("-")) {
-      if (oldLine >= start && oldLine <= end) return true;
+      if (added > 0 && flush()) return true;
+      if (covers(oldLine)) return true;
+      deleted += 1;
       oldLine += 1;
       continue;
     }
-    if (line.startsWith(" ")) oldLine += 1;
+    if (line.startsWith(" ")) {
+      if (flush()) return true;
+      oldLine += 1;
+    }
   }
-  return false;
+  return inHunk && flush();
 }

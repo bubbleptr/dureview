@@ -561,12 +561,14 @@ export class ReviewArchive {
       const findings: PostedFinding[] = [];
       for (const row of rows) {
         const id = int(row, "id");
+        const taskId = str(row, "task_id");
         const path = str(row, "path");
         const fingerprint = str(row, "fingerprint");
         const sha = str(row, "sha");
-        if (id < 1 || !path || !fingerprint || !sha) continue;
+        if (id < 1 || !taskId || !path || !fingerprint || !sha) continue;
         findings.push({
           id,
+          taskId,
           sha,
           path,
           fingerprint,
@@ -656,6 +658,14 @@ export class ReviewArchive {
           merged ? 1 : 0,
           closedAt,
         );
+    });
+  }
+
+  /** Drop a stored close. A reopened pull request is not classified against that head. */
+  forgetClosedPull(owner: string, repo: string, number: number): Promise<void> {
+    if (!NAME.test(owner) || !NAME.test(repo) || !Number.isInteger(number) || number < 1) return Promise.resolve();
+    return this.#exclusive(() => {
+      this.#database().prepare("DELETE FROM pull_closes WHERE owner = ? AND repo = ? AND number = ?").run(owner, repo, number);
     });
   }
 
@@ -888,6 +898,7 @@ export class ReviewArchive {
 
 export type PostedFinding = {
   id: number;
+  taskId: string;
   sha: string;
   path: string;
   startLine: number;

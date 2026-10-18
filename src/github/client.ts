@@ -142,7 +142,7 @@ export interface GitHub {
    * Uses `reviewSha...head`. The patch is review-head-relative only when `reviewSha` is the merge base.
    * Returns null when the histories diverged, so callers leave those findings unclassified.
    */
-  compareSinceReview(request: GitHubRepo, reviewSha: string, head: string, signal: AbortSignal): Promise<PullFile[] | null>;
+  compareSinceReview(request: GitHubRepo, reviewSha: string, head: string, signal: AbortSignal): Promise<SinceReviewDiff | null>;
   /**
    * Check runs named `name` on `sha`, including in-progress runs (`filter=all`).
    * Used to reuse the run this task already opened after a crash between the create
@@ -172,6 +172,15 @@ export type PullFile = {
   deletions: number;
   patch: string | null;
   previousFilename: string | null;
+};
+
+/** GitHub's compare payload lists at most this many files. */
+export const COMPARE_FILE_CAP = 300;
+
+export type SinceReviewDiff = {
+  files: PullFile[];
+  /** True when the file list hit the compare cap, so some paths may be missing. */
+  capped: boolean;
 };
 
 type CachedToken = { token: string; expiresAt: number };
@@ -502,14 +511,14 @@ export class GithubRest implements GitHub {
     reviewSha: string,
     head: string,
     signal: AbortSignal,
-  ): Promise<PullFile[] | null> {
+  ): Promise<SinceReviewDiff | null> {
     const payload = await this.#comparePayload(request, reviewSha, head, signal);
     const mergeBase = isRecord(payload.merge_base_commit) ? payload.merge_base_commit.sha : undefined;
     if (typeof mergeBase !== "string" || !COMMIT_SHA.test(mergeBase)) {
       throw new Error("GitHub compare did not return a merge base.");
     }
     if (mergeBase.toLowerCase() !== reviewSha.toLowerCase()) return null;
-    return parsePullFiles(payload.files);
+    return { files: parsePullFiles(payload.files), capped: payload.files.length >= COMPARE_FILE_CAP };
   }
 
   async #comparePayload(

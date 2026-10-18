@@ -587,6 +587,7 @@ export class DureviewService {
     let incomplete = false;
     for (const [sha, group] of bySha) {
       let files: PullFile[] = [];
+      let diffCapped = false;
       if (sha !== request.sha) {
         try {
           const compared = await this.github.compareSinceReview(repo, sha, request.sha, signal);
@@ -597,7 +598,8 @@ export class DureviewService {
             });
             continue;
           }
-          files = compared;
+          files = compared.files;
+          diffCapped = compared.capped;
         } catch (error) {
           incomplete = true;
           log("error", "could not compare commits for adoption", {
@@ -613,7 +615,11 @@ export class DureviewService {
           pullOpen: false,
           reviewSha: sha,
           finalHeadSha: request.sha,
-          threadResolved: findingThreadResolved(finding.fingerprint, comments),
+          threadResolved: findingThreadResolved(
+            { fingerprint: finding.fingerprint, taskId: finding.taskId },
+            comments,
+          ),
+          diffCapped,
           finding,
           files,
         });
@@ -645,6 +651,7 @@ export class DureviewService {
    * The review task reads that same ref again for thresholds and prompt rules.
    */
   async #pullRequest(request: ReviewRequest, action: PullReviewAction): Promise<WebhookResponse> {
+    if (action === "reopened") await this.archive.forgetClosedPull(request.owner, request.repo, request.number);
     const signal = AbortSignal.timeout(20_000);
     let policy;
     try {

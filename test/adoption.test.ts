@@ -100,6 +100,11 @@ describe("adoption classifier", () => {
       " line twenty-two",
     ].join("\n");
     expect(patchTouchesLines(shiftedThenEdited, 20, 22)).toBe(true);
+    const replaced = ["@@ -20,2 +20,2 @@", "-line twenty", "+line twenty fixed", " line twenty-one"].join("\n");
+    expect(patchTouchesLines(replaced, 21, 21)).toBe(false);
+    expect(patchTouchesLines(replaced, 20, 20)).toBe(true);
+    const inserted = ["@@ -21,1 +21,2 @@", "+added", " line twenty-one"].join("\n");
+    expect(patchTouchesLines(inserted, 21, 21)).toBe(true);
     expect(
       classifyFindingAdoption({
         pullOpen: false,
@@ -113,9 +118,31 @@ describe("adoption classifier", () => {
   });
 
   it("adopts a resolved thread only when a later commit exists", () => {
-    expect(findingThreadResolved("aaaaaaaaaaaa", [{ body: "<!-- dureview:finding aaaaaaaaaaaa task_1 -->", resolved: true }])).toBe(true);
-    expect(findingThreadResolved("aaaaaaaaaaaa", [{ body: "<sub>dureview · fp:aaaaaaaaaaaa</sub>", resolved: true }])).toBe(true);
-    expect(findingThreadResolved("aaaaaaaaaaaa", [{ body: "<!-- dureview:finding aaaaaaaaaaaa task_1 -->", resolved: false }])).toBe(false);
+    const posted = { fingerprint: "aaaaaaaaaaaa", taskId: "task_1" };
+    expect(findingThreadResolved(posted, [{ body: "<!-- dureview:finding aaaaaaaaaaaa task_1 -->", resolved: true }])).toBe(true);
+    expect(findingThreadResolved(posted, [{ body: "<sub>dureview · fp:aaaaaaaaaaaa</sub>", resolved: true, threadId: "T1" }])).toBe(true);
+    expect(findingThreadResolved(posted, [{ body: "<!-- dureview:finding aaaaaaaaaaaa task_1 -->", resolved: false }])).toBe(false);
+    expect(
+      findingThreadResolved(posted, [
+        { body: "<!-- dureview:finding aaaaaaaaaaaa task_0 -->", resolved: true, threadId: "old" },
+        { body: "<!-- dureview:finding aaaaaaaaaaaa task_1 -->", resolved: false, threadId: "new" },
+      ]),
+    ).toBe(false);
+    expect(
+      findingThreadResolved(
+        { fingerprint: "aaaaaaaaaaaa", taskId: "task_1" },
+        [
+          { body: "<!-- dureview:finding aaaaaaaaaaaa task_1 -->", resolved: false, threadId: "new" },
+          { body: "fixed", resolved: true, threadId: "new" },
+        ],
+      ),
+    ).toBe(true);
+    expect(
+      findingThreadResolved(posted, [
+        { body: "<sub>dureview · fp:aaaaaaaaaaaa</sub>", resolved: true, threadId: "old" },
+        { body: "<sub>dureview · fp:aaaaaaaaaaaa</sub>", resolved: false, threadId: "new" },
+      ]),
+    ).toBe(false);
 
     expect(
       classifyFindingAdoption({
@@ -135,6 +162,31 @@ describe("adoption classifier", () => {
         threadResolved: true,
         finding: SPAN,
         files: [],
+      }),
+    ).toBe("ignored");
+  });
+
+  it("leaves a finding unclassified when the compare file list is capped and omits its path", () => {
+    expect(
+      classifyFindingAdoption({
+        pullOpen: false,
+        reviewSha: SHA_A,
+        finalHeadSha: SHA_B,
+        threadResolved: false,
+        diffCapped: true,
+        finding: SPAN,
+        files: [diffFile("src/other.ts", "modified", deleteLine(1))],
+      }),
+    ).toBe("unclassified");
+    expect(
+      classifyFindingAdoption({
+        pullOpen: false,
+        reviewSha: SHA_A,
+        finalHeadSha: SHA_B,
+        threadResolved: false,
+        diffCapped: true,
+        finding: SPAN,
+        files: [diffFile("src/pay.ts", "modified", deleteLine(1))],
       }),
     ).toBe("ignored");
   });
@@ -395,6 +447,31 @@ describe("adoption webhook", () => {
     check.close();
   });
 
+  it("leaves findings unset when the compare list is capped and omits their file", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "capped", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "capped", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.compareCapped = true;
+    github.compared = [diffFile("src/other.ts", "modified", deleteLine(1))];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    const closed = await deliver(service, closedPayload(SHA_B));
+    expect(closed.status).toBe(200);
+    expect(closed.body).toMatchObject({ ok: true, classified: 0 });
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    check.close();
+  });
+
   it("leaves findings unset when the thread lookup fails, then records them once it succeeds", async () => {
     const dataDir = await tempDataDir();
     const file = join(dataDir, "reviews.sqlite");
@@ -457,6 +534,26 @@ describe("adoption webhook", () => {
       adoption: "adopted",
       adoption_head: SHA_B,
     });
+    check.close();
+  });
+
+  it("does not classify a review archived after the pull request was reopened", async () => {
+    const dataDir = await tempDataDir();
+    const github = new MemoryGitHub();
+    github.compared = [diffFile("src/pay.ts", "modified", deleteLine(2))];
+    const { service } = await openTestService({
+      dataDir,
+      github,
+      responses: scriptedReview("charge() reports success without billing."),
+    });
+    expect((await deliver(service, closedPayload(SHA_B))).body).toMatchObject({ classified: 0 });
+    expect((await deliver(service, pullPayload(SHA_B, "reopened"))).status).toBe(200);
+    const queued = await service.enqueue(reviewRequest(SHA_A), { kind: "sha" }, "opened");
+    expect((await service.wait(queued.taskId)).state.outcome.status).toBe("completed");
+    await service.close();
+
+    const check = new DatabaseSync(join(dataDir, "reviews.sqlite"), { readOnly: true });
+    expect(check.prepare("SELECT posted, adoption FROM findings").get()).toEqual({ posted: 1, adoption: null });
     check.close();
   });
 });

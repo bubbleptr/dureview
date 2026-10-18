@@ -363,6 +363,8 @@ export class MemoryGitHub implements GitHub {
   compareError: Error | null = null;
   /** Histories diverged, so the three-dot patch is not relative to the reviewed head. */
   compareDiverged = false;
+  /** The compare listed 300 files, so paths that are absent stay unclassified. */
+  compareCapped = false;
   compareSpans: Array<{ base: string; head: string; kind: "files" | "since-review" }> = [];
 
   async compareFiles(_request: GitHubRepo, base: string, head: string): Promise<PullFile[]> {
@@ -373,13 +375,17 @@ export class MemoryGitHub implements GitHub {
     return this.compared.map((file) => ({ ...file }));
   }
 
-  async compareSinceReview(_request: GitHubRepo, reviewSha: string, head: string): Promise<PullFile[] | null> {
+  async compareSinceReview(
+    _request: GitHubRepo,
+    reviewSha: string,
+    head: string,
+  ): Promise<{ files: PullFile[]; capped: boolean } | null> {
     this.calls.push("compareSinceReview");
     this.compareRequests.push({ base: reviewSha, head });
     this.compareSpans.push({ base: reviewSha, head, kind: "since-review" });
     if (this.compareError) throw this.compareError;
     if (this.compareDiverged) return null;
-    return this.compared.map((file) => ({ ...file }));
+    return { files: this.compared.map((file) => ({ ...file })), capped: this.compareCapped };
   }
 
   async listCheckRuns(_request: GitHubRepo, sha: string, name: string): Promise<CheckRun[]> {

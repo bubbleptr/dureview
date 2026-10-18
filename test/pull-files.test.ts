@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GithubRest, parsePullFiles } from "../src/github/client.js";
+import { COMPARE_FILE_CAP, GithubRest, parsePullFiles } from "../src/github/client.js";
 import { reviewRequest, tempDataDir, testConfig } from "./support.js";
 
 describe("pull request files", () => {
@@ -118,7 +118,8 @@ describe("pull request files", () => {
 
     const signal = new AbortController().signal;
     const relative = await client.compareSinceReview(reviewRequest(), base, head, signal);
-    expect(relative?.map((file) => file.filename)).toEqual(["src/pay.ts"]);
+    expect(relative?.files.map((file) => file.filename)).toEqual(["src/pay.ts"]);
+    expect(relative?.capped).toBe(false);
     expect(seen.at(-1)).toBe(`https://api.github.com/repos/acme/demo/compare/${base}...${head}`);
 
     mergeBase = other;
@@ -127,6 +128,29 @@ describe("pull request files", () => {
 
     includeMergeBase = false;
     await expect(client.compareSinceReview(reviewRequest(), base, head, signal)).rejects.toThrow(/merge base/);
+  });
+
+  it("reports the compare file list as capped at 300 files", async () => {
+    const base = "1111111111111111111111111111111111111111";
+    const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const config = testConfig(await tempDataDir());
+    config.githubToken = "ghp_test";
+    const client = new GithubRest(config);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({
+        merge_base_commit: { sha: base },
+        files: Array.from({ length: COMPARE_FILE_CAP }, (_, index) => ({
+          filename: `src/f${index}.ts`,
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          patch: "@@ -1 +1 @@\n+x\n",
+        })),
+      }),
+    );
+    const diff = await client.compareSinceReview(reviewRequest(), base, head, new AbortController().signal);
+    expect(diff?.capped).toBe(true);
+    expect(diff?.files).toHaveLength(COMPARE_FILE_CAP);
   });
 
   it("requires the thread lookup for adoption and still publishes when that lookup fails", async () => {
