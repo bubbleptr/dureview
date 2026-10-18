@@ -1,6 +1,6 @@
 import type { StatsSnapshot } from "../review/stats.js";
 import type { DureviewService } from "../service.js";
-import { fill, formatCost, formatCount, formatDayLabel, formatTokens } from "./format.js";
+import { fill, formatCost, formatCount, formatDayLabel, formatPercent, formatTokens } from "./format.js";
 import type { Locale } from "./locale.js";
 import { messages } from "./messages.js";
 import { formatDuration } from "./page.js";
@@ -23,7 +23,15 @@ export async function buildStatsPage(
     repos: [...repos].sort((left, right) => left.localeCompare(right)),
     filtered: statsFormIsFiltered(parsed.form),
     empty: snapshot.reviews === 0,
-    cards: cards(snapshot, locale),
+    adoptionCards: adoptionCards(snapshot, locale),
+    unclassifiedNote: unclassifiedNote(snapshot, locale),
+    adoptionTrend: adoptionTrend(snapshot, locale),
+    recurring: recurring(snapshot, locale),
+    hotspots: hotspots(snapshot, locale),
+    speedCards: speedCards(snapshot, locale),
+    speed: speedPoints(snapshot),
+    medianMinutes: snapshot.medianDurationMs === null ? null : durationMinutes(snapshot.medianDurationMs),
+    outlier: outlierNote(snapshot, locale),
     trend: trend(snapshot, locale),
     priorities: priorityBars(snapshot),
     types: typeBars(snapshot),
@@ -32,6 +40,7 @@ export async function buildStatsPage(
     ),
     verdicts: verdictBars(snapshot),
     failures: shareBars(snapshot.failures.map((row) => ({ name: clip(row.reason, 80), count: row.count }))),
+    failedReviews: snapshot.failed,
     expensive: snapshot.expensive.map((row) => rank(`${row.repo} #${row.number}`, row.title, row.reviews, null, row.totalTokens, row.costUsd, locale)),
     topRepos: snapshot.topRepos.map((row) => rank(row.repo, "", row.reviews, row.findings, null, null, locale)),
     topPulls: snapshot.topPulls.map((row) =>
@@ -42,38 +51,64 @@ export async function buildStatsPage(
   };
 }
 
-function cards(snapshot: StatsSnapshot, locale: Locale): StatsPageModel["cards"] {
-  const copy = messages[locale].overview.cards;
-  const findings = snapshot.priorities.p0 + snapshot.priorities.p1 + snapshot.priorities.p2 + snapshot.priorities.p3;
-  const priorityDetail = `P0 ${formatCount(snapshot.priorities.p0, locale)} · P1 ${formatCount(snapshot.priorities.p1, locale)} · P2 ${formatCount(snapshot.priorities.p2, locale)} · P3 ${formatCount(snapshot.priorities.p3, locale)}`;
+function adoptionCards(snapshot: StatsSnapshot, locale: Locale): StatsPageModel["adoptionCards"] {
+  const copy = messages[locale].overview;
+  const adopted = snapshot.adoption.adopted;
+  const ignored = snapshot.adoption.ignored;
+  const pending = snapshot.adoption.pending;
+  const decided = adopted + ignored;
+  const rate = decided === 0 ? null : adopted / decided;
   return [
     {
-      label: copy.reviews,
-      value: formatCount(snapshot.reviews, locale),
-      detail: fill(copy.reviewsDetail, {
-        completed: formatCount(snapshot.completed, locale),
-        failed: formatCount(snapshot.failed, locale),
-        running: formatCount(snapshot.running, locale),
-      }),
+      label: copy.adoptionRate,
+      value: formatPercent(rate, locale),
+      detail: decided === 0 ? copy.noDecided : fill(copy.adoptionRateDetail, { adopted: formatCount(adopted, locale), ignored: formatCount(ignored, locale) }),
     },
+    { label: copy.adopted, value: formatCount(adopted, locale), detail: copy.adoptedDetail },
+    { label: copy.ignored, value: formatCount(ignored, locale), detail: copy.ignoredDetail },
+    { label: copy.pending, value: formatCount(pending, locale), detail: copy.pendingDetail },
+  ];
+}
+
+function unclassifiedNote(snapshot: StatsSnapshot, locale: Locale): string | null {
+  const count = snapshot.adoption.unclassified;
+  if (count < 1) return null;
+  return fill(messages[locale].overview.unclassifiedNote, { count: formatCount(count, locale) });
+}
+
+function adoptionTrend(snapshot: StatsSnapshot, locale: Locale): StatsPageModel["adoptionTrend"] {
+  return snapshot.adoptionTrend.map((row) => {
+    const decided = row.adopted + row.ignored;
+    const rate = decided === 0 ? 0 : Math.round((row.adopted / decided) * 100);
+    return { day: row.day, label: formatDayLabel(row.day, locale), adopted: row.adopted, ignored: row.ignored, rate };
+  });
+}
+
+function recurring(snapshot: StatsSnapshot, locale: Locale): StatsPageModel["recurring"] {
+  return snapshot.recurring.map((group) => ({
+    category: group.category,
+    count: formatCount(group.count, locale),
+    titles: group.titles.map((title) => ({ title: clip(title.title, 80), count: formatCount(title.count, locale) })),
+  }));
+}
+
+function hotspots(snapshot: StatsSnapshot, locale: Locale): StatsPageModel["hotspots"] {
+  return snapshot.hotspots.map((row) => ({
+    repo: row.repo,
+    directory: row.directory,
+    count: formatCount(row.count, locale),
+  }));
+}
+
+function speedCards(snapshot: StatsSnapshot, locale: Locale): StatsPageModel["speedCards"] {
+  const copy = messages[locale].overview.cards;
+  return [
     {
       label: copy.avgDuration,
       value: formatDuration(snapshot.avgDurationMs),
       detail: snapshot.durationSamples === 0 ? copy.noFinished : fill(copy.finished, { count: formatCount(snapshot.durationSamples, locale) }),
     },
-    {
-      label: copy.p95,
-      value: formatDuration(snapshot.p95DurationMs),
-      detail: copy.finishedOnly,
-    },
-    {
-      label: copy.findings,
-      value: formatCount(findings, locale),
-      detail:
-        snapshot.priorities.unknownReviews > 0
-          ? fill(copy.withoutBreakdown, { priority: priorityDetail, count: formatCount(snapshot.priorities.unknownReviews, locale) })
-          : priorityDetail,
-    },
+    { label: copy.p95, value: formatDuration(snapshot.p95DurationMs), detail: copy.finishedOnly },
     {
       label: copy.avgTokens,
       value: snapshot.tokens.avgTotal === null ? "—" : formatTokens(snapshot.tokens.avgTotal, locale),
@@ -98,6 +133,38 @@ function cards(snapshot: StatsSnapshot, locale: Locale): StatsPageModel["cards"]
           : fill(copy.costDetail, { count: formatCount(snapshot.tokens.costKnownReviews, locale) }),
     },
   ];
+}
+
+function speedPoints(snapshot: StatsSnapshot): StatsPageModel["speed"] {
+  const flagged = new Set(snapshot.durations.filter((row) => row.outlier).map((row) => row.taskId));
+  const points = snapshot.durations.map((row) => ({
+    id: row.taskId,
+    label: `${row.repo.split("/")[1] || row.repo} #${row.number}`,
+    detail: row.title ? `${row.repo} #${row.number} · ${clip(row.title, 80)}` : `${row.repo} #${row.number}`,
+    minutes: durationMinutes(row.durationMs),
+    duration: formatDuration(row.durationMs),
+  }));
+  const recent = points.slice(-48);
+  const seen = new Set(recent.map((point) => point.id));
+  return [...points.filter((point) => flagged.has(point.id) && !seen.has(point.id)), ...recent];
+}
+
+function outlierNote(snapshot: StatsSnapshot, locale: Locale): StatsPageModel["outlier"] {
+  const outliers = snapshot.durations.filter((row) => row.outlier).toSorted((left, right) => right.durationMs - left.durationMs);
+  const longest = outliers[0];
+  if (!longest || snapshot.medianDurationMs === null) return null;
+  const copy = messages[locale].overview;
+  const label = `${longest.repo} #${longest.number}`;
+  const duration = formatDuration(longest.durationMs);
+  const headline =
+    outliers.length === 1
+      ? fill(copy.outlierOne, { label, duration })
+      : fill(copy.outlierMany, { count: formatCount(outliers.length, locale), label, duration });
+  return { headline, detail: fill(copy.outlierRule, { median: formatDuration(snapshot.medianDurationMs) }) };
+}
+
+function durationMinutes(ms: number): number {
+  return Math.round((ms / 60_000) * 100) / 100;
 }
 
 function trend(snapshot: StatsSnapshot, locale: Locale): StatsPageModel["trend"] {

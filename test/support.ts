@@ -266,8 +266,21 @@ export class MemoryGitHub implements GitHub {
     return { id, body: review.body };
   }
 
-  async listReviewComments(): Promise<PullReviewComment[]> {
+  /** When set, a required thread lookup throws instead of reporting every thread unresolved. */
+  threadError: Error | null = null;
+  /** A required comment list stopped early. Adoption must not classify from the pages it did see. */
+  reviewCommentsTruncated = false;
+
+  async listReviewComments(
+    _request?: GitHubRepo,
+    _signal?: AbortSignal,
+    options?: { threads: "required" },
+  ): Promise<PullReviewComment[]> {
     this.calls.push("listReviewComments");
+    if (options?.threads === "required" && this.reviewCommentsTruncated) {
+      throw new Error("GitHub review comment list was truncated.");
+    }
+    if (options?.threads === "required" && this.threadError) throw this.threadError;
     return this.reviewComments.map((comment) => ({ ...comment }));
   }
 
@@ -352,10 +365,32 @@ export class MemoryGitHub implements GitHub {
   compared: PullFile[] = [];
   compareRequests: Array<{ base: string; head: string }> = [];
 
+  compareError: Error | null = null;
+  /** Histories diverged, so the three-dot patch is not relative to the reviewed head. */
+  compareDiverged = false;
+  /** The compare listed 300 files, so paths that are absent stay unclassified. */
+  compareCapped = false;
+  compareSpans: Array<{ base: string; head: string; kind: "files" | "since-review" }> = [];
+
   async compareFiles(_request: GitHubRepo, base: string, head: string): Promise<PullFile[]> {
     this.calls.push("compareFiles");
     this.compareRequests.push({ base, head });
+    this.compareSpans.push({ base, head, kind: "files" });
+    if (this.compareError) throw this.compareError;
     return this.compared.map((file) => ({ ...file }));
+  }
+
+  async compareSinceReview(
+    _request: GitHubRepo,
+    reviewSha: string,
+    head: string,
+  ): Promise<{ files: PullFile[]; capped: boolean } | null> {
+    this.calls.push("compareSinceReview");
+    this.compareRequests.push({ base: reviewSha, head });
+    this.compareSpans.push({ base: reviewSha, head, kind: "since-review" });
+    if (this.compareError) throw this.compareError;
+    if (this.compareDiverged) return null;
+    return { files: this.compared.map((file) => ({ ...file })), capped: this.compareCapped };
   }
 
   async listCheckRuns(_request: GitHubRepo, sha: string, name: string): Promise<CheckRun[]> {

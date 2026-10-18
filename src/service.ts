@@ -31,13 +31,14 @@ import type { ConsoleView, SettingsFormValues, SettingsPageModel } from "./setti
 import type { GitHub } from "./github/client.js";
 import { verifyGithubSignature } from "./github/signature.js";
 import { parseWebhook, type ReviewCommand } from "./github/webhook.js";
+import { classifyFindingAdoption, findingThreadResolved } from "./review/adoption.js";
 import { log } from "./log.js";
 import { readBaseDureview, safeRepoPath, type RepoCheckout } from "./review/checkout.js";
 import { loadReviewFilePair, matchReviewedFile, type ReviewFileContents } from "./ui/file-contents.js";
 import { ReviewArchive, REVIEWS_DB_FILE, type ReviewDetail, type ReviewFilter, type ReviewList } from "./review/archive.js";
 import type { StatsQuery, StatsSnapshot } from "./review/stats.js";
 import type { PullFile } from "./github/client.js";
-import { ReviewLog, type ReviewLogEntry } from "./review/history.js";
+import { ReviewLog, type ReviewFinished, type ReviewLogEntry } from "./review/history.js";
 import { createReviewRuntime, enqueueReview, type EnqueueMode, type EnqueueResult, type ReviewHooks, type ReviewResult } from "./review/task.js";
 import { permissionAllowsCommand, shouldReviewPull, type PullReviewAction } from "./review/trigger.js";
 import type { ReviewRequest } from "./types.js";
@@ -63,6 +64,9 @@ export type ServiceOptions = {
 };
 
 export type WebhookResponse = { status: number; body: Record<string, unknown> };
+
+/** GitHub does not redeliver a 500. The checkout sweep retries a stored close this many times. */
+export const ADOPTION_RETRY_CAP = 5;
 
 const GITHUB_SETUP_BUSY = "GitHub setup is already finishing. Start it again from settings.";
 
@@ -102,6 +106,9 @@ export class DureviewService {
         models: options.models,
         provider: options.provider,
       }));
+    const adoption = {
+      afterArchive: (_event: ReviewFinished): Promise<void> => Promise.resolve(),
+    };
     const { extension, task } = createReviewRuntime({
       checkout: options.checkout,
       github: options.github,
@@ -117,6 +124,13 @@ export class DureviewService {
           log("error", "could not record review", { error: error instanceof Error ? error.message : String(error) });
         }
         await archive.finish(event);
+        try {
+          await adoption.afterArchive(event);
+        } catch (error) {
+          log("error", "could not classify adoption after archive", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       },
     });
     const registry = createRegistry();
@@ -153,7 +167,7 @@ export class DureviewService {
       options.logins ??
       new LoginSessions((provider, interaction) => options.models.login(provider, "oauth", interaction, { agentName: "dureview" }));
     const githubApps = options.githubApps ?? (await GitHubAppFile.open(join(options.config.dataDir, "github-app.json")));
-    return new DureviewService(
+    const service = new DureviewService(
       harness,
       root.id,
       task,
@@ -167,6 +181,8 @@ export class DureviewService {
       githubApps,
       options.models,
     );
+    adoption.afterArchive = (event) => service.#classifyClosedPull(event);
+    return service;
   }
 
   /** Model, thinking, trigger, draft skip, checkout TTL, and output token cap after overrides. */
@@ -538,7 +554,141 @@ export class DureviewService {
     if (parsed.kind === "ping") return { status: 200, body: { ok: true } };
     if (parsed.kind === "ignore") return { status: 200, body: { ignored: true, reason: parsed.reason } };
     if (parsed.kind === "command") return this.#command(parsed.command);
+    if (parsed.kind === "closed") return this.#classifyAdoption(parsed.request, parsed.merged, "webhook");
     return this.#pullRequest(parsed.request, parsed.action);
+  }
+
+  /**
+   * On pull_request closed, classify each posted inline comment once.
+   * A delivery that cannot read GitHub leaves those rows unset.
+   * GitHub does not redeliver that 500; the checkout sweep retries the stored close.
+   * The close is stored first: a review that archives after this delivery classifies against it.
+   */
+  async #classifyAdoption(
+    request: ReviewRequest,
+    merged: boolean,
+    source: "webhook" | "stored",
+  ): Promise<WebhookResponse> {
+    if (source === "webhook") {
+      await this.archive.rememberClosedPull(request, merged);
+    } else {
+      // The in-memory close can outlive a reopen. Re-inserting it would classify later reviews against that head.
+      const current = await this.archive.closedPull(request.owner, request.repo, request.number);
+      if (!current) return { status: 200, body: { ok: true, classified: 0, merged } };
+      request = current.request;
+      merged = current.merged;
+    }
+    const findings = await this.archive.unclassifiedPosts(request.owner, request.repo, request.number);
+    if (findings.length === 0) return { status: 200, body: { ok: true, classified: 0, merged } };
+    const signal = AbortSignal.timeout(20_000);
+    let comments;
+    try {
+      comments = await this.github.listReviewComments(request, signal, { threads: "required" });
+    } catch (error) {
+      log("error", "could not classify adoption", {
+        repo: `${request.owner}/${request.repo}`,
+        pr: request.number,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { status: 500, body: { error: "could not classify adoption" } };
+    }
+    const bySha = new Map<string, typeof findings>();
+    for (const finding of findings) {
+      const group = bySha.get(finding.sha) ?? [];
+      group.push(finding);
+      bySha.set(finding.sha, group);
+    }
+    const repo = { owner: request.owner, repo: request.repo, installationId: request.installationId };
+    const updates: Array<{ id: number; adoption: "adopted" | "ignored"; head: string }> = [];
+    let incomplete = false;
+    for (const [sha, group] of bySha) {
+      let files: PullFile[] = [];
+      let diffCapped = false;
+      if (sha !== request.sha) {
+        try {
+          const compared = await this.github.compareSinceReview(repo, sha, request.sha, signal);
+          if (compared === null) {
+            log("warn", "adoption diff is not relative to the reviewed head", {
+              repo: `${request.owner}/${request.repo}`,
+              pr: request.number,
+            });
+            continue;
+          }
+          files = compared.files;
+          diffCapped = compared.capped;
+        } catch (error) {
+          incomplete = true;
+          log("error", "could not compare commits for adoption", {
+            repo: `${request.owner}/${request.repo}`,
+            pr: request.number,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
+      }
+      for (const finding of group) {
+        const adoption = classifyFindingAdoption({
+          pullOpen: false,
+          reviewSha: sha,
+          finalHeadSha: request.sha,
+          threadResolved: findingThreadResolved(
+            { fingerprint: finding.fingerprint, taskId: finding.taskId },
+            comments,
+          ),
+          diffCapped,
+          finding,
+          files,
+        });
+        if (adoption !== "adopted" && adoption !== "ignored") continue;
+        updates.push({ id: finding.id, adoption, head: request.sha });
+      }
+    }
+    if (updates.length > 0) {
+      // GitHub calls above can outlast a reopen, or a newer close. Those outcomes belong to this head only.
+      const still = await this.archive.closedPull(request.owner, request.repo, request.number);
+      if (!still || still.request.sha.toLowerCase() !== request.sha.toLowerCase()) {
+        return { status: 200, body: { ok: true, classified: 0, merged } };
+      }
+    }
+    const classified = await this.archive.recordAdoption(updates);
+    if (incomplete) return { status: 500, body: { error: "could not classify adoption" } };
+    return { status: 200, body: { ok: true, classified, merged } };
+  }
+
+  /**
+   * Classify stored closes that still have unset posted comments.
+   * Startup and the checkout sweep call this. Each failure counts toward ADOPTION_RETRY_CAP.
+   */
+  async retryClosedAdoption(): Promise<void> {
+    const pending = await this.archive.closesAwaitingAdoption(ADOPTION_RETRY_CAP);
+    for (const closed of pending) {
+      const { owner, repo, number } = closed.request;
+      try {
+        const result = await this.#classifyAdoption(closed.request, closed.merged, "stored");
+        const left = await this.archive.unclassifiedPosts(owner, repo, number);
+        if (result.status === 200 && left.length === 0) continue;
+      } catch (error) {
+        log("error", "could not retry adoption", {
+          repo: `${owner}/${repo}`,
+          pr: number,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      await this.archive.noteCloseAttempt(owner, repo, number);
+    }
+  }
+
+  /** A review that finishes after the pull request closed still gets an adoption outcome. */
+  async #classifyClosedPull(event: ReviewFinished): Promise<void> {
+    const closed = await this.archive.closedPull(event.owner, event.repo, event.number);
+    if (!closed) return;
+    const result = await this.#classifyAdoption(closed.request, closed.merged, "stored");
+    if (result.status !== 200) {
+      log("error", "could not classify adoption after archive", {
+        repo: `${event.owner}/${event.repo}`,
+        pr: event.number,
+      });
+    }
   }
 
   /**
@@ -547,6 +697,7 @@ export class DureviewService {
    * The review task reads that same ref again for thresholds and prompt rules.
    */
   async #pullRequest(request: ReviewRequest, action: PullReviewAction): Promise<WebhookResponse> {
+    if (action === "reopened") await this.archive.forgetClosedPull(request.owner, request.repo, request.number);
     const signal = AbortSignal.timeout(20_000);
     let policy;
     try {

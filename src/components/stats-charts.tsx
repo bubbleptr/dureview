@@ -1,4 +1,4 @@
-import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ReferenceLine, XAxis, YAxis } from "recharts";
 import { seriesColor } from "../ui/chart-palette.js";
 import { formatTokens } from "../ui/format.js";
 import { useI18n } from "../ui/i18n.js";
@@ -57,14 +57,6 @@ export function distributionChartConfig(rows: ReadonlyArray<{ name: string }>, l
   return config;
 }
 
-export function failureChartConfig(rows: ReadonlyArray<{ name: string }>, countLabel: string): ChartConfig {
-  const config: ChartConfig = {};
-  for (const row of rows) config[row.name] = { label: row.name, color: seriesColor(row.name) };
-  const count = config.count;
-  config.count = { label: countLabel, color: count?.color };
-  return config;
-}
-
 export function DistributionChart({ rows }: { rows: StatsPageModel["priorities"] }) {
   const { locale, m } = useI18n();
   const config = distributionChartConfig(rows, locale, m.overview.count);
@@ -85,21 +77,48 @@ export function DistributionChart({ rows }: { rows: StatsPageModel["priorities"]
   );
 }
 
-export function FailureChart({ rows }: { rows: StatsPageModel["failures"] }) {
+export function AdoptionTrendChart({ points }: { points: StatsPageModel["adoptionTrend"] }) {
   const { m } = useI18n();
-  const config = failureChartConfig(rows, m.overview.count);
+  const config: ChartConfig = {
+    rate: { label: m.overview.adoptionRate, color: seriesColor("Adoption") },
+  };
   return (
     <ChartContainer config={config} className="h-56">
-      <BarChart data={rows} layout="vertical" margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
-        <CartesianGrid horizontal={false} stroke="var(--border)" />
-        <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
-        <YAxis type="category" dataKey="name" width={160} tickLine={false} axisLine={false} />
+      <LineChart data={points} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+        <CartesianGrid vertical={false} stroke="var(--border)" />
+        <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} />
+        <YAxis tickLine={false} axisLine={false} width={40} domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
         <ChartTooltip content={<ChartTooltipContent />} />
-        <Bar dataKey="count" radius={4}>
-          {rows.map((row) => (
-            <Cell key={row.name} fill={seriesColor(row.name)} />
-          ))}
-        </Bar>
+        <Line
+          type="monotone"
+          dataKey="rate"
+          name={m.overview.adoptionRate}
+          stroke={seriesColor("Adoption")}
+          strokeWidth={2}
+          dot={{ r: 2.5 }}
+          isAnimationActive={trendLineAnimationActive(prefersReducedMotion())}
+        />
+      </LineChart>
+    </ChartContainer>
+  );
+}
+
+export function DurationChart({ points, medianMinutes }: { points: StatsPageModel["speed"]; medianMinutes: number | null }) {
+  const { m } = useI18n();
+  const config: ChartConfig = {
+    minutes: { label: m.overview.durationTitle, color: seriesColor("Duration") },
+  };
+  return (
+    <ChartContainer config={config} className="h-56">
+      <BarChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+        <CartesianGrid vertical={false} stroke="var(--border)" />
+        <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} />
+        <YAxis tickLine={false} axisLine={false} width={36} />
+        <ChartTooltip content={<ChartTooltipContent />} />
+        {medianMinutes !== null && medianMinutes > 0 ? (
+          <ReferenceLine y={medianMinutes} stroke="var(--foreground)" strokeOpacity={0.45} strokeDasharray="3 3" />
+        ) : null}
+        <Bar dataKey="minutes" fill={seriesColor("Duration")} radius={4} isAnimationActive={false} />
       </BarChart>
     </ChartContainer>
   );

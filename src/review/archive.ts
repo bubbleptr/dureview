@@ -16,12 +16,14 @@ import {
   type Priority,
 } from "./schema.js";
 import { queryReviewStats, type StatsQuery, type StatsSnapshot } from "./stats.js";
+import type { ReviewRequest } from "../types.js";
 import type { ReviewUsage } from "./usage.js";
 
 /** SQLite file in the data directory. Mode 0600. Finished reviews also store their pull file list. */
 export const REVIEWS_DB_FILE = "reviews.sqlite";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
+const COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
 const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const TRIGGERS = new Set(["opened", "synchronize", "reopened", "ready_for_review", "command", "unknown"]);
 const FINGERPRINT = /^[0-9a-f]{12}$/;
@@ -227,6 +229,9 @@ export class ReviewArchive {
         posted INTEGER,
         skip_reason TEXT,
         created_at TEXT NOT NULL,
+        adoption TEXT,
+        adoption_head TEXT,
+        adoption_at TEXT,
         FOREIGN KEY (task_id) REFERENCES reviews(task_id) ON DELETE CASCADE
       ) STRICT;
       CREATE INDEX IF NOT EXISTS reviews_started ON reviews(started_at DESC);
@@ -234,6 +239,22 @@ export class ReviewArchive {
       CREATE INDEX IF NOT EXISTS findings_task ON findings(task_id);
       CREATE INDEX IF NOT EXISTS findings_repo ON findings(owner, repo, number);
       CREATE INDEX IF NOT EXISTS findings_category ON findings(category, priority);
+      CREATE TABLE IF NOT EXISTS pull_closes (
+        owner TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        sha TEXT NOT NULL,
+        base_sha TEXT NOT NULL,
+        base_ref TEXT NOT NULL,
+        title TEXT NOT NULL,
+        clone_url TEXT NOT NULL,
+        installation_id INTEGER,
+        draft INTEGER NOT NULL,
+        merged INTEGER NOT NULL,
+        closed_at TEXT NOT NULL,
+        classify_attempts INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (owner, repo, number)
+      ) STRICT;
       CREATE INDEX IF NOT EXISTS findings_fingerprint ON findings(fingerprint);
       CREATE INDEX IF NOT EXISTS findings_created ON findings(created_at);
       CREATE INDEX IF NOT EXISTS findings_language ON findings(language);
@@ -248,6 +269,7 @@ export class ReviewArchive {
     `);
     migrateReviews(db);
     migrateFindingColumns(db);
+    migratePullCloses(db);
     this.#db = db;
     await chmod(this.file, 0o600);
     await this.#importLegacy();
@@ -522,6 +544,189 @@ export class ReviewArchive {
     });
   }
 
+  /**
+   * Posted inline comments on this pull request that do not yet have an adoption outcome.
+   * Summary-only mentions (a skip reason) stay out of the adoption denominator.
+   */
+  unclassifiedPosts(owner: string, repo: string, number: number): Promise<PostedFinding[]> {
+    if (!NAME.test(owner) || !NAME.test(repo) || !Number.isInteger(number) || number < 1) return Promise.resolve([]);
+    return this.#exclusive(() => {
+      const rows = this.#database()
+        .prepare(
+          `SELECT id, task_id, sha, path, start_line, end_line, fingerprint
+           FROM findings
+           WHERE owner = ? AND repo = ? AND number = ?
+             AND posted = 1 AND skip_reason IS NULL AND adoption IS NULL
+           ORDER BY id`,
+        )
+        .all(owner, repo, number);
+      const findings: PostedFinding[] = [];
+      for (const row of rows) {
+        const id = int(row, "id");
+        const taskId = str(row, "task_id");
+        const path = str(row, "path");
+        const fingerprint = str(row, "fingerprint");
+        const sha = str(row, "sha");
+        if (id < 1 || !taskId || !path || !fingerprint || !sha) continue;
+        findings.push({
+          id,
+          taskId,
+          sha,
+          path,
+          fingerprint,
+          startLine: int(row, "start_line"),
+          endLine: int(row, "end_line"),
+        });
+      }
+      return findings;
+    });
+  }
+
+  /**
+   * Write adoption once. A second call does not change a row that already has an outcome.
+   * Returns how many rows changed.
+   */
+  recordAdoption(rows: readonly AdoptionWrite[]): Promise<number> {
+    if (rows.length === 0) return Promise.resolve(0);
+    const at = new Date().toISOString();
+    return this.#exclusive(() => {
+      const db = this.#database();
+      const update = db.prepare(
+        `UPDATE findings
+         SET adoption = ?, adoption_head = ?, adoption_at = ?
+         WHERE id = ? AND adoption IS NULL AND posted = 1 AND skip_reason IS NULL`,
+      );
+      let changed = 0;
+      db.exec("BEGIN");
+      try {
+        for (const row of rows) {
+          if (row.adoption !== "adopted" && row.adoption !== "ignored") continue;
+          if (!Number.isInteger(row.id) || row.id < 1) continue;
+          const head = row.head.trim().toLowerCase();
+          if (!/^[0-9a-f]{7,64}$/.test(head)) continue;
+          changed += Number(update.run(row.adoption, head, at, row.id).changes);
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      return changed;
+    });
+  }
+
+  /**
+   * Remember a closed pull request so a review that archives later can still be classified.
+   * A later close replaces the head SHA. Already-written adoption outcomes stay put.
+   */
+  rememberClosedPull(request: ReviewRequest, merged: boolean): Promise<void> {
+    if (!NAME.test(request.owner) || !NAME.test(request.repo)) return Promise.resolve();
+    if (!Number.isInteger(request.number) || request.number < 1) return Promise.resolve();
+    const sha = request.sha.trim().toLowerCase();
+    const baseSha = request.baseSha.trim().toLowerCase();
+    if (!COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha)) return Promise.resolve();
+    const cloneUrl = request.cloneUrl.trim();
+    if (!cloneUrl.startsWith("https://") || cloneUrl.length > 500) return Promise.resolve();
+    const installationId = cleanInstallation(request.installationId);
+    const closedAt = new Date().toISOString();
+    return this.#exclusive(() => {
+      this.#database()
+        .prepare(
+          `INSERT INTO pull_closes (
+            owner, repo, number, sha, base_sha, base_ref, title, clone_url, installation_id, draft, merged, closed_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(owner, repo, number) DO UPDATE SET
+            sha = excluded.sha,
+            base_sha = excluded.base_sha,
+            base_ref = excluded.base_ref,
+            title = excluded.title,
+            clone_url = excluded.clone_url,
+            installation_id = excluded.installation_id,
+            draft = excluded.draft,
+            merged = excluded.merged,
+            closed_at = excluded.closed_at`,
+        )
+        .run(
+          request.owner,
+          request.repo,
+          request.number,
+          sha,
+          baseSha,
+          clip(request.baseRef, 200),
+          clip(request.title, 300),
+          cloneUrl,
+          installationId,
+          request.draft ? 1 : 0,
+          merged ? 1 : 0,
+          closedAt,
+        );
+    });
+  }
+
+  /** Drop a stored close. A reopened pull request is not classified against that head. */
+  forgetClosedPull(owner: string, repo: string, number: number): Promise<void> {
+    if (!NAME.test(owner) || !NAME.test(repo) || !Number.isInteger(number) || number < 1) return Promise.resolve();
+    return this.#exclusive(() => {
+      this.#database().prepare("DELETE FROM pull_closes WHERE owner = ? AND repo = ? AND number = ?").run(owner, repo, number);
+    });
+  }
+
+  /** The latest close for this pull request, or null when it is still open or was never seen. */
+  closedPull(owner: string, repo: string, number: number): Promise<{ request: ReviewRequest; merged: boolean } | null> {
+    if (!NAME.test(owner) || !NAME.test(repo) || !Number.isInteger(number) || number < 1) return Promise.resolve(null);
+    return this.#exclusive(() => {
+      const row = this.#database()
+        .prepare(`${CLOSED_PULL_COLUMNS} FROM pull_closes WHERE owner = ? AND repo = ? AND number = ?`)
+        .get(owner, repo, number);
+      return row ? closedPullFromRow(row) : null;
+    });
+  }
+
+  /**
+   * Stored closes that still have a posted comment with no adoption outcome.
+   * `maxAttempts` stops a close GitHub can never classify from being retried forever.
+   */
+  closesAwaitingAdoption(maxAttempts: number): Promise<Array<{ request: ReviewRequest; merged: boolean }>> {
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) return Promise.resolve([]);
+    return this.#exclusive(() => {
+      const rows = this.#database()
+        .prepare(
+          `${CLOSED_PULL_COLUMNS}
+           FROM pull_closes
+           WHERE classify_attempts < ?
+             AND EXISTS (
+               SELECT 1 FROM findings
+               WHERE findings.owner = pull_closes.owner
+                 AND findings.repo = pull_closes.repo
+                 AND findings.number = pull_closes.number
+                 AND findings.posted = 1
+                 AND findings.skip_reason IS NULL
+                 AND findings.adoption IS NULL
+             )
+           ORDER BY closed_at`,
+        )
+        .all(maxAttempts);
+      const closes: Array<{ request: ReviewRequest; merged: boolean }> = [];
+      for (const row of rows) {
+        const closed = closedPullFromRow(row);
+        if (closed) closes.push(closed);
+      }
+      return closes;
+    });
+  }
+
+  /** Count one failed classification. A reopened pull request drops the row, so the next close starts over. */
+  noteCloseAttempt(owner: string, repo: string, number: number): Promise<void> {
+    if (!NAME.test(owner) || !NAME.test(repo) || !Number.isInteger(number) || number < 1) return Promise.resolve();
+    return this.#exclusive(() => {
+      this.#database()
+        .prepare(
+          "UPDATE pull_closes SET classify_attempts = classify_attempts + 1 WHERE owner = ? AND repo = ? AND number = ?",
+        )
+        .run(owner, repo, number);
+    });
+  }
+
   /** Aggregated counts for the statistics page. Finding text stays in the database. */
   stats(filter: StatsQuery): Promise<StatsSnapshot> {
     return this.#exclusive(() => queryReviewStats(this.#database(), filter));
@@ -715,6 +920,22 @@ export class ReviewArchive {
   }
 }
 
+export type PostedFinding = {
+  id: number;
+  taskId: string;
+  sha: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  fingerprint: string;
+};
+
+export type AdoptionWrite = {
+  id: number;
+  adoption: "adopted" | "ignored";
+  head: string;
+};
+
 /** Green pass, yellow suggestions, red P0/P1, gray error. Running stays separate. */
 export function reviewResult(row: Pick<ReviewSummary, "outcome" | "verdict" | "p0" | "p1" | "p2" | "p3" | "findingCount" | "countsKnown">): ReviewResultKind {
   if (row.outcome === "failed") return "error";
@@ -779,9 +1000,54 @@ function migrateFindingColumns(db: DatabaseSync): void {
     const names = new Set(columns.map((row) => str(row, "name")));
     if (!names.has("finding_type")) db.exec(`ALTER TABLE ${table} ADD COLUMN finding_type TEXT`);
     if (!names.has("subtype")) db.exec(`ALTER TABLE ${table} ADD COLUMN subtype TEXT`);
+    if (table === "findings") {
+      if (!names.has("adoption")) db.exec(`ALTER TABLE findings ADD COLUMN adoption TEXT`);
+      if (!names.has("adoption_head")) db.exec(`ALTER TABLE findings ADD COLUMN adoption_head TEXT`);
+      if (!names.has("adoption_at")) db.exec(`ALTER TABLE findings ADD COLUMN adoption_at TEXT`);
+    }
   };
   add("findings");
   add("comments");
+}
+
+/** A close written before retries existed has no attempt count. New rows start at zero. */
+function migratePullCloses(db: DatabaseSync): void {
+  const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pull_closes'").get();
+  if (!table) return;
+  const names = new Set(db.prepare("PRAGMA table_info(pull_closes)").all().map((row) => str(row, "name")));
+  if (!names.has("classify_attempts")) {
+    db.exec("ALTER TABLE pull_closes ADD COLUMN classify_attempts INTEGER NOT NULL DEFAULT 0");
+  }
+}
+
+const CLOSED_PULL_COLUMNS =
+  "SELECT owner, repo, number, sha, base_sha, base_ref, title, clone_url, installation_id, draft, merged";
+
+function closedPullFromRow(row: Record<string, SQLOutputValue>): { request: ReviewRequest; merged: boolean } | null {
+  const owner = str(row, "owner");
+  const repo = str(row, "repo");
+  const number = int(row, "number");
+  if (!NAME.test(owner) || !NAME.test(repo) || number < 1) return null;
+  const sha = str(row, "sha");
+  const baseSha = str(row, "base_sha");
+  const cloneUrl = str(row, "clone_url");
+  if (!COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha) || !cloneUrl.startsWith("https://")) return null;
+  const installation = row.installation_id;
+  return {
+    merged: int(row, "merged") === 1,
+    request: {
+      owner,
+      repo,
+      number,
+      sha,
+      baseSha,
+      baseRef: str(row, "base_ref"),
+      title: str(row, "title"),
+      cloneUrl,
+      installationId: typeof installation === "number" ? cleanInstallation(installation) : null,
+      draft: int(row, "draft") === 1,
+    },
+  };
 }
 
 function cleanThinking(value: string | undefined): string | null {

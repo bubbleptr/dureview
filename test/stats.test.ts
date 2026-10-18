@@ -2,7 +2,11 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { FailureBanner } from "../src/components/stats-page.js";
+import { I18nProvider } from "../src/ui/i18n.js";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { ReviewArchive } from "../src/review/archive.js";
 import type { RepoCheckout } from "../src/review/checkout.js";
@@ -540,3 +544,20 @@ function insertReview(
     row.thinking ?? null,
   );
 }
+
+describe("failure banner", () => {
+  it("uses the failed-review total instead of the sum of the listed reasons", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        I18nProvider,
+        { locale: "en" },
+        createElement(FailureBanner, {
+          failed: 13,
+          rows: [{ name: "Review run did not finish: model_error", count: 1, share: "8%" }],
+        }),
+      ),
+    );
+    expect(html).toContain("13 reviews failed in this range.");
+    expect(html).not.toContain("1 review failed");
+  });
+});

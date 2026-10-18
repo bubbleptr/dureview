@@ -2,13 +2,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { ClientChart } from "../src/components/client-chart.js";
-import { distributionChartConfig, failureChartConfig } from "../src/components/stats-charts.js";
+import { distributionChartConfig } from "../src/components/stats-charts.js";
 import { chartTooltipEntries } from "../src/components/ui/chart.js";
 import { settingsCsrfToken } from "../src/http/csrf.js";
 import { startHttp } from "../src/server.js";
 import { I18nProvider } from "../src/ui/i18n.js";
 import { loginNextFromSearch, loginReturnPath, safeUiReturn } from "../src/ui/next-path.js";
-import { runningLabel } from "../src/ui/page.js";
+import { formatDuration, runningLabel } from "../src/ui/page.js";
 import {
   localeFromAcceptLanguage,
   localeFromCookieHeader,
@@ -112,15 +112,23 @@ describe("locale detection", () => {
     expect(seriesLabel("correctness", "en")).toBe("Correctness");
     expect(seriesLabel("connection reset", "zh-CN")).toBe("connection reset");
 
-    const failure = failureChartConfig([{ name: "connection reset" }, { name: "Bug" }], messages["zh-CN"].overview.count);
-    const reason = chartTooltipEntries(failure, "connection reset", [{ dataKey: "count", name: "count", value: 1 }]);
-    expect(reason.heading).toBe("connection reset");
-    expect(reason.rows[0]?.name).toBe("次数");
-    expect(chartTooltipEntries(failure, "Bug", [{ dataKey: "count", value: 1 }]).heading).toBe("Bug");
-
     const trend = chartTooltipEntries({ "gpt-5": { label: "gpt-5" } }, "10月13日", [{ dataKey: "gpt-5", name: "gpt-5", value: 1200 }]);
     expect(trend.heading).toBe("10月13日");
     expect(trend.rows[0]?.name).toBe("gpt-5");
+  });
+
+  it("shows a review duration in the tooltip instead of rounded minutes", () => {
+    expect(formatDuration(20_000)).toBe("20s");
+    expect(formatDuration(90_000)).toBe("1m 30s");
+    const config = { minutes: { label: "Review duration" } };
+    const short = chartTooltipEntries(config, "demo #7", [
+      { dataKey: "minutes", name: "minutes", value: 0, payload: { duration: formatDuration(20_000) } },
+    ]);
+    expect(short.rows[0]?.value).toBe("20s");
+    const longer = chartTooltipEntries(config, "demo #8", [
+      { dataKey: "minutes", name: "minutes", value: 2, payload: { duration: formatDuration(90_000) } },
+    ]);
+    expect(longer.rows[0]?.value).toBe("1m 30s");
   });
 
   it("translates the chart loading status", () => {

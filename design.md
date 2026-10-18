@@ -72,10 +72,15 @@ SaaS landing page. This is an operator console for pull-request review.
   region is a containing block, so visually hidden chart tables stay inside it.
   A wide table scrolls inside the table. On a review, the file tree, the diff,
   and the summary each scroll inside their own panel.
-- The sidebar lists Overview, Reviews, and Settings. Overview is `/ui` and is
-  only metrics: the counts, charts, token usage, and findings distribution that
-  used to live on `/ui/stats`. `GET /ui/stats` redirects to `/ui`. Reviews is
-  `/ui/reviews` and is only the review list. Settings is only settings, including
+- The sidebar lists Overview, Reviews, and Settings. Overview is `/ui`. The first
+  screen is whether posted inline comments were adopted (adopted divided by
+  adopted plus ignored, with pending called out and left out of the rate), which
+  finding categories and directories keep coming back, and how long each review
+  took alongside token use. A review of at least 10 minutes that is also at least
+  three times the median is named above the duration chart. Priority, type,
+  category, and verdict charts stay in a details disclosure, collapsed by default.
+  A failure banner is shown only when a review in the range failed. `GET /ui/stats`
+  redirects to `/ui`. Reviews is `/ui/reviews` and is only the review list. Settings is only settings, including
   the unified or split diff view saved in the browser, plus version, uptime,
   provider, model, thinking, Codex login expiry, and GitHub credential status.
   The sidebar collapses on a wide screen and becomes a sheet on a narrow one.
@@ -85,6 +90,7 @@ SaaS landing page. This is an operator console for pull-request review.
   Dropdowns use the shadcn Select. A list of eight or more options, and the
   model catalog, use a combobox with a filter. Keyboard highlight in that
   combobox scrolls the active option into view.
+- Adoption counts a posted inline comment as adopted when a later commit changes its lines, or when its review thread is resolved and the pull request has a later commit. Pending comments are on pull requests that are still open and are not in the rate. A posted comment on a closed pull request with no outcome is unclassified, shown as a short note, and is not in the rate. An incidental edit of the same lines counts as adopted; the overview says so.
 - Keep URL filters (`repo`, `result`, `since`, `from`, `to`, `q` on the review
   list; `range`, `repo`, and `tz` on the overview), auth, and server functions.
   Client-only `sort`, `dir`, and `page` must not change those queries' meaning.

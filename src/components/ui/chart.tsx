@@ -51,7 +51,8 @@ type TooltipItem = {
   value?: number | string;
   color?: string;
   dataKey?: string | number;
-  payload?: { fill?: string };
+  /** Present when the bar value is minutes and this string is the duration to show. */
+  payload?: { fill?: string; duration?: unknown };
 };
 
 export function chartTooltipEntries(
@@ -66,7 +67,7 @@ export function chartTooltipEntries(
     const named = item.name === undefined ? undefined : config[String(item.name)]?.label;
     const name = config[key]?.label ?? named ?? item.name ?? key;
     const color = item.color ?? item.payload?.fill ?? config[key]?.color;
-    return { key, name: String(name), value: item.value, color };
+    return { key, name: String(name), value: tooltipValue(item), color };
   });
   return { heading, rows };
 }
@@ -96,6 +97,13 @@ export function ChartTooltipContent({
       ))}
     </div>
   );
+}
+
+/** Minutes are rounded to an integer by the count formatter, so 20s would show as 0. */
+function tooltipValue(item: TooltipItem): number | string | undefined {
+  const duration = item.payload?.duration;
+  if (typeof duration === "string" && duration.length > 0) return duration;
+  return item.value;
 }
 
 function formatTooltipValue(value: number | string | undefined, locale: Locale): string {

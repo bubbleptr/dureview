@@ -25,6 +25,11 @@ export function formatTokens(value: number, locale: Locale = "en"): string {
   return formatCount(value, locale);
 }
 
+export function formatPercent(rate: number | null, locale: Locale = "en"): string {
+  if (rate === null || !Number.isFinite(rate)) return "—";
+  return new Intl.NumberFormat(intlLocale(locale), { style: "percent", maximumFractionDigits: 0 }).format(rate);
+}
+
 export function formatCost(value: number, locale: Locale = "en"): string {
   const abs = Math.abs(value);
   const digits = abs === 0 ? 0 : abs < 0.01 ? 4 : abs < 1 ? 3 : 2;

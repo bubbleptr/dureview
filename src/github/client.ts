@@ -101,8 +101,17 @@ export interface GitHub {
     review: { sha: string; body: string; event?: ReviewEvent; comments: ReviewCommentDraft[] },
     signal: AbortSignal,
   ): Promise<PullReview>;
-  /** Inline review comments on the pull request, including dureview markers and thread ids. */
-  listReviewComments(request: ReviewRequest, signal: AbortSignal): Promise<PullReviewComment[]>;
+  /**
+   * Inline review comments, including dureview markers and thread ids.
+   * `threads: "required"` throws when the GraphQL thread lookup fails or the REST list is truncated.
+   * A truncated list must not be classified: a missing comment would look unresolved.
+   * The default keeps the comments and treats threads as unresolved, so a publish can reply instead of resolving.
+   */
+  listReviewComments(
+    request: ReviewRequest,
+    signal: AbortSignal,
+    options?: { threads: "required" },
+  ): Promise<PullReviewComment[]>;
   resolveReviewThread(request: ReviewRequest, threadId: string, signal: AbortSignal): Promise<void>;
   replyToReviewComment(
     request: ReviewRequest,
@@ -125,10 +134,16 @@ export interface GitHub {
    */
   listPullFiles(request: GitHubRepo & { number: number }, signal: AbortSignal): Promise<PullFile[]>;
   /**
-   * Files in the three-dot diff `base...head`. `head` may be an older commit, so this is the
-   * diff a finished review actually saw. GitHub returns at most 300 files from this endpoint.
+   * Files in `base...head`. GitHub's compare route only accepts that three-dot form; `base..head` is a 404.
+   * GitHub returns at most 300 files from this endpoint.
    */
   compareFiles(request: GitHubRepo, base: string, head: string, signal: AbortSignal): Promise<PullFile[]>;
+  /**
+   * File diff of commits after `reviewSha`, with patch line numbers on that commit.
+   * Uses `reviewSha...head`. The patch is review-head-relative only when `reviewSha` is the merge base.
+   * Returns null when the histories diverged, so callers leave those findings unclassified.
+   */
+  compareSinceReview(request: GitHubRepo, reviewSha: string, head: string, signal: AbortSignal): Promise<SinceReviewDiff | null>;
   /**
    * Check runs named `name` on `sha`, including in-progress runs (`filter=all`).
    * Used to reuse the run this task already opened after a crash between the create
@@ -160,6 +175,15 @@ export type PullFile = {
   previousFilename: string | null;
 };
 
+/** GitHub's compare payload lists at most this many files. */
+export const COMPARE_FILE_CAP = 300;
+
+export type SinceReviewDiff = {
+  files: PullFile[];
+  /** True when the file list hit the compare cap, so some paths may be missing. */
+  capped: boolean;
+};
+
 type CachedToken = { token: string; expiresAt: number };
 
 export class GithubRest implements GitHub {
@@ -180,8 +204,13 @@ export class GithubRest implements GitHub {
     );
   }
 
-  listIssueComments(request: ReviewRequest, signal: AbortSignal): Promise<IssueComment[]> {
-    return this.#pages(request, `/repos/${request.owner}/${request.repo}/issues/${request.number}/comments`, signal);
+  async listIssueComments(request: ReviewRequest, signal: AbortSignal): Promise<IssueComment[]> {
+    const page = await this.#pages<IssueComment>(
+      request,
+      `/repos/${request.owner}/${request.repo}/issues/${request.number}/comments`,
+      signal,
+    );
+    return page.rows;
   }
 
   createIssueComment(request: ReviewRequest, body: string, signal: AbortSignal): Promise<IssueComment> {
@@ -196,8 +225,13 @@ export class GithubRest implements GitHub {
     });
   }
 
-  listReviews(request: ReviewRequest, signal: AbortSignal): Promise<PullReview[]> {
-    return this.#pages(request, `/repos/${request.owner}/${request.repo}/pulls/${request.number}/reviews`, signal);
+  async listReviews(request: ReviewRequest, signal: AbortSignal): Promise<PullReview[]> {
+    const page = await this.#pages<PullReview>(
+      request,
+      `/repos/${request.owner}/${request.repo}/pulls/${request.number}/reviews`,
+      signal,
+    );
+    return page.rows;
   }
 
   async createReview(
@@ -221,16 +255,25 @@ export class GithubRest implements GitHub {
     }
   }
 
-  async listReviewComments(request: ReviewRequest, signal: AbortSignal): Promise<PullReviewComment[]> {
-    const rows = await this.#pages<RestReviewComment>(
+  async listReviewComments(
+    request: ReviewRequest,
+    signal: AbortSignal,
+    options?: { threads: "required" },
+  ): Promise<PullReviewComment[]> {
+    const page = await this.#pages<RestReviewComment>(
       request,
       `/repos/${request.owner}/${request.repo}/pulls/${request.number}/comments`,
       signal,
     );
+    if (page.truncated && options?.threads === "required") {
+      throw new Error("GitHub review comment list was truncated.");
+    }
+    const rows = page.rows;
     let threads = new Map<number, { threadId: string; resolved: boolean }>();
     try {
       threads = await this.#threadIndex(request, signal);
     } catch (error) {
+      if (options?.threads === "required") throw error;
       log("warn", "Could not load review threads; fixed findings will be replied to instead of resolved", {
         repo: `${request.owner}/${request.repo}`,
         pr: request.number,
@@ -340,10 +383,10 @@ export class GithubRest implements GitHub {
     request: ReviewRequest,
     path: string,
     signal: AbortSignal,
-  ): Promise<Array<T & { body: string }>> {
+  ): Promise<{ rows: Array<T & { body: string }>; truncated: boolean }> {
     const collected: Array<T & { body: string }> = [];
-    let next: string | undefined = path;
-    for (let page = 0; page < 10 && next; page++) {
+    let next: string | undefined = withPerPage(path, COMMENT_PAGE_SIZE);
+    for (let page = 0; page < COMMENT_PAGE_CAP && next; page++) {
       const response = await this.#send(request, "GET", next, signal);
       const rows = (await response.json()) as T[];
       if (!Array.isArray(rows)) throw new Error(`GitHub ${path} did not return a list`);
@@ -353,7 +396,7 @@ export class GithubRest implements GitHub {
       }
       next = linkNext(response.headers.get("link"));
     }
-    return collected;
+    return { rows: collected, truncated: next !== undefined };
   }
 
   async #text(request: { installationId: number | null }, path: string, signal: AbortSignal, accept: string): Promise<string> {
@@ -474,6 +517,31 @@ export class GithubRest implements GitHub {
   }
 
   async compareFiles(request: GitHubRepo, base: string, head: string, signal: AbortSignal): Promise<PullFile[]> {
+    const payload = await this.#comparePayload(request, base, head, signal);
+    return parsePullFiles(payload.files);
+  }
+
+  async compareSinceReview(
+    request: GitHubRepo,
+    reviewSha: string,
+    head: string,
+    signal: AbortSignal,
+  ): Promise<SinceReviewDiff | null> {
+    const payload = await this.#comparePayload(request, reviewSha, head, signal);
+    const mergeBase = isRecord(payload.merge_base_commit) ? payload.merge_base_commit.sha : undefined;
+    if (typeof mergeBase !== "string" || !COMMIT_SHA.test(mergeBase)) {
+      throw new Error("GitHub compare did not return a merge base.");
+    }
+    if (mergeBase.toLowerCase() !== reviewSha.toLowerCase()) return null;
+    return { files: parsePullFiles(payload.files), capped: payload.files.length >= COMPARE_FILE_CAP };
+  }
+
+  async #comparePayload(
+    request: GitHubRepo,
+    base: string,
+    head: string,
+    signal: AbortSignal,
+  ): Promise<Record<string, unknown> & { files: unknown[] }> {
     if (!COMMIT_SHA.test(base) || !COMMIT_SHA.test(head)) {
       throw new Error("GitHub compare requires a base SHA and a head SHA.");
     }
@@ -487,7 +555,7 @@ export class GithubRest implements GitHub {
     if (!isRecord(payload) || !Array.isArray(payload.files)) {
       throw new Error("GitHub compare did not return a file list.");
     }
-    return parsePullFiles(payload.files);
+    return { ...payload, files: payload.files };
   }
 
   async listCheckRuns(request: GitHubRepo, sha: string, name: string, signal: AbortSignal): Promise<CheckRun[]> {
@@ -659,6 +727,15 @@ export function parsePullFiles(payload: unknown): PullFile[] {
 function nonNegative(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return 0;
   return value;
+}
+
+/** GitHub defaults to 30. Ten pages of that hide every comment after the first 300. */
+const COMMENT_PAGE_SIZE = 100;
+const COMMENT_PAGE_CAP = 10;
+
+function withPerPage(path: string, perPage: number): string {
+  if (/[?&]per_page=/.test(path)) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}per_page=${perPage}`;
 }
 
 function linkNext(header: string | null): string | undefined {

@@ -20,6 +20,7 @@ export type WebhookParse =
   | { kind: "ping" }
   | { kind: "ignore"; reason: string }
   | { kind: "review"; action: PullReviewAction; request: ReviewRequest }
+  | { kind: "closed"; request: ReviewRequest; merged: boolean }
   | { kind: "command"; command: ReviewCommand };
 
 /** Turn a verified delivery into a review, a `/dureview` command, or a reason to ignore it. */
@@ -30,16 +31,31 @@ export function parseWebhook(event: string | undefined, payload: unknown): Webho
   if (!isRecord(payload)) return { kind: "ignore", reason: "payload is not an object" };
 
   const action = stringField(payload, "action");
+  if (action === "closed") return parseClosedPull(payload);
   if (!action || !REVIEW_ACTIONS.has(action)) {
     return { kind: "ignore", reason: `action ${action ?? "missing"}` };
   }
 
+  const pull = parsePull(payload);
+  if ("reason" in pull) return { kind: "ignore", reason: pull.reason };
+  return { kind: "review", action: action as PullReviewAction, request: pull.request };
+}
+
+function parseClosedPull(payload: Record<string, unknown>): WebhookParse {
+  const pull = parsePull(payload);
+  if ("reason" in pull) return { kind: "ignore", reason: pull.reason };
+  return { kind: "closed", request: pull.request, merged: pull.merged };
+}
+
+function parsePull(
+  payload: Record<string, unknown>,
+): { request: ReviewRequest; merged: boolean } | { reason: string } {
   const repository = recordField(payload, "repository");
   const pull = recordField(payload, "pull_request");
-  if (!repository || !pull) return { kind: "ignore", reason: "missing repository or pull_request" };
+  if (!repository || !pull) return { reason: "missing repository or pull_request" };
 
   const parsed = parseRepository(payload, repository);
-  if ("reason" in parsed) return { kind: "ignore", reason: parsed.reason };
+  if ("reason" in parsed) return { reason: parsed.reason };
 
   const number = pull.number;
   const title = stringField(pull, "title") ?? "";
@@ -50,16 +66,15 @@ export function parseWebhook(event: string | undefined, payload: unknown): Webho
   const baseSha = base ? stringField(base, "sha") : undefined;
   const baseRef = base ? stringField(base, "ref") : undefined;
   if (typeof number !== "number" || !Number.isInteger(number) || number < 1) {
-    return { kind: "ignore", reason: "invalid pull request number" };
+    return { reason: "invalid pull request number" };
   }
   if (!sha || !SHA.test(sha) || !baseSha || !SHA.test(baseSha)) {
-    return { kind: "ignore", reason: "invalid commit sha" };
+    return { reason: "invalid commit sha" };
   }
-  if (!baseRef || !isBranchRef(baseRef)) return { kind: "ignore", reason: "invalid base ref" };
+  if (!baseRef || !isBranchRef(baseRef)) return { reason: "invalid base ref" };
 
   return {
-    kind: "review",
-    action: action as PullReviewAction,
+    merged: pull.merged === true,
     request: {
       ...parsed,
       number,
