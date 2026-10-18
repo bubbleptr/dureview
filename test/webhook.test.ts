@@ -42,10 +42,25 @@ describe("webhook parsing", () => {
     }
   });
 
+  it("parses a closed pull request, including one that merged", () => {
+    const closed = parseWebhook("pull_request", pullPayload(SHA_A, "closed"));
+    expect(closed.kind).toBe("closed");
+    if (closed.kind === "closed") {
+      expect(closed.merged).toBe(false);
+      expect(closed.request.sha).toBe(SHA_A);
+      expect(closed.request.number).toBe(7);
+    }
+    const payload = pullPayload(SHA_A, "closed");
+    (payload.pull_request as { merged: boolean }).merged = true;
+    const merged = parseWebhook("pull_request", payload);
+    expect(merged.kind).toBe("closed");
+    if (merged.kind === "closed") expect(merged.merged).toBe(true);
+  });
+
   it("ignores other events and actions", () => {
     expect(parseWebhook("ping", {}).kind).toBe("ping");
     expect(parseWebhook("issues", pullPayload()).kind).toBe("ignore");
-    expect(parseWebhook("pull_request", pullPayload(SHA_A, "closed")).kind).toBe("ignore");
+    expect(parseWebhook("pull_request", pullPayload(SHA_A, "labeled")).kind).toBe("ignore");
     expect(parseWebhook("pull_request", { action: "opened" }).kind).toBe("ignore");
     expect(parseWebhook("issue_comment", { action: "edited" }).kind).toBe("ignore");
   });

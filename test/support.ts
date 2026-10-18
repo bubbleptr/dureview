@@ -352,9 +352,20 @@ export class MemoryGitHub implements GitHub {
   compared: PullFile[] = [];
   compareRequests: Array<{ base: string; head: string }> = [];
 
-  async compareFiles(_request: GitHubRepo, base: string, head: string): Promise<PullFile[]> {
+  compareError: Error | null = null;
+  compareSpans: Array<{ base: string; head: string; dots: 2 | 3 }> = [];
+
+  async compareFiles(
+    _request: GitHubRepo,
+    base: string,
+    head: string,
+    _signal?: AbortSignal,
+    dots: 2 | 3 = 3,
+  ): Promise<PullFile[]> {
     this.calls.push("compareFiles");
     this.compareRequests.push({ base, head });
+    this.compareSpans.push({ base, head, dots });
+    if (this.compareError) throw this.compareError;
     return this.compared.map((file) => ({ ...file }));
   }
 

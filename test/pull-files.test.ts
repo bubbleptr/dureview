@@ -92,6 +92,15 @@ describe("pull request files", () => {
     const files = await client.compareFiles(reviewRequest(), "1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", new AbortController().signal);
     expect(files.map((file) => file.filename)).toEqual(["src/then.ts"]);
     expect(seen.some((url) => url.endsWith("/repos/acme/demo/compare/1111111111111111111111111111111111111111...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).toBe(true);
+    seen.length = 0;
+    await client.compareFiles(
+      reviewRequest(),
+      "1111111111111111111111111111111111111111",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      new AbortController().signal,
+      2,
+    );
+    expect(seen.some((url) => url.endsWith("/repos/acme/demo/compare/1111111111111111111111111111111111111111..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).toBe(true);
     await expect(client.compareFiles(reviewRequest(), "main", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", new AbortController().signal)).rejects.toThrow(/SHA/);
   });
 });

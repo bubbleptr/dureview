@@ -526,6 +526,9 @@ describe("status page", () => {
     expect(page.headers.get("cache-control")).toBe("no-store");
     const html = await page.text();
     expect(html).toContain("Overview");
+    expect(html).toContain("Adoption");
+    expect(html).toContain("even when it was not a response to the comment");
+    expect(html).not.toMatch(/<details[^>]*\sopen[\s=>]/);
     expect(html).toContain("Tokens by day");
     expect(html).toContain("Findings by type");
     expect(html).toContain("Avg tokens");

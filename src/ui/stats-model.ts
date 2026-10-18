@@ -26,13 +26,49 @@ export type StatsRankRow = {
   cost: string;
 };
 
+export type AdoptionTrendPoint = {
+  day: string;
+  label: string;
+  adopted: number;
+  ignored: number;
+  /** 0–100. Pending comments are not in this rate. */
+  rate: number;
+};
+
+export type RecurringGroup = {
+  category: string;
+  count: string;
+  titles: Array<{ title: string; count: string }>;
+};
+
+export type HotspotRow = {
+  repo: string;
+  directory: string;
+  count: string;
+};
+
+export type SpeedPoint = {
+  id: string;
+  label: string;
+  detail: string;
+  minutes: number;
+  duration: string;
+};
+
 /** Serializable statistics page. Charts read these numbers; they do not query SQLite. */
 export type StatsPageModel = {
   form: StatsForm;
   repos: string[];
   filtered: boolean;
   empty: boolean;
-  cards: StatsCard[];
+  adoptionCards: StatsCard[];
+  adoptionTrend: AdoptionTrendPoint[];
+  recurring: RecurringGroup[];
+  hotspots: HotspotRow[];
+  speedCards: StatsCard[];
+  speed: SpeedPoint[];
+  medianMinutes: number | null;
+  outlier: { headline: string; detail: string } | null;
   trend: { models: string[]; points: StatsTrendPoint[] };
   priorities: StatsBar[];
   types: StatsBar[];

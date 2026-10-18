@@ -59,7 +59,37 @@ export type StatsSnapshot = {
   topRepos: Array<{ repo: string; reviews: number; findings: number }>;
   topPulls: Array<{ repo: string; number: number; title: string; reviews: number; findings: number }>;
   repos: string[];
+  /** Posted inline comments only. Pending is an unset outcome, which is an open pull request or a close that has not been classified. */
+  adoption: { adopted: number; ignored: number; pending: number };
+  adoptionTrend: Array<{ day: string; adopted: number; ignored: number }>;
+  recurring: Array<{ category: string; count: number; titles: Array<{ title: string; count: number }> }>;
+  hotspots: Array<{ repo: string; directory: string; count: number }>;
+  durations: Array<{
+    taskId: string;
+    repo: string;
+    number: number;
+    title: string;
+    durationMs: number;
+    outlier: boolean;
+  }>;
+  medianDurationMs: number | null;
 };
+
+/** A finished review this far above the median, and at least this long, is called out on the overview. */
+export const OUTLIER_MIN_MS = 10 * 60 * 1000;
+
+export function isDurationOutlier(durationMs: number, medianMs: number | null): boolean {
+  if (medianMs === null) return false;
+  if (durationMs < OUTLIER_MIN_MS) return false;
+  return durationMs >= medianMs * 3;
+}
+
+/** Parent directory of a finding path. A file at the repository root is `.`. */
+export function findingDirectory(path: string): string {
+  const slash = path.lastIndexOf("/");
+  if (slash <= 0) return ".";
+  return path.slice(0, slash);
+}
 
 /** `+480 minutes` / `-420 minutes`, clamped to a real offset. Bound as a SQLite modifier. */
 export function timezoneModifier(offsetMinutes: number): string {
@@ -283,6 +313,66 @@ export function queryReviewStats(db: DatabaseSync, filter: StatsQuery): StatsSna
     .all()
     .map((row) => `${text(row, "owner")}/${text(row, "repo")}`)
     .filter((repo) => repo !== "/");
+  const adoption = one(
+    db,
+    `SELECT
+       SUM(CASE WHEN f.posted = 1 AND f.skip_reason IS NULL AND f.adoption = 'adopted' THEN 1 ELSE 0 END) AS adopted,
+       SUM(CASE WHEN f.posted = 1 AND f.skip_reason IS NULL AND f.adoption = 'ignored' THEN 1 ELSE 0 END) AS ignored,
+       SUM(CASE WHEN f.posted = 1 AND f.skip_reason IS NULL AND f.adoption IS NULL THEN 1 ELSE 0 END) AS pending
+     FROM findings f
+     JOIN reviews r ON r.task_id = f.task_id
+     WHERE ${scope.clause}`,
+    scope.params,
+  );
+  const adoptionTrend = db
+    .prepare(
+      `SELECT
+         strftime('%Y-%m-%d', r.started_at, ?) AS day,
+         SUM(CASE WHEN f.adoption = 'adopted' THEN 1 ELSE 0 END) AS adopted,
+         SUM(CASE WHEN f.adoption = 'ignored' THEN 1 ELSE 0 END) AS ignored
+       FROM findings f
+       JOIN reviews r ON r.task_id = f.task_id
+       WHERE ${scope.clause}
+         AND f.posted = 1
+         AND f.skip_reason IS NULL
+         AND f.adoption IN ('adopted', 'ignored')
+       GROUP BY day
+       ORDER BY day`,
+    )
+    .all(modifier, ...scope.params);
+  const titleRows = db
+    .prepare(
+      `SELECT CASE WHEN TRIM(f.category) = '' THEN 'unknown' ELSE f.category END AS category,
+              f.title AS title,
+              COUNT(*) AS n
+       FROM findings f
+       JOIN reviews r ON r.task_id = f.task_id
+       WHERE ${scope.clause}
+       GROUP BY category, f.title
+       ORDER BY n DESC, category, title`,
+    )
+    .all(...scope.params);
+  const pathRows = db
+    .prepare(
+      `SELECT r.owner || '/' || r.repo AS repo, f.path AS path, COUNT(*) AS n
+       FROM findings f
+       JOIN reviews r ON r.task_id = f.task_id
+       WHERE ${scope.clause}
+       GROUP BY r.owner, r.repo, f.path`,
+    )
+    .all(...scope.params);
+  const durationRows = db
+    .prepare(
+      `SELECT r.task_id, r.owner, r.repo, r.number, r.title,
+              CAST(ROUND((julianday(r.finished_at) - julianday(r.started_at)) * 86400000.0) AS INTEGER) AS ms
+       FROM reviews r
+       WHERE ${scope.clause}
+         AND r.finished_at IS NOT NULL
+         AND r.outcome IN ('completed', 'failed')
+         AND julianday(r.finished_at) >= julianday(r.started_at)
+       ORDER BY r.started_at, r.task_id`,
+    )
+    .all(...scope.params);
 
   const known = int(tokens, "known_reviews");
   const cacheRead = tokens.cache_read_tokens === null ? null : int(tokens, "cache_read_tokens");
@@ -365,7 +455,86 @@ export function queryReviewStats(db: DatabaseSync, filter: StatsQuery): StatsSna
       findings: int(row, "findings"),
     })),
     repos,
+    adoption: {
+      adopted: int(adoption, "adopted"),
+      ignored: int(adoption, "ignored"),
+      pending: int(adoption, "pending"),
+    },
+    adoptionTrend: adoptionTrend.map((row) => ({
+      day: text(row, "day"),
+      adopted: int(row, "adopted"),
+      ignored: int(row, "ignored"),
+    })),
+    recurring: clusterTitles(titleRows),
+    hotspots: clusterDirectories(pathRows),
+    ...durationSnapshot(durationRows),
   };
+}
+
+function clusterTitles(rows: Array<Record<string, SQLOutputValue>>): StatsSnapshot["recurring"] {
+  const groups = new Map<string, { category: string; count: number; titles: Array<{ title: string; count: number }> }>();
+  for (const row of rows) {
+    const category = text(row, "category") || "unknown";
+    const title = text(row, "title");
+    const count = int(row, "n");
+    const group = groups.get(category) ?? { category, count: 0, titles: [] };
+    group.count += count;
+    if (title) group.titles.push({ title, count });
+    groups.set(category, group);
+  }
+  return [...groups.values()]
+    .sort((left, right) => right.count - left.count || left.category.localeCompare(right.category))
+    .slice(0, 5)
+    .map((group) => ({
+      category: group.category,
+      count: group.count,
+      titles: group.titles.toSorted((left, right) => right.count - left.count || left.title.localeCompare(right.title)).slice(0, 3),
+    }));
+}
+
+function clusterDirectories(rows: Array<Record<string, SQLOutputValue>>): StatsSnapshot["hotspots"] {
+  const totals = new Map<string, { repo: string; directory: string; count: number }>();
+  for (const row of rows) {
+    const repo = text(row, "repo");
+    const directory = findingDirectory(text(row, "path"));
+    const key = `${repo}\0${directory}`;
+    const count = int(row, "n");
+    const existing = totals.get(key);
+    if (existing) existing.count += count;
+    else totals.set(key, { repo, directory, count });
+  }
+  return [...totals.values()]
+    .sort((left, right) => right.count - left.count || left.repo.localeCompare(right.repo) || left.directory.localeCompare(right.directory))
+    .slice(0, 8);
+}
+
+function durationSnapshot(rows: Array<Record<string, SQLOutputValue>>): Pick<StatsSnapshot, "durations" | "medianDurationMs"> {
+  const samples = rows.map((row) => ({
+    taskId: text(row, "task_id"),
+    repo: `${text(row, "owner")}/${text(row, "repo")}`,
+    number: int(row, "number"),
+    title: text(row, "title"),
+    durationMs: int(row, "ms"),
+  }));
+  const medianDurationMs = median(samples.map((sample) => sample.durationMs));
+  return {
+    medianDurationMs,
+    durations: samples.map((sample) => ({
+      ...sample,
+      outlier: isDurationOutlier(sample.durationMs, medianDurationMs),
+    })),
+  };
+}
+
+function median(values: readonly number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = values.toSorted((left, right) => left - right);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid] ?? null;
+  const left = sorted[mid - 1];
+  const right = sorted[mid];
+  if (left === undefined || right === undefined) return null;
+  return (left + right) / 2;
 }
 
 function where(alias: string, filter: StatsQuery): { clause: string; params: SQLInputValue[] } {

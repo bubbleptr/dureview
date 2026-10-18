@@ -227,6 +227,9 @@ export class ReviewArchive {
         posted INTEGER,
         skip_reason TEXT,
         created_at TEXT NOT NULL,
+        adoption TEXT,
+        adoption_head TEXT,
+        adoption_at TEXT,
         FOREIGN KEY (task_id) REFERENCES reviews(task_id) ON DELETE CASCADE
       ) STRICT;
       CREATE INDEX IF NOT EXISTS reviews_started ON reviews(started_at DESC);
@@ -522,6 +525,75 @@ export class ReviewArchive {
     });
   }
 
+  /**
+   * Posted inline comments on this pull request that do not yet have an adoption outcome.
+   * Summary-only mentions (a skip reason) stay out of the adoption denominator.
+   */
+  unclassifiedPosts(owner: string, repo: string, number: number): Promise<PostedFinding[]> {
+    if (!NAME.test(owner) || !NAME.test(repo) || !Number.isInteger(number) || number < 1) return Promise.resolve([]);
+    return this.#exclusive(() => {
+      const rows = this.#database()
+        .prepare(
+          `SELECT id, task_id, sha, path, start_line, end_line, fingerprint
+           FROM findings
+           WHERE owner = ? AND repo = ? AND number = ?
+             AND posted = 1 AND skip_reason IS NULL AND adoption IS NULL
+           ORDER BY id`,
+        )
+        .all(owner, repo, number);
+      const findings: PostedFinding[] = [];
+      for (const row of rows) {
+        const id = int(row, "id");
+        const path = str(row, "path");
+        const fingerprint = str(row, "fingerprint");
+        const sha = str(row, "sha");
+        if (id < 1 || !path || !fingerprint || !sha) continue;
+        findings.push({
+          id,
+          sha,
+          path,
+          fingerprint,
+          startLine: int(row, "start_line"),
+          endLine: int(row, "end_line"),
+        });
+      }
+      return findings;
+    });
+  }
+
+  /**
+   * Write adoption once. A second call does not change a row that already has an outcome.
+   * Returns how many rows changed.
+   */
+  recordAdoption(rows: readonly AdoptionWrite[]): Promise<number> {
+    if (rows.length === 0) return Promise.resolve(0);
+    const at = new Date().toISOString();
+    return this.#exclusive(() => {
+      const db = this.#database();
+      const update = db.prepare(
+        `UPDATE findings
+         SET adoption = ?, adoption_head = ?, adoption_at = ?
+         WHERE id = ? AND adoption IS NULL AND posted = 1 AND skip_reason IS NULL`,
+      );
+      let changed = 0;
+      db.exec("BEGIN");
+      try {
+        for (const row of rows) {
+          if (row.adoption !== "adopted" && row.adoption !== "ignored") continue;
+          if (!Number.isInteger(row.id) || row.id < 1) continue;
+          const head = row.head.trim().toLowerCase();
+          if (!/^[0-9a-f]{7,64}$/.test(head)) continue;
+          changed += Number(update.run(row.adoption, head, at, row.id).changes);
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      return changed;
+    });
+  }
+
   /** Aggregated counts for the statistics page. Finding text stays in the database. */
   stats(filter: StatsQuery): Promise<StatsSnapshot> {
     return this.#exclusive(() => queryReviewStats(this.#database(), filter));
@@ -715,6 +787,21 @@ export class ReviewArchive {
   }
 }
 
+export type PostedFinding = {
+  id: number;
+  sha: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  fingerprint: string;
+};
+
+export type AdoptionWrite = {
+  id: number;
+  adoption: "adopted" | "ignored";
+  head: string;
+};
+
 /** Green pass, yellow suggestions, red P0/P1, gray error. Running stays separate. */
 export function reviewResult(row: Pick<ReviewSummary, "outcome" | "verdict" | "p0" | "p1" | "p2" | "p3" | "findingCount" | "countsKnown">): ReviewResultKind {
   if (row.outcome === "failed") return "error";
@@ -779,6 +866,11 @@ function migrateFindingColumns(db: DatabaseSync): void {
     const names = new Set(columns.map((row) => str(row, "name")));
     if (!names.has("finding_type")) db.exec(`ALTER TABLE ${table} ADD COLUMN finding_type TEXT`);
     if (!names.has("subtype")) db.exec(`ALTER TABLE ${table} ADD COLUMN subtype TEXT`);
+    if (table === "findings") {
+      if (!names.has("adoption")) db.exec(`ALTER TABLE findings ADD COLUMN adoption TEXT`);
+      if (!names.has("adoption_head")) db.exec(`ALTER TABLE findings ADD COLUMN adoption_head TEXT`);
+      if (!names.has("adoption_at")) db.exec(`ALTER TABLE findings ADD COLUMN adoption_at TEXT`);
+    }
   };
   add("findings");
   add("comments");

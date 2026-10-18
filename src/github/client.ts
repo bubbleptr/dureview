@@ -125,10 +125,10 @@ export interface GitHub {
    */
   listPullFiles(request: GitHubRepo & { number: number }, signal: AbortSignal): Promise<PullFile[]>;
   /**
-   * Files in the three-dot diff `base...head`. `head` may be an older commit, so this is the
-   * diff a finished review actually saw. GitHub returns at most 300 files from this endpoint.
+   * Files in `base...head` (three-dot) by default. `dots: 2` is `base..head`, commits reachable
+   * from `head` but not from `base`. GitHub returns at most 300 files from this endpoint.
    */
-  compareFiles(request: GitHubRepo, base: string, head: string, signal: AbortSignal): Promise<PullFile[]>;
+  compareFiles(request: GitHubRepo, base: string, head: string, signal: AbortSignal, dots?: 2 | 3): Promise<PullFile[]>;
   /**
    * Check runs named `name` on `sha`, including in-progress runs (`filter=all`).
    * Used to reuse the run this task already opened after a crash between the create
@@ -473,11 +473,17 @@ export class GithubRest implements GitHub {
     return collected;
   }
 
-  async compareFiles(request: GitHubRepo, base: string, head: string, signal: AbortSignal): Promise<PullFile[]> {
+  async compareFiles(
+    request: GitHubRepo,
+    base: string,
+    head: string,
+    signal: AbortSignal,
+    dots: 2 | 3 = 3,
+  ): Promise<PullFile[]> {
     if (!COMMIT_SHA.test(base) || !COMMIT_SHA.test(head)) {
       throw new Error("GitHub compare requires a base SHA and a head SHA.");
     }
-    const basehead = `${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+    const basehead = `${encodeURIComponent(base)}${dots === 2 ? ".." : "..."}${encodeURIComponent(head)}`;
     const payload = await this.#json<unknown>(
       request,
       "GET",

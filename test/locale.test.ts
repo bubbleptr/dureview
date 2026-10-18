@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { ClientChart } from "../src/components/client-chart.js";
-import { distributionChartConfig, failureChartConfig } from "../src/components/stats-charts.js";
+import { distributionChartConfig } from "../src/components/stats-charts.js";
 import { chartTooltipEntries } from "../src/components/ui/chart.js";
 import { settingsCsrfToken } from "../src/http/csrf.js";
 import { startHttp } from "../src/server.js";
@@ -111,12 +111,6 @@ describe("locale detection", () => {
     expect(chartTooltipEntries(config, "data integrity", [{ dataKey: "count", value: 2 }]).heading).toBe("数据一致性");
     expect(seriesLabel("correctness", "en")).toBe("Correctness");
     expect(seriesLabel("connection reset", "zh-CN")).toBe("connection reset");
-
-    const failure = failureChartConfig([{ name: "connection reset" }, { name: "Bug" }], messages["zh-CN"].overview.count);
-    const reason = chartTooltipEntries(failure, "connection reset", [{ dataKey: "count", name: "count", value: 1 }]);
-    expect(reason.heading).toBe("connection reset");
-    expect(reason.rows[0]?.name).toBe("次数");
-    expect(chartTooltipEntries(failure, "Bug", [{ dataKey: "count", value: 1 }]).heading).toBe("Bug");
 
     const trend = chartTooltipEntries({ "gpt-5": { label: "gpt-5" } }, "10月13日", [{ dataKey: "gpt-5", name: "gpt-5", value: 1200 }]);
     expect(trend.heading).toBe("10月13日");

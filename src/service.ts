@@ -31,6 +31,7 @@ import type { ConsoleView, SettingsFormValues, SettingsPageModel } from "./setti
 import type { GitHub } from "./github/client.js";
 import { verifyGithubSignature } from "./github/signature.js";
 import { parseWebhook, type ReviewCommand } from "./github/webhook.js";
+import { classifyFindingAdoption, findingThreadResolved } from "./review/adoption.js";
 import { log } from "./log.js";
 import { readBaseDureview, safeRepoPath, type RepoCheckout } from "./review/checkout.js";
 import { loadReviewFilePair, matchReviewedFile, type ReviewFileContents } from "./ui/file-contents.js";
@@ -538,7 +539,69 @@ export class DureviewService {
     if (parsed.kind === "ping") return { status: 200, body: { ok: true } };
     if (parsed.kind === "ignore") return { status: 200, body: { ignored: true, reason: parsed.reason } };
     if (parsed.kind === "command") return this.#command(parsed.command);
+    if (parsed.kind === "closed") return this.#classifyAdoption(parsed.request, parsed.merged);
     return this.#pullRequest(parsed.request, parsed.action);
+  }
+
+  /**
+   * On pull_request closed, classify each posted inline comment once.
+   * A delivery that cannot read GitHub leaves those rows unset so a retry can finish them.
+   */
+  async #classifyAdoption(request: ReviewRequest, merged: boolean): Promise<WebhookResponse> {
+    const findings = await this.archive.unclassifiedPosts(request.owner, request.repo, request.number);
+    if (findings.length === 0) return { status: 200, body: { ok: true, classified: 0, merged } };
+    const signal = AbortSignal.timeout(20_000);
+    let comments;
+    try {
+      comments = await this.github.listReviewComments(request, signal);
+    } catch (error) {
+      log("error", "could not classify adoption", {
+        repo: `${request.owner}/${request.repo}`,
+        pr: request.number,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { status: 500, body: { error: "could not classify adoption" } };
+    }
+    const bySha = new Map<string, typeof findings>();
+    for (const finding of findings) {
+      const group = bySha.get(finding.sha) ?? [];
+      group.push(finding);
+      bySha.set(finding.sha, group);
+    }
+    const repo = { owner: request.owner, repo: request.repo, installationId: request.installationId };
+    const updates: Array<{ id: number; adoption: "adopted" | "ignored"; head: string }> = [];
+    let incomplete = false;
+    for (const [sha, group] of bySha) {
+      let files: PullFile[] = [];
+      if (sha !== request.sha) {
+        try {
+          files = await this.github.compareFiles(repo, sha, request.sha, signal, 2);
+        } catch (error) {
+          incomplete = true;
+          log("error", "could not compare commits for adoption", {
+            repo: `${request.owner}/${request.repo}`,
+            pr: request.number,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
+      }
+      for (const finding of group) {
+        const adoption = classifyFindingAdoption({
+          pullOpen: false,
+          reviewSha: sha,
+          finalHeadSha: request.sha,
+          threadResolved: findingThreadResolved(finding.fingerprint, comments),
+          finding,
+          files,
+        });
+        if (adoption === "pending") continue;
+        updates.push({ id: finding.id, adoption, head: request.sha });
+      }
+    }
+    const classified = await this.archive.recordAdoption(updates);
+    if (incomplete) return { status: 500, body: { error: "could not classify adoption" } };
+    return { status: 200, body: { ok: true, classified, merged } };
   }
 
   /**
