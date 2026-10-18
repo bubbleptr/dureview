@@ -8,7 +8,7 @@ import { settingsCsrfToken } from "../src/http/csrf.js";
 import { startHttp } from "../src/server.js";
 import { I18nProvider } from "../src/ui/i18n.js";
 import { loginNextFromSearch, loginReturnPath, safeUiReturn } from "../src/ui/next-path.js";
-import { runningLabel } from "../src/ui/page.js";
+import { formatDuration, runningLabel } from "../src/ui/page.js";
 import {
   localeFromAcceptLanguage,
   localeFromCookieHeader,
@@ -115,6 +115,20 @@ describe("locale detection", () => {
     const trend = chartTooltipEntries({ "gpt-5": { label: "gpt-5" } }, "10月13日", [{ dataKey: "gpt-5", name: "gpt-5", value: 1200 }]);
     expect(trend.heading).toBe("10月13日");
     expect(trend.rows[0]?.name).toBe("gpt-5");
+  });
+
+  it("shows a review duration in the tooltip instead of rounded minutes", () => {
+    expect(formatDuration(20_000)).toBe("20s");
+    expect(formatDuration(90_000)).toBe("1m 30s");
+    const config = { minutes: { label: "Review duration" } };
+    const short = chartTooltipEntries(config, "demo #7", [
+      { dataKey: "minutes", name: "minutes", value: 0, payload: { duration: formatDuration(20_000) } },
+    ]);
+    expect(short.rows[0]?.value).toBe("20s");
+    const longer = chartTooltipEntries(config, "demo #8", [
+      { dataKey: "minutes", name: "minutes", value: 2, payload: { duration: formatDuration(90_000) } },
+    ]);
+    expect(longer.rows[0]?.value).toBe("1m 30s");
   });
 
   it("translates the chart loading status", () => {

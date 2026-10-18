@@ -13,7 +13,7 @@ import {
   type AdoptionDiffFile,
 } from "../src/review/adoption.js";
 import { isDurationOutlier } from "../src/review/stats.js";
-import { DureviewService } from "../src/service.js";
+import { ADOPTION_RETRY_CAP, DureviewService } from "../src/service.js";
 import {
   BASE_SHA,
   MemoryGitHub,
@@ -296,6 +296,43 @@ describe("adoption migration", () => {
     });
     check.close();
   });
+
+  it("adds an attempt count to a close stored before retries existed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dureview-adoption-"));
+    const file = join(dir, "reviews.sqlite");
+    const db = new DatabaseSync(file);
+    db.exec(`
+      CREATE TABLE pull_closes (
+        owner TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        sha TEXT NOT NULL,
+        base_sha TEXT NOT NULL,
+        base_ref TEXT NOT NULL,
+        title TEXT NOT NULL,
+        clone_url TEXT NOT NULL,
+        installation_id INTEGER,
+        draft INTEGER NOT NULL,
+        merged INTEGER NOT NULL,
+        closed_at TEXT NOT NULL,
+        PRIMARY KEY (owner, repo, number)
+      ) STRICT;
+    `);
+    db.prepare(
+      `INSERT INTO pull_closes (
+        owner, repo, number, sha, base_sha, base_ref, title, clone_url, installation_id, draft, merged, closed_at
+      ) VALUES ('acme', 'demo', 7, ?, ?, 'main', 'Charge', 'https://github.com/acme/demo.git', 99, 0, 1, '2026-10-12T00:00:00.000Z')`,
+    ).run(SHA_B, BASE_SHA);
+    db.close();
+
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT classify_attempts FROM pull_closes").get()).toEqual({ classify_attempts: 0 });
+    check.close();
+  });
 });
 
 describe("adoption webhook", () => {
@@ -534,6 +571,78 @@ describe("adoption webhook", () => {
       adoption: "adopted",
       adoption_head: SHA_B,
     });
+    check.close();
+  });
+
+  it("retries a failed close without a second webhook delivery", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "retry", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "retry", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.threadError = new Error("GitHub GraphQL response had no data.");
+    github.reviewComments = [
+      {
+        id: 1,
+        body: "<!-- dureview:finding aaaaaaaaaaaa retry -->",
+        path: "src/pay.ts",
+        line: 2,
+        threadId: "T1",
+        inReplyToId: null,
+        reviewId: 1,
+        resolved: true,
+      },
+    ];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    expect((await deliver(service, closedPayload(SHA_B))).status).toBe(500);
+    github.threadError = null;
+    await service.retryClosedAdoption();
+    const lookups = () => github.calls.filter((call) => call === "listReviewComments").length;
+    const after = lookups();
+    await service.retryClosedAdoption();
+    expect(lookups()).toBe(after);
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: "adopted" });
+    expect(check.prepare("SELECT classify_attempts FROM pull_closes").get()).toEqual({ classify_attempts: 0 });
+    check.close();
+  });
+
+  it("stops retrying a close after the attempt cap", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "capped-retry", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "capped-retry", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.threadError = new Error("GitHub GraphQL response had no data.");
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    expect((await deliver(service, closedPayload(SHA_B))).status).toBe(500);
+    const lookups = () => github.calls.filter((call) => call === "listReviewComments").length;
+    const before = lookups();
+    for (let attempt = 0; attempt < ADOPTION_RETRY_CAP; attempt += 1) {
+      await service.retryClosedAdoption();
+    }
+    expect(lookups()).toBe(before + ADOPTION_RETRY_CAP);
+    await service.retryClosedAdoption();
+    expect(lookups()).toBe(before + ADOPTION_RETRY_CAP);
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    expect(check.prepare("SELECT classify_attempts FROM pull_closes").get()).toEqual({ classify_attempts: ADOPTION_RETRY_CAP });
     check.close();
   });
 

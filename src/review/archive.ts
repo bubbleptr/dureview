@@ -252,6 +252,7 @@ export class ReviewArchive {
         draft INTEGER NOT NULL,
         merged INTEGER NOT NULL,
         closed_at TEXT NOT NULL,
+        classify_attempts INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (owner, repo, number)
       ) STRICT;
       CREATE INDEX IF NOT EXISTS findings_fingerprint ON findings(fingerprint);
@@ -268,6 +269,7 @@ export class ReviewArchive {
     `);
     migrateReviews(db);
     migrateFindingColumns(db);
+    migratePullCloses(db);
     this.#db = db;
     await chmod(this.file, 0o600);
     await this.#importLegacy();
@@ -674,32 +676,54 @@ export class ReviewArchive {
     if (!NAME.test(owner) || !NAME.test(repo) || !Number.isInteger(number) || number < 1) return Promise.resolve(null);
     return this.#exclusive(() => {
       const row = this.#database()
-        .prepare(
-          `SELECT sha, base_sha, base_ref, title, clone_url, installation_id, draft, merged
-           FROM pull_closes WHERE owner = ? AND repo = ? AND number = ?`,
-        )
+        .prepare(`${CLOSED_PULL_COLUMNS} FROM pull_closes WHERE owner = ? AND repo = ? AND number = ?`)
         .get(owner, repo, number);
-      if (!row) return null;
-      const sha = str(row, "sha");
-      const baseSha = str(row, "base_sha");
-      const cloneUrl = str(row, "clone_url");
-      if (!COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha) || !cloneUrl.startsWith("https://")) return null;
-      const installation = row.installation_id;
-      return {
-        merged: int(row, "merged") === 1,
-        request: {
-          owner,
-          repo,
-          number,
-          sha,
-          baseSha,
-          baseRef: str(row, "base_ref"),
-          title: str(row, "title"),
-          cloneUrl,
-          installationId: typeof installation === "number" ? cleanInstallation(installation) : null,
-          draft: int(row, "draft") === 1,
-        },
-      };
+      return row ? closedPullFromRow(row) : null;
+    });
+  }
+
+  /**
+   * Stored closes that still have a posted comment with no adoption outcome.
+   * `maxAttempts` stops a close GitHub can never classify from being retried forever.
+   */
+  closesAwaitingAdoption(maxAttempts: number): Promise<Array<{ request: ReviewRequest; merged: boolean }>> {
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) return Promise.resolve([]);
+    return this.#exclusive(() => {
+      const rows = this.#database()
+        .prepare(
+          `${CLOSED_PULL_COLUMNS}
+           FROM pull_closes
+           WHERE classify_attempts < ?
+             AND EXISTS (
+               SELECT 1 FROM findings
+               WHERE findings.owner = pull_closes.owner
+                 AND findings.repo = pull_closes.repo
+                 AND findings.number = pull_closes.number
+                 AND findings.posted = 1
+                 AND findings.skip_reason IS NULL
+                 AND findings.adoption IS NULL
+             )
+           ORDER BY closed_at`,
+        )
+        .all(maxAttempts);
+      const closes: Array<{ request: ReviewRequest; merged: boolean }> = [];
+      for (const row of rows) {
+        const closed = closedPullFromRow(row);
+        if (closed) closes.push(closed);
+      }
+      return closes;
+    });
+  }
+
+  /** Count one failed classification. A reopened pull request drops the row, so the next close starts over. */
+  noteCloseAttempt(owner: string, repo: string, number: number): Promise<void> {
+    if (!NAME.test(owner) || !NAME.test(repo) || !Number.isInteger(number) || number < 1) return Promise.resolve();
+    return this.#exclusive(() => {
+      this.#database()
+        .prepare(
+          "UPDATE pull_closes SET classify_attempts = classify_attempts + 1 WHERE owner = ? AND repo = ? AND number = ?",
+        )
+        .run(owner, repo, number);
     });
   }
 
@@ -984,6 +1008,46 @@ function migrateFindingColumns(db: DatabaseSync): void {
   };
   add("findings");
   add("comments");
+}
+
+/** A close written before retries existed has no attempt count. New rows start at zero. */
+function migratePullCloses(db: DatabaseSync): void {
+  const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pull_closes'").get();
+  if (!table) return;
+  const names = new Set(db.prepare("PRAGMA table_info(pull_closes)").all().map((row) => str(row, "name")));
+  if (!names.has("classify_attempts")) {
+    db.exec("ALTER TABLE pull_closes ADD COLUMN classify_attempts INTEGER NOT NULL DEFAULT 0");
+  }
+}
+
+const CLOSED_PULL_COLUMNS =
+  "SELECT owner, repo, number, sha, base_sha, base_ref, title, clone_url, installation_id, draft, merged";
+
+function closedPullFromRow(row: Record<string, SQLOutputValue>): { request: ReviewRequest; merged: boolean } | null {
+  const owner = str(row, "owner");
+  const repo = str(row, "repo");
+  const number = int(row, "number");
+  if (!NAME.test(owner) || !NAME.test(repo) || number < 1) return null;
+  const sha = str(row, "sha");
+  const baseSha = str(row, "base_sha");
+  const cloneUrl = str(row, "clone_url");
+  if (!COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha) || !cloneUrl.startsWith("https://")) return null;
+  const installation = row.installation_id;
+  return {
+    merged: int(row, "merged") === 1,
+    request: {
+      owner,
+      repo,
+      number,
+      sha,
+      baseSha,
+      baseRef: str(row, "base_ref"),
+      title: str(row, "title"),
+      cloneUrl,
+      installationId: typeof installation === "number" ? cleanInstallation(installation) : null,
+      draft: int(row, "draft") === 1,
+    },
+  };
 }
 
 function cleanThinking(value: string | undefined): string | null {

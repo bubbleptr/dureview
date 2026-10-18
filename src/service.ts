@@ -65,6 +65,9 @@ export type ServiceOptions = {
 
 export type WebhookResponse = { status: number; body: Record<string, unknown> };
 
+/** GitHub does not redeliver a 500. The checkout sweep retries a stored close this many times. */
+export const ADOPTION_RETRY_CAP = 5;
+
 const GITHUB_SETUP_BUSY = "GitHub setup is already finishing. Start it again from settings.";
 
 export class DureviewService {
@@ -557,7 +560,8 @@ export class DureviewService {
 
   /**
    * On pull_request closed, classify each posted inline comment once.
-   * A delivery that cannot read GitHub leaves those rows unset so a retry can finish them.
+   * A delivery that cannot read GitHub leaves those rows unset.
+   * GitHub does not redeliver that 500; the checkout sweep retries the stored close.
    * The close is stored first: a review that archives after this delivery classifies against it.
    */
   async #classifyAdoption(request: ReviewRequest, merged: boolean): Promise<WebhookResponse> {
@@ -630,6 +634,29 @@ export class DureviewService {
     const classified = await this.archive.recordAdoption(updates);
     if (incomplete) return { status: 500, body: { error: "could not classify adoption" } };
     return { status: 200, body: { ok: true, classified, merged } };
+  }
+
+  /**
+   * Classify stored closes that still have unset posted comments.
+   * Startup and the checkout sweep call this. Each failure counts toward ADOPTION_RETRY_CAP.
+   */
+  async retryClosedAdoption(): Promise<void> {
+    const pending = await this.archive.closesAwaitingAdoption(ADOPTION_RETRY_CAP);
+    for (const closed of pending) {
+      const { owner, repo, number } = closed.request;
+      try {
+        const result = await this.#classifyAdoption(closed.request, closed.merged);
+        const left = await this.archive.unclassifiedPosts(owner, repo, number);
+        if (result.status === 200 && left.length === 0) continue;
+      } catch (error) {
+        log("error", "could not retry adoption", {
+          repo: `${owner}/${repo}`,
+          pr: number,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      await this.archive.noteCloseAttempt(owner, repo, number);
+    }
   }
 
   /** A review that finishes after the pull request closed still gets an adoption outcome. */

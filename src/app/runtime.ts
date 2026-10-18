@@ -135,6 +135,11 @@ async function sweepCheckouts(service: DureviewService, config: Config): Promise
   } catch (error) {
     log("error", "checkout cleanup failed", { error: error instanceof Error ? error.message : String(error) });
   }
+  try {
+    await service.retryClosedAdoption();
+  } catch (error) {
+    log("error", "adoption retry failed", { error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 function armCheckoutSweep(service: DureviewService, config: Config): void {
