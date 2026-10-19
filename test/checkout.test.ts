@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
-import { chmod, mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkoutProtectionKey, GitCheckout } from "../src/review/checkout.js";
+import { GitCheckout } from "../src/review/checkout.js";
 import { BASE_SHA, MemoryGitHub, reviewRequest, tempDataDir } from "./support.js";
 
 describe("base branch .dureview.md", () => {
@@ -103,11 +103,13 @@ describe("base branch .dureview.md", () => {
 });
 
 describe("checkout lifetime", () => {
-  it("keeps the tree while another task of the same SHA still holds it", async () => {
+  it("deletes one task's checkout and leaves the other task's tree", async () => {
     const root = await tempDataDir();
-    const sha = await seedMatchingCheckout(root);
+    const sha = await seedMatchingCheckout(root, "task-a");
     const request = reviewRequest(sha);
-    const dir = join(root, "acme", "demo", sha);
+    const dirA = join(root, "acme", "demo", `${sha}-task-a`);
+    const dirB = join(root, "acme", "demo", `${sha}-task-b`);
+    await cp(dirA, dirB, { recursive: true });
     const github = new MemoryGitHub();
     let releaseDiff = () => {};
     const diffGate = new Promise<void>((resolve) => {
@@ -117,45 +119,31 @@ describe("checkout lifetime", () => {
     const diffWaiting = new Promise<void>((resolve) => {
       markDiff = resolve;
     });
-    let opened = false;
+    let opened = 0;
     github.getPullDiff = async () => {
-      if (!opened) {
-        opened = true;
-        markDiff();
-      }
+      opened += 1;
+      if (opened === 2) markDiff();
       await diffGate;
       return "diff";
     };
     const checkout = new GitCheckout(github, root, async () => undefined);
     const signal = AbortSignal.timeout(15_000);
     const first = checkout.prepare(request, signal, "task-a");
-    await diffWaiting;
     const second = checkout.prepare(request, signal, "task-b");
-    expect(await checkout.release({ request, taskId: "task-c", activeKeys: new Set() })).toBe(false);
-    await expect(stat(dir)).resolves.toBeTruthy();
-    releaseDiff();
-    await Promise.all([first, second]);
-    expect(await checkout.release({ request, taskId: "task-a", activeKeys: new Set() })).toBe(false);
-    await expect(stat(dir)).resolves.toBeTruthy();
-    expect(await checkout.release({ request, taskId: "task-b", activeKeys: new Set() })).toBe(true);
-    await expect(stat(dir)).rejects.toThrow();
-  });
-
-  it("keeps a checkout a running task still needs when this process has no hold", async () => {
-    const root = await tempDataDir();
-    const sha = await seedMatchingCheckout(root);
-    const request = reviewRequest(sha);
-    const dir = join(root, "acme", "demo", sha);
-    const github = new MemoryGitHub();
-    const checkout = new GitCheckout(github, root, async () => undefined);
-    await checkout.prepare(request, AbortSignal.timeout(15_000), "task-a");
+    await diffWaiting;
+    await expect(stat(dirA)).resolves.toBeTruthy();
+    await expect(stat(dirB)).resolves.toBeTruthy();
+    expect(await checkout.release({ request, taskId: "task-a" })).toBe(true);
+    await expect(stat(dirA)).rejects.toThrow();
+    await expect(stat(dirB)).resolves.toBeTruthy();
     const restarted = new GitCheckout(github, root, async () => undefined);
-    const key = checkoutProtectionKey("acme", "demo", sha);
-
-    expect(await restarted.release({ request, taskId: "task-a", activeKeys: new Set([key]) })).toBe(false);
-    await expect(stat(dir)).resolves.toBeTruthy();
-    expect(await restarted.release({ request, taskId: "task-a", activeKeys: new Set() })).toBe(true);
-    await expect(stat(dir)).rejects.toThrow();
+    expect(await restarted.release({ request, taskId: "task-b" })).toBe(true);
+    await expect(stat(dirB)).rejects.toThrow();
+    releaseDiff();
+    const [preparedA, preparedB] = await Promise.all([first, second]);
+    expect(preparedA.dir).toBe(dirA);
+    expect(preparedB.dir).toBe(dirB);
+    expect(await checkout.release({ request, taskId: "task-a" })).toBe(false);
   });
 
   it("fails with disk full instead of waiting when git runs out of space", async () => {
@@ -167,19 +155,21 @@ describe("checkout lifetime", () => {
     const previous = process.env.PATH;
     process.env.PATH = `${bin}:${previous ?? ""}`;
     const started = Date.now();
+    const dir = join(root, "checkouts", "acme", "demo", `${reviewRequest().sha}-task-disk`);
     try {
       const checkout = new GitCheckout(new MemoryGitHub(), join(root, "checkouts"), async () => undefined);
       await expect(checkout.prepare(reviewRequest(), AbortSignal.timeout(15_000), "task-disk")).rejects.toThrow(
         /disk full/,
       );
       expect(Date.now() - started).toBeLessThan(10_000);
+      await expect(stat(dir)).rejects.toThrow();
     } finally {
       process.env.PATH = previous;
     }
   });
 });
 
-async function seedMatchingCheckout(root: string): Promise<string> {
+async function seedMatchingCheckout(root: string, taskId?: string): Promise<string> {
   const dir = join(root, "seed");
   await mkdir(join(dir, "src"), { recursive: true });
   await git(dir, ["init", "-b", "main"]);
@@ -188,7 +178,7 @@ async function seedMatchingCheckout(root: string): Promise<string> {
   await git(dir, ["commit", "-m", "init"]);
   const sha = (await git(dir, ["rev-parse", "HEAD"])).trim();
   await mkdir(join(root, "acme", "demo"), { recursive: true });
-  await rename(dir, join(root, "acme", "demo", sha));
+  await rename(dir, join(root, "acme", "demo", taskId ? `${sha}-${taskId}` : sha));
   return sha;
 }
 

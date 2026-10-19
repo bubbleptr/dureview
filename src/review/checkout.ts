@@ -12,14 +12,10 @@ export const CHECKOUT_FILE_BYTES = 512 * 1024;
 /** Unused checkouts older than this are removed by the sweep even when the TTL is longer. */
 export const CHECKOUT_BACKSTOP_MS = 60 * 60 * 1000;
 
-export type CheckoutRelease = {
-  request: ReviewRequest;
-  taskId: string;
-  activeKeys: ReadonlySet<string>;
-};
-
 const SHA = /^[0-9a-fA-F]{7,64}$/;
 const SEGMENT = /^[A-Za-z0-9._-]+$/;
+const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const CHECKOUT_DIR = /^[0-9a-fA-F]{7,64}(?:-([A-Za-z0-9_-]{1,64}))?$/;
 
 export type CheckoutFile =
   | { kind: "text"; text: string }
@@ -36,23 +32,18 @@ export type Checkout = {
 
 export interface RepoCheckout {
   prepare(request: ReviewRequest, signal: AbortSignal, taskId?: string): Promise<Checkout>;
-  /** Drop this task's hold and delete the checkout when no other task still needs it. */
-  release?(input: CheckoutRelease): Promise<boolean>;
+  release?(input: { request: ReviewRequest; taskId: string }): Promise<boolean>;
 }
 
 /**
  * Fetch the pull request head into the data directory and read `.dureview.md` from the base branch.
  * The file is not taken from the pull request head, so the pull request cannot change its trigger
  * rules, thresholds, or prompt. The diff comes from GitHub so it matches the review comments' commit.
- * Reuses a directory whose HEAD is already the requested SHA.
+ * Reuses this task's directory when its HEAD is already the requested SHA.
  * The base commit is fetched into the same directory as `refs/dureview/base`, so `git show <sha>:<path>`
  * can read either side. A directory that already has the head but has no `origin` remote is left as-is.
  */
 export class GitCheckout implements RepoCheckout {
-  #holders = new Map<string, Set<string>>();
-  /** One path is created or deleted at a time so concurrent reviews of the same SHA share the tree. */
-  #tails = new Map<string, Promise<void>>();
-
   constructor(
     private readonly github: GitHub,
     private readonly root: string,
@@ -61,102 +52,56 @@ export class GitCheckout implements RepoCheckout {
   ) {}
 
   async prepare(request: ReviewRequest, signal: AbortSignal, taskId?: string): Promise<Checkout> {
-    const dir = path.join(this.root, request.owner, request.repo, request.sha);
-    const key = checkoutProtectionKey(request.owner, request.repo, request.sha);
-    await this.#exclusive(key, async () => {
-      if (taskId) this.#hold(key, taskId);
-      try {
-        await mkdir(path.dirname(dir), { recursive: true });
-        let header: string[] | undefined;
+    const dir = checkoutDirectory(this.root, request.owner, request.repo, request.sha, taskId);
+    if (!dir) throw new Error(`Invalid checkout path for ${request.owner}/${request.repo}.`);
+    try {
+      await mkdir(path.dirname(dir), { recursive: true });
+      let header: string[] | undefined;
+      if (!(await headMatches(dir, request.sha, signal))) {
+        await rm(dir, { recursive: true, force: true });
+        await mkdir(dir, { recursive: true });
+        const token = await this.tokenFor(request, signal);
+        header = authHeader(token);
+        await git(dir, ["init"], signal);
+        await git(dir, ["remote", "add", "origin", request.cloneUrl], signal);
+        await git(
+          dir,
+          [...header, ...fileProtocolArgs(request.cloneUrl), "fetch", "--depth", "1", "origin", `pull/${request.number}/head`],
+          signal,
+        );
+        await git(dir, ["checkout", "--detach", "FETCH_HEAD"], signal);
         if (!(await headMatches(dir, request.sha, signal))) {
-          await rm(dir, { recursive: true, force: true });
-          await mkdir(dir, { recursive: true });
-          const token = await this.tokenFor(request, signal);
-          header = authHeader(token);
-          await git(dir, ["init"], signal);
-          await git(dir, ["remote", "add", "origin", request.cloneUrl], signal);
-          await git(
-            dir,
-            [...header, ...fileProtocolArgs(request.cloneUrl), "fetch", "--depth", "1", "origin", `pull/${request.number}/head`],
-            signal,
-          );
-          await git(dir, ["checkout", "--detach", "FETCH_HEAD"], signal);
-          if (!(await headMatches(dir, request.sha, signal))) {
-            throw new Error(`Checked out ${request.owner}/${request.repo}#${request.number} but HEAD is not ${request.sha}.`);
-          }
+          throw new Error(`Checked out ${request.owner}/${request.repo}#${request.number} but HEAD is not ${request.sha}.`);
         }
-        await ensureBaseCommit(dir, request, header, this.tokenFor, signal);
-        await utimes(dir, new Date(), new Date());
-      } catch (error) {
-        if (signal.aborted) throw error;
-        if (!isDiskFull(error)) throw error;
-        await this.#freeIfSole(key, dir, taskId);
-        throw new Error("disk full");
       }
-    });
+      await ensureBaseCommit(dir, request, header, this.tokenFor, signal);
+      await utimes(dir, new Date(), new Date());
+    } catch (error) {
+      if (signal.aborted) throw error;
+      if (!isDiskFull(error)) throw error;
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      throw new Error("disk full");
+    }
     const diffText = await this.github.getPullDiff(request, signal);
     const { diff, truncated } = truncateDiff(diffText);
     const loaded = await readBaseDureview(this.github, request, signal, this.#defaults());
     return { dir, diff, truncated, rules: loaded.rules, policy: loaded.policy };
   }
 
-  async release(input: CheckoutRelease): Promise<boolean> {
-    const { request, taskId, activeKeys } = input;
-    const dir = checkoutDirectory(this.root, request.owner, request.repo, request.sha);
+  async release(input: { request: ReviewRequest; taskId: string }): Promise<boolean> {
+    const dir = checkoutDirectory(this.root, input.request.owner, input.request.repo, input.request.sha, input.taskId);
     if (!dir) return false;
-    const key = checkoutProtectionKey(request.owner, request.repo, request.sha);
-    return this.#exclusive(key, async () => {
-      this.#drop(key, taskId);
-      if ((this.#holders.get(key)?.size ?? 0) > 0) return false;
-      if (activeKeys.has(key)) return false;
-      try {
-        await stat(dir);
-      } catch {
-        return false;
-      }
-      await rm(dir, { recursive: true, force: true });
-      return true;
-    });
+    try {
+      await stat(dir);
+    } catch {
+      return false;
+    }
+    await rm(dir, { recursive: true, force: true });
+    return true;
   }
 
   #defaults(): PolicyDefaults {
     return typeof this.policyDefaults === "function" ? this.policyDefaults() : this.policyDefaults;
-  }
-
-  #hold(key: string, taskId: string): void {
-    const held = this.#holders.get(key) ?? new Set<string>();
-    held.add(taskId);
-    this.#holders.set(key, held);
-  }
-
-  #drop(key: string, taskId: string): void {
-    const held = this.#holders.get(key);
-    if (!held) return;
-    held.delete(taskId);
-    if (held.size === 0) this.#holders.delete(key);
-  }
-
-  async #freeIfSole(key: string, dir: string, taskId: string | undefined): Promise<void> {
-    if (taskId) this.#drop(key, taskId);
-    if ((this.#holders.get(key)?.size ?? 0) > 0) return;
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  }
-
-  async #exclusive<T>(key: string, run: () => Promise<T>): Promise<T> {
-    const previous = this.#tails.get(key) ?? Promise.resolve();
-    let unlock = () => {};
-    const gate = new Promise<void>((resolve) => {
-      unlock = resolve;
-    });
-    const tail = previous.then(() => gate);
-    this.#tails.set(key, tail);
-    await previous;
-    try {
-      return await run();
-    } finally {
-      unlock();
-      if (this.#tails.get(key) === tail) this.#tails.delete(key);
-    }
   }
 }
 
@@ -190,15 +135,26 @@ export async function loadDureviewFile(
   }
 }
 
-/** `owner/repo/sha` under the checkouts root, or null when a segment is not a single safe name. */
-export function checkoutDirectory(root: string, owner: string, repo: string, sha: string): string | null {
+/**
+ * This task's checkout, `owner/repo/<sha>-<taskId>`, or `owner/repo/<sha>` when `taskId` is omitted.
+ * Null when a segment is not a single safe name.
+ */
+export function checkoutDirectory(
+  root: string,
+  owner: string,
+  repo: string,
+  sha: string,
+  taskId?: string,
+): string | null {
   if (!safeSegment(owner) || !safeSegment(repo) || !SHA.test(sha)) return null;
-  return path.join(root, owner, repo, sha);
+  if (taskId === undefined) return path.join(root, owner, repo, sha);
+  if (!TASK_ID.test(taskId)) return null;
+  return path.join(root, owner, repo, `${sha}-${taskId}`);
 }
 
-/** Key for a checkout that a running review still needs. */
-export function checkoutProtectionKey(owner: string, repo: string, sha: string): string {
-  return `${owner}\0${repo}\0${sha}`;
+/** An aborted task is terminal, so it does not keep a checkout. */
+export function taskStatusIsLive(status: string | undefined): boolean {
+  return status !== undefined && status !== "terminal";
 }
 
 /**
@@ -243,46 +199,48 @@ type CheckoutLeaf = {
   full: string;
   mtimeMs: number;
   bytes: number;
-  protected: boolean;
+  taskId: string | null;
 };
 
 /**
- * Delete unused `<root>/<owner>/<repo>/<sha>` directories.
+ * Delete `<root>/<owner>/<repo>/<sha>` and `<root>/<owner>/<repo>/<sha>-<taskId>` directories.
  * A checkout goes when it is at least `ttlMs` old, or at least {@link CHECKOUT_BACKSTOP_MS} old.
- * `protectedKeys` are {@link checkoutProtectionKey} values for reviews that are still running.
- * When `maxBytes` is set and the tree is larger, the oldest unused checkouts go first.
+ * When `maxBytes` is set and the tree is still larger, the oldest checkouts go first.
+ * `taskIsLive` is read for that directory's task immediately before each delete.
+ * A terminal task, including an aborted one, does not keep its directory. A directory with no task id does not either.
  * Symlinks are left in place. Missing roots delete nothing.
  */
 export async function cleanupCheckouts(input: {
   root: string;
   ttlMs: number;
   now?: number;
-  protectedKeys: ReadonlySet<string>;
   maxBytes?: number;
+  taskIsLive: (taskId: string) => Promise<boolean>;
 }): Promise<string[]> {
   const now = input.now ?? Date.now();
   const removed: string[] = [];
-  const leaves = await listCheckoutLeaves(input.root, input.protectedKeys);
+  const leaves = await listCheckoutLeaves(input.root);
   let total = 0;
-  const inactive: CheckoutLeaf[] = [];
+  for (const leaf of leaves) total += leaf.bytes;
+  const remaining: CheckoutLeaf[] = [];
   for (const leaf of leaves) {
-    total += leaf.bytes;
-    if (leaf.protected) continue;
     const age = now - leaf.mtimeMs;
-    if (age >= input.ttlMs || age >= CHECKOUT_BACKSTOP_MS) {
-      if (await removeCheckout(leaf.full)) {
-        removed.push(leaf.label);
-        total -= leaf.bytes;
-      }
+    if (age < input.ttlMs && age < CHECKOUT_BACKSTOP_MS) {
+      remaining.push(leaf);
       continue;
     }
-    inactive.push(leaf);
+    if (await deleteUnlessLive(leaf, input.taskIsLive)) {
+      removed.push(leaf.label);
+      total -= leaf.bytes;
+      continue;
+    }
+    remaining.push(leaf);
   }
   if (input.maxBytes !== undefined && total > input.maxBytes) {
-    inactive.sort((left, right) => left.mtimeMs - right.mtimeMs);
-    for (const leaf of inactive) {
+    remaining.sort((left, right) => left.mtimeMs - right.mtimeMs);
+    for (const leaf of remaining) {
       if (total <= input.maxBytes) break;
-      if (await removeCheckout(leaf.full)) {
+      if (await deleteUnlessLive(leaf, input.taskIsLive)) {
         removed.push(leaf.label);
         total -= leaf.bytes;
       }
@@ -291,15 +249,23 @@ export async function cleanupCheckouts(input: {
   return removed;
 }
 
-async function listCheckoutLeaves(root: string, protectedKeys: ReadonlySet<string>): Promise<CheckoutLeaf[]> {
+async function deleteUnlessLive(
+  leaf: CheckoutLeaf,
+  taskIsLive: (taskId: string) => Promise<boolean>,
+): Promise<boolean> {
+  if (leaf.taskId !== null && (await taskIsLive(leaf.taskId))) return false;
+  return removeCheckout(leaf.full);
+}
+
+async function listCheckoutLeaves(root: string): Promise<CheckoutLeaf[]> {
   const leaves: CheckoutLeaf[] = [];
   const owners = await childDirectories(root);
   for (const owner of owners) {
     const repos = await childDirectories(path.join(root, owner));
     for (const repo of repos) {
-      const shas = await childDirectories(path.join(root, owner, repo));
-      for (const sha of shas) {
-        const full = path.join(root, owner, repo, sha);
+      const names = await childDirectories(path.join(root, owner, repo));
+      for (const name of names) {
+        const full = path.join(root, owner, repo, name);
         let mtimeMs: number;
         try {
           mtimeMs = (await stat(full)).mtimeMs;
@@ -307,16 +273,20 @@ async function listCheckoutLeaves(root: string, protectedKeys: ReadonlySet<strin
           continue;
         }
         leaves.push({
-          label: `${owner}/${repo}/${sha}`,
+          label: `${owner}/${repo}/${name}`,
           full,
           mtimeMs,
           bytes: await directoryBytes(full),
-          protected: protectedKeys.has(checkoutProtectionKey(owner, repo, sha)),
+          taskId: taskIdFromCheckoutName(name),
         });
       }
     }
   }
   return leaves;
+}
+
+function taskIdFromCheckoutName(name: string): string | null {
+  return CHECKOUT_DIR.exec(name)?.[1] ?? null;
 }
 
 async function directoryBytes(dir: string): Promise<number> {
