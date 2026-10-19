@@ -170,7 +170,7 @@ export const settingsCopy = {
     },
     checkoutTtlDays: {
       label: "Checkout TTL",
-      help: "Delete checkouts older than this many days. 0 deletes every checkout no review is using. The next sweep picks this up.",
+      help: "Finished reviews delete their checkout. The sweep also deletes unused checkouts older than this many days, and any unused checkout older than one hour. 0 deletes every unused checkout.",
     },
     maxOutputTokens: {
       label: "Max output tokens",
@@ -375,7 +375,7 @@ const settingsCopyZh = {
     },
     checkoutTtlDays: {
       label: "检出保留",
-      help: "删除早于这么多天的检出。0 会删除没有审查在用的全部检出。下次清扫时生效。",
+      help: "审查结束后删除其检出。清扫还会删除超过这么多天的未使用检出，以及超过一小时的未使用检出。0 会删除没有审查在用的全部检出。",
     },
     maxOutputTokens: {
       label: "单次输出上限",

@@ -60,6 +60,8 @@ export type ReviewDeps = {
   hooks?: ReviewHooks;
   /** Records a terminal outcome for the status page. Failures here do not fail the review. */
   onFinished?: (event: ReviewFinished) => Promise<void>;
+  /** Runs after a terminal outcome is committed. Failures here do not change that outcome. */
+  onTaskEnded?: (request: ReviewRequest, taskId: string) => Promise<void>;
 };
 
 type Prepared = {
@@ -140,6 +142,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               signal,
             },
             () => failureNotice(deps, runtime, current, context, error),
+            () => endCheckout(deps, request, String(current.id)),
           );
         try {
           let frozen = readFrozen(current.state.checkpoint);
@@ -199,7 +202,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             }
             slot = { kind: "retry" };
           }
-          const prepared = await deps.checkout.prepare(request, signal);
+          const prepared = await deps.checkout.prepare(request, signal, String(current.id));
           language = prepared.policy.language;
           const model = runtime.models.getModel(modelChoice.provider, modelChoice.modelId);
           if (!model) {
@@ -254,6 +257,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               signal,
             },
             () => failureNotice(deps, runtime, current, context, error),
+            () => endCheckout(deps, current.input, String(current.id)),
           );
         try {
           const conversationId = checkpoint.conversationId as ConversationId;
@@ -344,6 +348,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               signal,
             },
             () => failureNotice(deps, runtime, current, context, error),
+            () => endCheckout(deps, current.input, String(current.id)),
           );
         let checkCompleted = false;
         try {
@@ -437,6 +442,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
             }),
             context,
           );
+          await endCheckout(deps, current.input, String(current.id));
         } catch (error) {
           if (context.abortSignal?.aborted) throw error instanceof Error ? error : new Error(String(error));
           if (error instanceof CheckUpdateError) {
@@ -446,6 +452,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               () => ({ status: "terminal", outcome: { status: "failed", error: { message: error.message } } }),
               context,
             );
+            await endCheckout(deps, current.input, String(current.id));
             return;
           }
           const published = checkpoint.published;
@@ -460,6 +467,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
               }),
               context,
             );
+            await endCheckout(deps, current.input, String(current.id));
             return;
           }
           await fail(error);
@@ -494,6 +502,7 @@ export function createReviewRuntime(deps: ReviewDeps): { extension: Extension; t
         }
       }
       await runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context);
+      await endCheckout(deps, current.input, String(current.id));
     },
   });
 
@@ -635,6 +644,7 @@ async function failOrAbort(
     signal: AbortSignal;
   },
   onFailed?: () => Promise<void>,
+  afterTerminal?: () => Promise<void>,
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   if (context.abortSignal?.aborted) throw error instanceof Error ? error : new Error(message);
@@ -659,6 +669,18 @@ async function failOrAbort(
     () => ({ status: "terminal", outcome: { status: "failed", error: { message } } }),
     context,
   );
+  await afterTerminal?.();
+}
+
+function endCheckout(deps: ReviewDeps, request: ReviewRequest, taskId: string): Promise<void> {
+  const finish = deps.onTaskEnded;
+  if (!finish) return Promise.resolve();
+  return finish(request, taskId).catch((error: unknown) => {
+    log("error", "could not remove checkout", {
+      error: error instanceof Error ? error.message : String(error),
+      taskId,
+    });
+  });
 }
 
 async function notifyFinished(deps: ReviewDeps, event: ReviewFinished): Promise<void> {

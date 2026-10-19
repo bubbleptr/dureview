@@ -33,7 +33,7 @@ import { verifyGithubSignature } from "./github/signature.js";
 import { parseWebhook, type ReviewCommand } from "./github/webhook.js";
 import { classifyFindingAdoption, findingThreadResolved } from "./review/adoption.js";
 import { log } from "./log.js";
-import { readBaseDureview, safeRepoPath, type RepoCheckout } from "./review/checkout.js";
+import { checkoutProtectionKey, readBaseDureview, safeRepoPath, type RepoCheckout } from "./review/checkout.js";
 import { loadReviewFilePair, matchReviewedFile, type ReviewFileContents } from "./ui/file-contents.js";
 import { ReviewArchive, REVIEWS_DB_FILE, type ReviewDetail, type ReviewFilter, type ReviewList } from "./review/archive.js";
 import type { StatsQuery, StatsSnapshot } from "./review/stats.js";
@@ -132,6 +132,7 @@ export class DureviewService {
           });
         }
       },
+      onTaskEnded: (request, taskId) => releaseReviewCheckout(options.checkout, archive, request, taskId),
     });
     const registry = createRegistry();
     registry.install(extension);
@@ -382,8 +383,8 @@ export class DureviewService {
     return this.archive.exists(taskId);
   }
 
-  /** Owner, repo, and head SHA of reviews whose checkout must not be deleted. */
-  runningCheckouts(): Promise<Array<{ owner: string; repo: string; sha: string }>> {
+  /** Reviews whose checkout must not be deleted. */
+  runningCheckouts(): Promise<Array<{ taskId: string; owner: string; repo: string; sha: string }>> {
     return this.archive.runningCheckouts();
   }
 
@@ -824,6 +825,29 @@ export class DureviewService {
       this.settings.close();
       this.archive.close();
     }
+  }
+}
+
+async function releaseReviewCheckout(
+  checkout: RepoCheckout,
+  archive: ReviewArchive,
+  request: ReviewRequest,
+  taskId: string,
+): Promise<void> {
+  if (!checkout.release) return;
+  const running = await archive.runningCheckouts();
+  const activeKeys = new Set(
+    running
+      .filter((item) => item.taskId !== taskId)
+      .map((item) => checkoutProtectionKey(item.owner, item.repo, item.sha)),
+  );
+  const removed = await checkout.release({ request, taskId, activeKeys });
+  if (removed) {
+    log("info", "removed checkout", {
+      repo: `${request.owner}/${request.repo}`,
+      sha: request.sha,
+      taskId,
+    });
   }
 }
 

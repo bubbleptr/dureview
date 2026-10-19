@@ -91,7 +91,7 @@ All of these live under `DUREVIEW_DATA_DIR`.
 | `session.sqlite` | Pi Durable session. |
 | `reviews.sqlite` | Review archive. Mode `0600`. A completed or failed review also stores its file list, including patches, in `pull_snapshots`. |
 | `reviews.json` | The last 50 reviews. No finding text, token counts, or failure reason. Mode `0600`. |
-| `checkouts/<owner>/<repo>/<sha>` | Working trees. Removed by the checkout TTL sweep. |
+| `checkouts/<owner>/<repo>/<sha>` | Working trees. Removed when the review finishes. The sweep removes unused trees older than one hour (or the checkout TTL, if shorter) and trims the oldest unused trees when the directory exceeds `DUREVIEW_CHECKOUT_MAX_BYTES`. |
 
 The web UI does not show the webhook secret, GitHub tokens, the App private key, or the contents of `auth.json`. An expired access token is still a login. pi-ai refreshes it on the next review.
 

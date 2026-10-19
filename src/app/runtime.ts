@@ -130,6 +130,7 @@ async function sweepCheckouts(service: DureviewService, config: Config): Promise
       root: join(config.dataDir, "checkouts"),
       ttlMs: service.checkoutTtlMs(),
       protectedKeys: new Set(running.map((item) => checkoutProtectionKey(item.owner, item.repo, item.sha))),
+      maxBytes: config.checkoutMaxBytes,
     });
     if (removed.length > 0) log("info", "removed old checkouts", { count: removed.length });
   } catch (error) {

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Context } from "@earendil-works/chord";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
-import type { Config } from "../src/config.js";
+import { DEFAULT_CHECKOUT_MAX_BYTES, type Config } from "../src/config.js";
 import {
   RequestChangesRejectedError,
   type CheckConclusion,
@@ -497,6 +497,7 @@ export function testConfig(dataDir: string): Config {
     uiToken: undefined,
     defaultTrigger: "manual",
     checkoutTtlDays: 30,
+    checkoutMaxBytes: DEFAULT_CHECKOUT_MAX_BYTES,
     maxOutputTokens: 16000,
   };
 }

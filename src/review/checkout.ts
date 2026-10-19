@@ -9,6 +9,15 @@ import { parseDureviewDocument, type PolicyDefaults, type ReviewPolicy, defaultP
 /** Same ceiling as the review grep skip: larger blobs stay hunk-only in the diff. */
 export const CHECKOUT_FILE_BYTES = 512 * 1024;
 
+/** Unused checkouts older than this are removed by the sweep even when the TTL is longer. */
+export const CHECKOUT_BACKSTOP_MS = 60 * 60 * 1000;
+
+export type CheckoutRelease = {
+  request: ReviewRequest;
+  taskId: string;
+  activeKeys: ReadonlySet<string>;
+};
+
 const SHA = /^[0-9a-fA-F]{7,64}$/;
 const SEGMENT = /^[A-Za-z0-9._-]+$/;
 
@@ -26,7 +35,9 @@ export type Checkout = {
 };
 
 export interface RepoCheckout {
-  prepare(request: ReviewRequest, signal: AbortSignal): Promise<Checkout>;
+  prepare(request: ReviewRequest, signal: AbortSignal, taskId?: string): Promise<Checkout>;
+  /** Drop this task's hold and delete the checkout when no other task still needs it. */
+  release?(input: CheckoutRelease): Promise<boolean>;
 }
 
 /**
@@ -38,6 +49,10 @@ export interface RepoCheckout {
  * can read either side. A directory that already has the head but has no `origin` remote is left as-is.
  */
 export class GitCheckout implements RepoCheckout {
+  #holders = new Map<string, Set<string>>();
+  /** One path is created or deleted at a time so concurrent reviews of the same SHA share the tree. */
+  #tails = new Map<string, Promise<void>>();
+
   constructor(
     private readonly github: GitHub,
     private readonly root: string,
@@ -45,33 +60,103 @@ export class GitCheckout implements RepoCheckout {
     private readonly policyDefaults: PolicyDefaults | (() => PolicyDefaults) = {},
   ) {}
 
-  async prepare(request: ReviewRequest, signal: AbortSignal): Promise<Checkout> {
+  async prepare(request: ReviewRequest, signal: AbortSignal, taskId?: string): Promise<Checkout> {
     const dir = path.join(this.root, request.owner, request.repo, request.sha);
-    await mkdir(path.dirname(dir), { recursive: true });
-    let header: string[] | undefined;
-    if (!(await headMatches(dir, request.sha, signal))) {
-      await rm(dir, { recursive: true, force: true });
-      await mkdir(dir, { recursive: true });
-      const token = await this.tokenFor(request, signal);
-      header = authHeader(token);
-      await git(dir, ["init"], signal);
-      await git(dir, ["remote", "add", "origin", request.cloneUrl], signal);
-      await git(dir, [...header, ...fileProtocolArgs(request.cloneUrl), "fetch", "--depth", "1", "origin", `pull/${request.number}/head`], signal);
-      await git(dir, ["checkout", "--detach", "FETCH_HEAD"], signal);
-      if (!(await headMatches(dir, request.sha, signal))) {
-        throw new Error(`Checked out ${request.owner}/${request.repo}#${request.number} but HEAD is not ${request.sha}.`);
+    const key = checkoutProtectionKey(request.owner, request.repo, request.sha);
+    await this.#exclusive(key, async () => {
+      if (taskId) this.#hold(key, taskId);
+      try {
+        await mkdir(path.dirname(dir), { recursive: true });
+        let header: string[] | undefined;
+        if (!(await headMatches(dir, request.sha, signal))) {
+          await rm(dir, { recursive: true, force: true });
+          await mkdir(dir, { recursive: true });
+          const token = await this.tokenFor(request, signal);
+          header = authHeader(token);
+          await git(dir, ["init"], signal);
+          await git(dir, ["remote", "add", "origin", request.cloneUrl], signal);
+          await git(
+            dir,
+            [...header, ...fileProtocolArgs(request.cloneUrl), "fetch", "--depth", "1", "origin", `pull/${request.number}/head`],
+            signal,
+          );
+          await git(dir, ["checkout", "--detach", "FETCH_HEAD"], signal);
+          if (!(await headMatches(dir, request.sha, signal))) {
+            throw new Error(`Checked out ${request.owner}/${request.repo}#${request.number} but HEAD is not ${request.sha}.`);
+          }
+        }
+        await ensureBaseCommit(dir, request, header, this.tokenFor, signal);
+        await utimes(dir, new Date(), new Date());
+      } catch (error) {
+        if (signal.aborted) throw error;
+        if (!isDiskFull(error)) throw error;
+        await this.#freeIfSole(key, dir, taskId);
+        throw new Error("disk full");
       }
-    }
-    await ensureBaseCommit(dir, request, header, this.tokenFor, signal);
-    await utimes(dir, new Date(), new Date());
+    });
     const diffText = await this.github.getPullDiff(request, signal);
     const { diff, truncated } = truncateDiff(diffText);
     const loaded = await readBaseDureview(this.github, request, signal, this.#defaults());
     return { dir, diff, truncated, rules: loaded.rules, policy: loaded.policy };
   }
 
+  async release(input: CheckoutRelease): Promise<boolean> {
+    const { request, taskId, activeKeys } = input;
+    const dir = checkoutDirectory(this.root, request.owner, request.repo, request.sha);
+    if (!dir) return false;
+    const key = checkoutProtectionKey(request.owner, request.repo, request.sha);
+    return this.#exclusive(key, async () => {
+      this.#drop(key, taskId);
+      if ((this.#holders.get(key)?.size ?? 0) > 0) return false;
+      if (activeKeys.has(key)) return false;
+      try {
+        await stat(dir);
+      } catch {
+        return false;
+      }
+      await rm(dir, { recursive: true, force: true });
+      return true;
+    });
+  }
+
   #defaults(): PolicyDefaults {
     return typeof this.policyDefaults === "function" ? this.policyDefaults() : this.policyDefaults;
+  }
+
+  #hold(key: string, taskId: string): void {
+    const held = this.#holders.get(key) ?? new Set<string>();
+    held.add(taskId);
+    this.#holders.set(key, held);
+  }
+
+  #drop(key: string, taskId: string): void {
+    const held = this.#holders.get(key);
+    if (!held) return;
+    held.delete(taskId);
+    if (held.size === 0) this.#holders.delete(key);
+  }
+
+  async #freeIfSole(key: string, dir: string, taskId: string | undefined): Promise<void> {
+    if (taskId) this.#drop(key, taskId);
+    if ((this.#holders.get(key)?.size ?? 0) > 0) return;
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  async #exclusive<T>(key: string, run: () => Promise<T>): Promise<T> {
+    const previous = this.#tails.get(key) ?? Promise.resolve();
+    let unlock = () => {};
+    const gate = new Promise<void>((resolve) => {
+      unlock = resolve;
+    });
+    const tail = previous.then(() => gate);
+    this.#tails.set(key, tail);
+    await previous;
+    try {
+      return await run();
+    } finally {
+      unlock();
+      if (this.#tails.get(key) === tail) this.#tails.delete(key);
+    }
   }
 }
 
@@ -153,9 +238,19 @@ export async function readCheckoutFile(dir: string, sha: string, filePath: strin
   return { kind: "text", text };
 }
 
+type CheckoutLeaf = {
+  label: string;
+  full: string;
+  mtimeMs: number;
+  bytes: number;
+  protected: boolean;
+};
+
 /**
- * Delete `<root>/<owner>/<repo>/<sha>` directories whose mtime is at least `ttlMs` old.
+ * Delete unused `<root>/<owner>/<repo>/<sha>` directories.
+ * A checkout goes when it is at least `ttlMs` old, or at least {@link CHECKOUT_BACKSTOP_MS} old.
  * `protectedKeys` are {@link checkoutProtectionKey} values for reviews that are still running.
+ * When `maxBytes` is set and the tree is larger, the oldest unused checkouts go first.
  * Symlinks are left in place. Missing roots delete nothing.
  */
 export async function cleanupCheckouts(input: {
@@ -163,34 +258,100 @@ export async function cleanupCheckouts(input: {
   ttlMs: number;
   now?: number;
   protectedKeys: ReadonlySet<string>;
+  maxBytes?: number;
 }): Promise<string[]> {
   const now = input.now ?? Date.now();
   const removed: string[] = [];
-  const owners = await childDirectories(input.root);
+  const leaves = await listCheckoutLeaves(input.root, input.protectedKeys);
+  let total = 0;
+  const inactive: CheckoutLeaf[] = [];
+  for (const leaf of leaves) {
+    total += leaf.bytes;
+    if (leaf.protected) continue;
+    const age = now - leaf.mtimeMs;
+    if (age >= input.ttlMs || age >= CHECKOUT_BACKSTOP_MS) {
+      if (await removeCheckout(leaf.full)) {
+        removed.push(leaf.label);
+        total -= leaf.bytes;
+      }
+      continue;
+    }
+    inactive.push(leaf);
+  }
+  if (input.maxBytes !== undefined && total > input.maxBytes) {
+    inactive.sort((left, right) => left.mtimeMs - right.mtimeMs);
+    for (const leaf of inactive) {
+      if (total <= input.maxBytes) break;
+      if (await removeCheckout(leaf.full)) {
+        removed.push(leaf.label);
+        total -= leaf.bytes;
+      }
+    }
+  }
+  return removed;
+}
+
+async function listCheckoutLeaves(root: string, protectedKeys: ReadonlySet<string>): Promise<CheckoutLeaf[]> {
+  const leaves: CheckoutLeaf[] = [];
+  const owners = await childDirectories(root);
   for (const owner of owners) {
-    const repos = await childDirectories(path.join(input.root, owner));
+    const repos = await childDirectories(path.join(root, owner));
     for (const repo of repos) {
-      const shas = await childDirectories(path.join(input.root, owner, repo));
+      const shas = await childDirectories(path.join(root, owner, repo));
       for (const sha of shas) {
-        if (input.protectedKeys.has(checkoutProtectionKey(owner, repo, sha))) continue;
-        const full = path.join(input.root, owner, repo, sha);
+        const full = path.join(root, owner, repo, sha);
         let mtimeMs: number;
         try {
           mtimeMs = (await stat(full)).mtimeMs;
         } catch {
           continue;
         }
-        if (now - mtimeMs < input.ttlMs) continue;
-        try {
-          await rm(full, { recursive: true, force: true });
-          removed.push(`${owner}/${repo}/${sha}`);
-        } catch {
-          // The next sweep retries a directory that is busy.
-        }
+        leaves.push({
+          label: `${owner}/${repo}/${sha}`,
+          full,
+          mtimeMs,
+          bytes: await directoryBytes(full),
+          protected: protectedKeys.has(checkoutProtectionKey(owner, repo, sha)),
+        });
       }
     }
   }
-  return removed;
+  return leaves;
+}
+
+async function directoryBytes(dir: string): Promise<number> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      total += await directoryBytes(full);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    try {
+      total += (await stat(full)).size;
+    } catch {
+      continue;
+    }
+  }
+  return total;
+}
+
+async function removeCheckout(full: string): Promise<boolean> {
+  try {
+    await rm(full, { recursive: true, force: true });
+    return true;
+  } catch {
+    // The next sweep retries a directory that is busy.
+    return false;
+  }
 }
 
 async function childDirectories(dir: string): Promise<string[]> {
@@ -229,7 +390,8 @@ async function originUrl(dir: string, signal: AbortSignal): Promise<string | nul
   try {
     const url = (await git(dir, ["remote", "get-url", "origin"], signal)).trim();
     return url.length > 0 ? url : null;
-  } catch {
+  } catch (error) {
+    if (isDiskFull(error)) throw error;
     return null;
   }
 }
@@ -252,7 +414,8 @@ async function headMatches(dir: string, sha: string, signal: AbortSignal): Promi
   try {
     const head = (await git(dir, ["rev-parse", "HEAD"], signal)).trim();
     return head === sha;
-  } catch {
+  } catch (error) {
+    if (isDiskFull(error)) throw error;
     return false;
   }
 }
@@ -263,35 +426,97 @@ function git(cwd: string, args: string[], signal: AbortSignal): Promise<string> 
       cwd,
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     });
     let stdout = "";
     let stderr = "";
+    let killedForDisk = false;
+    let settled = false;
+    const stopChild = () => {
+      // git-remote helpers inherit the pipes. Killing only the parent leaves `close` pending.
+      const pid = child.pid;
+      if (pid) {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      } else {
+        child.kill("SIGKILL");
+      }
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    };
+    const finish = (error: Error | undefined, value = "") => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const capture = (into: "out" | "err", chunk: string) => {
+      if (settled) return;
+      if (into === "out") stdout += chunk;
+      else stderr += chunk;
+      if (!killedForDisk && into === "err" && isDiskFullText(stderr)) {
+        killedForDisk = true;
+        stopChild();
+      }
+    };
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
+      capture("out", chunk);
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      capture("err", chunk);
     });
-    const onAbort = () => child.kill("SIGKILL");
+    const onAbort = () => stopChild();
     signal.addEventListener("abort", onAbort, { once: true });
     child.on("error", (error) => {
-      signal.removeEventListener("abort", onAbort);
-      reject(error);
+      if (isDiskFull(error)) {
+        finish(new Error("disk full"));
+        return;
+      }
+      finish(error);
+    });
+    child.on("exit", () => {
+      if (killedForDisk || isDiskFullText(stderr)) {
+        stopChild();
+        finish(new Error("disk full"));
+        return;
+      }
+      if (signal.aborted) {
+        const reason = signal.reason;
+        finish(reason instanceof Error ? reason : new Error("aborted"));
+      }
     });
     child.on("close", (code) => {
-      signal.removeEventListener("abort", onAbort);
+      if (killedForDisk || isDiskFullText(stderr)) {
+        finish(new Error("disk full"));
+        return;
+      }
       if (signal.aborted) {
-        reject(signal.reason ?? new Error("aborted"));
+        const reason = signal.reason;
+        finish(reason instanceof Error ? reason : new Error("aborted"));
         return;
       }
       if (code === 0) {
-        resolve(stdout);
+        finish(undefined, stdout);
         return;
       }
       const command = args.filter((arg) => !arg.includes("AUTHORIZATION")).slice(0, 6).join(" ");
-      reject(new Error(`git ${command} failed (${code}): ${stderr.slice(0, 400)}`));
+      finish(new Error(`git ${command} failed (${code}): ${stderr.slice(0, 400)}`));
     });
   });
+}
+
+function isDiskFull(error: unknown): boolean {
+  if (error instanceof Error && error.message === "disk full") return true;
+  if ((error as NodeJS.ErrnoException).code === "ENOSPC") return true;
+  return isDiskFullText(error instanceof Error ? error.message : String(error));
+}
+
+function isDiskFullText(text: string): boolean {
+  return text.includes("ENOSPC") || text.toLowerCase().includes("no space left on device");
 }

@@ -19,6 +19,8 @@ export const DEFAULT_SKIP_DRAFTS = false;
 
 export const DEFAULT_CHECKOUT_TTL_DAYS = 30;
 
+export const DEFAULT_CHECKOUT_MAX_BYTES = 1024 * 1024 * 1024;
+
 export const DEFAULT_MAX_OUTPUT_TOKENS = 16_000;
 
 export const DEFAULT_PROVIDER = "openai-codex" as const;
@@ -46,8 +48,10 @@ export type Config = {
    * `auto` and `once` opt the whole server in. `manual` waits for `/dureview`.
    */
   defaultTrigger: ReviewTrigger;
-  /** Checkouts older than this are deleted. `0` deletes every checkout that no review is using. */
+  /** Checkouts older than this are deleted. `0` deletes every checkout that no review is using. The sweep also deletes unused checkouts after one hour. */
   checkoutTtlDays: number;
+  /** Delete oldest unused checkouts when `checkouts/` exceeds this many bytes. */
+  checkoutMaxBytes: number;
   maxOutputTokens: number;
 };
 
@@ -86,6 +90,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     uiToken: emptyToUndefined(env.DUREVIEW_UI_TOKEN)?.trim(),
     defaultTrigger: baseline.defaultTrigger ?? BUILTIN_DEFAULT_TRIGGER,
     checkoutTtlDays: baseline.checkoutTtlDays ?? DEFAULT_CHECKOUT_TTL_DAYS,
+    checkoutMaxBytes: checkoutMaxBytesFromEnv(env.DUREVIEW_CHECKOUT_MAX_BYTES),
     maxOutputTokens: baseline.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
   };
 }
@@ -161,6 +166,19 @@ function maxOutputTokensFromEnv(value: string | undefined): number | undefined {
     throw new Error(`DUREVIEW_MAX_OUTPUT_TOKENS must be a positive integer, got ${value}.`);
   }
   return tokens;
+}
+
+function checkoutMaxBytesFromEnv(value: string | undefined): number {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "") return DEFAULT_CHECKOUT_MAX_BYTES;
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`DUREVIEW_CHECKOUT_MAX_BYTES must be a non-negative integer, got ${value}.`);
+  }
+  const bytes = Number(trimmed);
+  if (!Number.isSafeInteger(bytes)) {
+    throw new Error(`DUREVIEW_CHECKOUT_MAX_BYTES must be a non-negative integer, got ${value}.`);
+  }
+  return bytes;
 }
 
 function checkoutTtlFromEnv(value: string | undefined): number | undefined {

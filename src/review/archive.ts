@@ -776,18 +776,19 @@ export class ReviewArchive {
   }
 
   /** Checkouts a review is still using. Cleanup skips these directories. */
-  runningCheckouts(): Promise<Array<{ owner: string; repo: string; sha: string }>> {
+  runningCheckouts(): Promise<Array<{ taskId: string; owner: string; repo: string; sha: string }>> {
     return this.#exclusive(() => {
-      const rows = this.#database().prepare("SELECT owner, repo, sha FROM reviews WHERE outcome = 'running'").all();
-      const keys: Array<{ owner: string; repo: string; sha: string }> = [];
+      const rows = this.#database().prepare("SELECT task_id, owner, repo, sha FROM reviews WHERE outcome = 'running'").all();
+      const keys: Array<{ taskId: string; owner: string; repo: string; sha: string }> = [];
       for (const row of rows) {
         if (!row || typeof row !== "object") continue;
         const record = row as Record<string, SQLOutputValue>;
+        const taskId = str(record, "task_id");
         const owner = str(record, "owner");
         const repo = str(record, "repo");
         const sha = str(record, "sha");
-        if (!owner || !repo || !sha) continue;
-        keys.push({ owner, repo, sha });
+        if (!taskId || !owner || !repo || !sha) continue;
+        keys.push({ taskId, owner, repo, sha });
       }
       return keys;
     });
