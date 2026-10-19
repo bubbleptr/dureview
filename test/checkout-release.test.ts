@@ -167,6 +167,66 @@ describe("checkout removed when the review finishes", () => {
     await expect(stat(abortedDir)).rejects.toThrow();
     await expect(stat(liveDir)).resolves.toBeTruthy();
   });
+
+  it("keeps a legacy checkout while a live task of that sha is running", async () => {
+    const dataDir = await tempDataDir();
+    const root = join(dataDir, "checkouts");
+    const template = await seedTemplate("export const legacy = 1;\n");
+    const github = new MemoryGitHub();
+    const inner = new GitCheckout(github, root, async () => undefined);
+    let markStarted = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const checkout: RepoCheckout = {
+      prepare: async (request, signal, taskId) => {
+        await placeTemplate(root, request, taskId, template.dir);
+        const prepared = await inner.prepare(request, signal, taskId);
+        markStarted();
+        await new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), { once: true });
+        });
+        return prepared;
+      },
+      release: (input) => inner.release(input),
+    };
+    const { service } = await openTestService({ dataDir, github, checkout, responses: [] });
+    closers.push(() => service.close());
+
+    const queued = await service.enqueue(reviewRequest(template.sha));
+    await started;
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const legacy = join(root, "acme", "demo", template.sha);
+    const otherSha = "b".repeat(40);
+    const other = join(root, "acme", "demo", otherSha);
+    await mkdir(legacy, { recursive: true });
+    await writeFile(join(legacy, "blob"), "keep");
+    await utimes(legacy, old, old);
+    await mkdir(other, { recursive: true });
+    await writeFile(join(other, "blob"), "drop");
+    await utimes(other, old, old);
+
+    const sweep = () =>
+      cleanupCheckouts({
+        root,
+        ttlMs: 30 * 24 * 60 * 60 * 1000,
+        maxBytes: 1,
+        taskIsLive: (taskId) => service.checkoutTaskIsLive(taskId),
+        legacyIsLive: (candidate) => service.legacyCheckoutIsLive(candidate),
+      });
+    const removed = await sweep();
+
+    expect(removed).toContain(`acme/demo/${otherSha}`);
+    await expect(stat(legacy)).resolves.toBeTruthy();
+    await expect(stat(other)).rejects.toThrow();
+
+    await service.harness.abortTask(queued.taskId, BACKGROUND_CONTEXT);
+    const settled = await service.wait(queued.taskId);
+    expect(settled.state.outcome.status).toBe("aborted");
+    const removedAfter = await sweep();
+    expect(removedAfter).toContain(`acme/demo/${template.sha}`);
+    await expect(stat(legacy)).rejects.toThrow();
+  });
 });
 
 function checkoutDir(root: string, sha: string, taskId: string | number): string {

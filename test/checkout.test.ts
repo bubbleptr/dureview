@@ -100,6 +100,32 @@ describe("base branch .dureview.md", () => {
     expect(await git(prepared.dir, ["show", `${baseSha}:src/pay.ts`])).toBe("export const price = 1;\n");
     expect(await git(prepared.dir, ["show", `${headSha}:src/pay.ts`])).toBe("export const price = 2;\n");
   });
+
+  it("checks out a commit whose subject contains ENOSPC", async () => {
+    const parent = await tempDataDir();
+    const remote = join(parent, "remote.git");
+    const work = join(parent, "work");
+    await git(parent, ["init", "--bare", "-b", "main", remote]);
+    await mkdir(work, { recursive: true });
+    await git(work, ["init", "-b", "main"]);
+    await writeFile(join(work, "README.md"), "hello\n");
+    await git(work, ["add", "README.md"]);
+    await git(work, ["commit", "-m", "ENOSPC: No space left on device"]);
+    const headSha = (await git(work, ["rev-parse", "HEAD"])).trim();
+    await git(work, ["remote", "add", "origin", remote]);
+    await git(work, ["push", "origin", "HEAD:refs/heads/main"]);
+    await git(work, ["push", "origin", "HEAD:refs/pull/7/head"]);
+
+    const root = await tempDataDir();
+    const checkout = new GitCheckout(new MemoryGitHub(), root, async () => undefined);
+    const prepared = await checkout.prepare(
+      { ...reviewRequest(headSha), baseSha: headSha, cloneUrl: remote },
+      AbortSignal.timeout(20_000),
+    );
+
+    expect((await git(prepared.dir, ["rev-parse", "HEAD"])).trim()).toBe(headSha);
+    expect((await git(prepared.dir, ["log", "-1", "--format=%s"])).trim()).toBe("ENOSPC: No space left on device");
+  });
 });
 
 describe("checkout lifetime", () => {

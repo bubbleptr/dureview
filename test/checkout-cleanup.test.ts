@@ -1,7 +1,7 @@
 import { mkdir, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { cleanupCheckouts, taskStatusIsLive } from "../src/review/checkout.js";
+import { cleanupCheckouts, taskStatusIsLive, taskUsesLegacyCheckout } from "../src/review/checkout.js";
 import { tempDataDir } from "./support.js";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -139,6 +139,43 @@ describe("checkout cleanup", () => {
     expect(checks[0]).toBe("live-task");
     await expect(stat(join(root, "acme", "demo", `${newest}-new-task`))).resolves.toBeTruthy();
     await expect(stat(join(root, "acme", "demo", `${running}-live-task`))).resolves.toBeTruthy();
+  });
+
+  it("keeps a legacy sha directory only while a live task still matches it", async () => {
+    const root = await tempDataDir();
+    const sha = "a".repeat(40);
+    const other = "b".repeat(40);
+    await plant(root, sha, 10, Date.now() - 2 * 60 * 60 * 1000);
+    await plant(root, other, 10, Date.now() - 2 * 60 * 60 * 1000);
+    const asked: string[] = [];
+
+    const removed = await cleanupCheckouts({
+      root,
+      ttlMs: 30 * DAY,
+      taskIsLive: async () => false,
+      legacyIsLive: async (checkout) => {
+        asked.push(checkout.sha);
+        return checkout.sha === sha && checkout.owner === "acme" && checkout.repo === "demo";
+      },
+    });
+
+    const legacy = { owner: "acme", repo: "demo", sha, full: join(root, "acme", "demo", sha) };
+    expect(
+      taskUsesLegacyCheckout(
+        {
+          input: { owner: "other", repo: "demo", sha: "f".repeat(40) },
+          state: { status: "running", checkpoint: { checkoutDir: legacy.full } },
+        },
+        legacy,
+      ),
+    ).toBe(true);
+    expect(taskUsesLegacyCheckout({ input: { owner: "acme", repo: "demo", sha }, state: { status: "terminal" } }, legacy)).toBe(
+      false,
+    );
+    expect(new Set(asked)).toEqual(new Set([sha, other]));
+    expect(removed).toEqual([`acme/demo/${other}`]);
+    await expect(stat(join(root, "acme", "demo", sha))).resolves.toBeTruthy();
+    await expect(stat(join(root, "acme", "demo", other))).rejects.toThrow();
   });
 
   it("reads liveness again immediately before the size-cap delete", async () => {

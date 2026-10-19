@@ -15,7 +15,7 @@ export const CHECKOUT_BACKSTOP_MS = 60 * 60 * 1000;
 const SHA = /^[0-9a-fA-F]{7,64}$/;
 const SEGMENT = /^[A-Za-z0-9._-]+$/;
 const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
-const CHECKOUT_DIR = /^[0-9a-fA-F]{7,64}(?:-([A-Za-z0-9_-]{1,64}))?$/;
+const CHECKOUT_DIR = /^([0-9a-fA-F]{7,64})(?:-([A-Za-z0-9_-]{1,64}))?$/;
 
 export type CheckoutFile =
   | { kind: "text"; text: string }
@@ -194,12 +194,51 @@ export async function readCheckoutFile(dir: string, sha: string, filePath: strin
   return { kind: "text", text };
 }
 
+export type LegacyCheckout = {
+  owner: string;
+  repo: string;
+  sha: string;
+  full: string;
+};
+
+export function taskUsesLegacyCheckout(
+  task: { readonly input: unknown; readonly state: { readonly status: string; readonly checkpoint?: unknown } },
+  checkout: LegacyCheckout,
+): boolean {
+  if (
+    task.state.status !== "pending" &&
+    task.state.status !== "running" &&
+    task.state.status !== "waiting" &&
+    task.state.status !== "completing"
+  ) {
+    return false;
+  }
+  const identity = reviewIdentity(task.input);
+  if (identity?.owner === checkout.owner && identity.repo === checkout.repo && identity.sha === checkout.sha) return true;
+  const cwd = recordedCheckoutDir(task.state.checkpoint);
+  return cwd !== undefined && path.resolve(cwd) === path.resolve(checkout.full);
+}
+
+function reviewIdentity(value: unknown): { owner: string; repo: string; sha: string } | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  if (!("owner" in value) || !("repo" in value) || !("sha" in value)) return undefined;
+  const { owner, repo, sha } = value;
+  if (typeof owner !== "string" || typeof repo !== "string" || typeof sha !== "string") return undefined;
+  return { owner, repo, sha };
+}
+
+function recordedCheckoutDir(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || !("checkoutDir" in value)) return undefined;
+  return typeof value.checkoutDir === "string" ? value.checkoutDir : undefined;
+}
+
 type CheckoutLeaf = {
   label: string;
   full: string;
   mtimeMs: number;
   bytes: number;
   taskId: string | null;
+  legacy: LegacyCheckout | null;
 };
 
 /**
@@ -207,7 +246,8 @@ type CheckoutLeaf = {
  * A checkout goes when it is at least `ttlMs` old, or at least {@link CHECKOUT_BACKSTOP_MS} old.
  * When `maxBytes` is set and the tree is still larger, the oldest checkouts go first.
  * `taskIsLive` is read for that directory's task immediately before each delete.
- * A terminal task, including an aborted one, does not keep its directory. A directory with no task id does not either.
+ * A terminal task, including an aborted one, does not keep its directory.
+ * A `<sha>` directory from the previous layout is kept only when `legacyIsLive` says a live task's cwd or sha still matches it.
  * Symlinks are left in place. Missing roots delete nothing.
  */
 export async function cleanupCheckouts(input: {
@@ -216,6 +256,7 @@ export async function cleanupCheckouts(input: {
   now?: number;
   maxBytes?: number;
   taskIsLive: (taskId: string) => Promise<boolean>;
+  legacyIsLive?: (checkout: LegacyCheckout) => Promise<boolean>;
 }): Promise<string[]> {
   const now = input.now ?? Date.now();
   const removed: string[] = [];
@@ -229,7 +270,7 @@ export async function cleanupCheckouts(input: {
       remaining.push(leaf);
       continue;
     }
-    if (await deleteUnlessLive(leaf, input.taskIsLive)) {
+    if (await deleteUnlessLive(leaf, input.taskIsLive, input.legacyIsLive)) {
       removed.push(leaf.label);
       total -= leaf.bytes;
       continue;
@@ -240,7 +281,7 @@ export async function cleanupCheckouts(input: {
     remaining.sort((left, right) => left.mtimeMs - right.mtimeMs);
     for (const leaf of remaining) {
       if (total <= input.maxBytes) break;
-      if (await deleteUnlessLive(leaf, input.taskIsLive)) {
+      if (await deleteUnlessLive(leaf, input.taskIsLive, input.legacyIsLive)) {
         removed.push(leaf.label);
         total -= leaf.bytes;
       }
@@ -252,8 +293,10 @@ export async function cleanupCheckouts(input: {
 async function deleteUnlessLive(
   leaf: CheckoutLeaf,
   taskIsLive: (taskId: string) => Promise<boolean>,
+  legacyIsLive: ((checkout: LegacyCheckout) => Promise<boolean>) | undefined,
 ): Promise<boolean> {
   if (leaf.taskId !== null && (await taskIsLive(leaf.taskId))) return false;
+  if (leaf.taskId === null && leaf.legacy && legacyIsLive && (await legacyIsLive(leaf.legacy))) return false;
   return removeCheckout(leaf.full);
 }
 
@@ -272,12 +315,14 @@ async function listCheckoutLeaves(root: string): Promise<CheckoutLeaf[]> {
         } catch {
           continue;
         }
+        const parsed = parseCheckoutName(name);
         leaves.push({
           label: `${owner}/${repo}/${name}`,
           full,
           mtimeMs,
           bytes: await directoryBytes(full),
-          taskId: taskIdFromCheckoutName(name),
+          taskId: parsed?.taskId ?? null,
+          legacy: parsed?.taskId === null && parsed.sha ? { owner, repo, sha: parsed.sha, full } : null,
         });
       }
     }
@@ -285,8 +330,10 @@ async function listCheckoutLeaves(root: string): Promise<CheckoutLeaf[]> {
   return leaves;
 }
 
-function taskIdFromCheckoutName(name: string): string | null {
-  return CHECKOUT_DIR.exec(name)?.[1] ?? null;
+function parseCheckoutName(name: string): { sha: string; taskId: string | null } | null {
+  const match = CHECKOUT_DIR.exec(name);
+  if (!match?.[1]) return null;
+  return { sha: match[1], taskId: match[2] ?? null };
 }
 
 async function directoryBytes(dir: string): Promise<number> {
@@ -428,7 +475,7 @@ function git(cwd: string, args: string[], signal: AbortSignal): Promise<string> 
       if (settled) return;
       if (into === "out") stdout += chunk;
       else stderr += chunk;
-      if (!killedForDisk && into === "err" && isDiskFullText(stderr)) {
+      if (!killedForDisk && into === "err" && diskFullGitError(stderr)) {
         killedForDisk = true;
         stopChild();
       }
@@ -450,8 +497,9 @@ function git(cwd: string, args: string[], signal: AbortSignal): Promise<string> 
       }
       finish(error);
     });
-    child.on("exit", () => {
-      if (killedForDisk || isDiskFullText(stderr)) {
+    child.on("exit", (code) => {
+      if (code === 0) return;
+      if (killedForDisk || diskFullGitError(stderr)) {
         stopChild();
         finish(new Error("disk full"));
         return;
@@ -462,7 +510,7 @@ function git(cwd: string, args: string[], signal: AbortSignal): Promise<string> 
       }
     });
     child.on("close", (code) => {
-      if (killedForDisk || isDiskFullText(stderr)) {
+      if (code !== 0 && (killedForDisk || diskFullGitError(stderr))) {
         finish(new Error("disk full"));
         return;
       }
@@ -483,10 +531,13 @@ function git(cwd: string, args: string[], signal: AbortSignal): Promise<string> 
 
 function isDiskFull(error: unknown): boolean {
   if (error instanceof Error && error.message === "disk full") return true;
-  if ((error as NodeJS.ErrnoException).code === "ENOSPC") return true;
-  return isDiskFullText(error instanceof Error ? error.message : String(error));
+  return (error as NodeJS.ErrnoException).code === "ENOSPC";
 }
 
-function isDiskFullText(text: string): boolean {
-  return text.includes("ENOSPC") || text.toLowerCase().includes("no space left on device");
+function diskFullGitError(stderr: string): boolean {
+  return stderr.split(/\r?\n/).some((line) => {
+    const text = line.trim();
+    if (!/^(fatal|error):/i.test(text)) return false;
+    return text.includes("ENOSPC") || text.toLowerCase().includes("no space left on device");
+  });
 }

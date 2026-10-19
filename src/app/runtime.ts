@@ -130,6 +130,7 @@ async function sweepCheckouts(service: DureviewService, config: Config): Promise
       ttlMs: service.checkoutTtlMs(),
       maxBytes: config.checkoutMaxBytes,
       taskIsLive: (taskId) => service.checkoutTaskIsLive(taskId),
+      legacyIsLive: (checkout) => service.legacyCheckoutIsLive(checkout),
     });
     if (removed.length > 0) log("info", "removed old checkouts", { count: removed.length });
   } catch (error) {
