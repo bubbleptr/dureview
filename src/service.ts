@@ -75,12 +75,21 @@ export type WebhookResponse = { status: number; body: Record<string, unknown> };
 /** GitHub does not redeliver a 500. The checkout sweep retries a stored close this many times. */
 export const ADOPTION_RETRY_CAP = 5;
 
+const CLOSE_RECONCILE_BATCH = 50;
+
+/**
+ * An open pull is not read again until this elapses.
+ * The checkout sweep is six hours, so the next sweep skips it.
+ */
+const OPEN_PULL_RECHECK_MS = 12 * 60 * 60 * 1000;
+
 const GITHUB_SETUP_BUSY = "GitHub setup is already finishing. Start it again from settings.";
 
 export class DureviewService {
   #githubState: { state: string; expires: number } | null = null;
   #githubExchange = false;
   #githubNotice: string | null = null;
+  #openPullsCheckedAt = new Map<string, number>();
 
   private constructor(
     readonly harness: Harness,
@@ -687,10 +696,11 @@ export class DureviewService {
   }
 
   /**
-   * Classify stored closes that still have unset posted comments.
-   * Startup and the checkout sweep call this. Each failure counts toward ADOPTION_RETRY_CAP.
+   * Backfill closes that never arrived, then classify stored closes that still have unset posted comments.
+   * Startup and the checkout sweep call this. Each classification failure counts toward ADOPTION_RETRY_CAP.
    */
   async retryClosedAdoption(): Promise<void> {
+    await this.#reconcileMissingCloses();
     const pending = await this.archive.closesAwaitingAdoption(ADOPTION_RETRY_CAP);
     for (const closed of pending) {
       const { owner, repo, number } = closed.request;
@@ -706,6 +716,78 @@ export class DureviewService {
         });
       }
       await this.archive.noteCloseAttempt(owner, repo, number);
+    }
+  }
+
+  /**
+   * pull_request.closed is the only event that stores a close. This records the same row when GitHub
+   * says the pull is already closed. A reopened pull stays without a row while GitHub says it is open.
+   */
+  async #reconcileMissingCloses(): Promise<void> {
+    let pulls;
+    try {
+      pulls = await this.archive.pullsMissingClose();
+    } catch (error) {
+      log("error", "could not list pulls missing a close", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    const now = Date.now();
+    const due = pulls
+      .filter((pull) => {
+        const checked = this.#openPullsCheckedAt.get(pullKey(pull));
+        return checked === undefined || now - checked >= OPEN_PULL_RECHECK_MS;
+      })
+      .sort(
+        (left, right) =>
+          (this.#openPullsCheckedAt.get(pullKey(left)) ?? 0) - (this.#openPullsCheckedAt.get(pullKey(right)) ?? 0),
+      )
+      .slice(0, CLOSE_RECONCILE_BATCH);
+    for (const pull of due) {
+      const key = pullKey(pull);
+      try {
+        const remote = await this.github.getPull(
+          { owner: pull.owner, repo: pull.repo, installationId: pull.installationId },
+          pull.number,
+          AbortSignal.timeout(20_000),
+        );
+        if (remote.state === "open") {
+          this.#openPullsCheckedAt.set(key, now);
+          continue;
+        }
+        const cloneUrl = pullCloneUrl(this.config.githubApiUrl, pull.owner, pull.repo);
+        if (!cloneUrl) {
+          log("error", "could not reconcile pull close", {
+            repo: `${pull.owner}/${pull.repo}`,
+            pr: pull.number,
+            error: "clone url is not https",
+          });
+          continue;
+        }
+        await this.archive.rememberClosedPull(
+          {
+            owner: pull.owner,
+            repo: pull.repo,
+            number: pull.number,
+            sha: remote.sha,
+            baseSha: remote.baseSha,
+            baseRef: remote.baseRef,
+            title: remote.title,
+            cloneUrl,
+            installationId: pull.installationId,
+            draft: remote.draft,
+          },
+          remote.merged,
+        );
+        this.#openPullsCheckedAt.delete(key);
+      } catch (error) {
+        log("error", "could not reconcile pull close", {
+          repo: `${pull.owner}/${pull.repo}`,
+          pr: pull.number,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
@@ -875,6 +957,17 @@ function numericTaskId(taskId: string): TaskId | undefined {
   const id = Number(taskId);
   if (!Number.isSafeInteger(id)) return undefined;
   return id as TaskId;
+}
+
+function pullKey(pull: { owner: string; repo: string; number: number }): string {
+  return `${pull.owner}/${pull.repo}#${pull.number}`;
+}
+
+function pullCloneUrl(apiUrl: string, owner: string, repo: string): string | null {
+  const origin = githubWebOrigin(apiUrl);
+  if (!origin?.startsWith("https://")) return null;
+  const url = `${origin}/${owner}/${repo}.git`;
+  return url.length <= 500 ? url : null;
 }
 
 function reviewedRevision(

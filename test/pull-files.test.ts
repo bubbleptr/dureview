@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { COMPARE_FILE_CAP, GithubRest, parsePullFiles } from "../src/github/client.js";
-import { reviewRequest, tempDataDir, testConfig } from "./support.js";
+import { BASE_SHA, reviewRequest, SHA_B, tempDataDir, testConfig } from "./support.js";
 
 describe("pull request files", () => {
   afterEach(() => {
@@ -197,4 +197,40 @@ describe("pull request files", () => {
     ]);
     await expect(client.listReviewComments(reviewRequest(), signal, { threads: "required" })).rejects.toThrow(/thread lookup down/);
   });
+
+  it("reads whether a pull request is open, closed, or merged", async () => {
+    const config = testConfig(await tempDataDir());
+    config.githubToken = "ghp_test";
+    const client = new GithubRest(config);
+    const bodies = [
+      pullBody("closed", true),
+      pullBody("closed", false),
+      pullBody("open", false),
+    ];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(bodies.shift()));
+    const signal = new AbortController().signal;
+    await expect(client.getPull(reviewRequest(), 7, signal)).resolves.toMatchObject({
+      state: "closed",
+      merged: true,
+      sha: SHA_B,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+    });
+    await expect(client.getPull(reviewRequest(), 7, signal)).resolves.toMatchObject({ state: "closed", merged: false });
+    await expect(client.getPull(reviewRequest(), 7, signal)).resolves.toMatchObject({ state: "open", merged: false });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(pullBody("open", false, { state: "weird" })));
+    await expect(client.getPull(reviewRequest(), 7, signal)).rejects.toThrow(/state/);
+  });
 });
+
+function pullBody(state: string, merged: boolean, extra: { state?: string } = {}): Record<string, unknown> {
+  return {
+    number: 7,
+    title: "Charge",
+    draft: false,
+    state: extra.state ?? state,
+    merged,
+    head: { sha: SHA_B },
+    base: { sha: BASE_SHA, ref: "main" },
+  };
+}
