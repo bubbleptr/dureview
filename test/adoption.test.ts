@@ -958,7 +958,7 @@ describe("missed close reconciliation", () => {
     const { service } = await openTestService({ dataDir, github, responses: [] });
     await expect(service.retryClosedAdoption()).resolves.toBeUndefined();
     await expect(service.retryClosedAdoption()).resolves.toBeUndefined();
-    expect(github.pullReads).toHaveLength(2);
+    expect(github.pullReads).toHaveLength(1);
     await service.close();
 
     const check = new DatabaseSync(file, { readOnly: true });
@@ -993,6 +993,77 @@ describe("missed close reconciliation", () => {
       merged: false,
     };
     expect((await deliver(service, pullPayload(SHA_B, "reopened"))).status).toBe(200);
+    await service.retryClosedAdoption();
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    expect(check.prepare("SELECT COUNT(*) AS n FROM pull_closes").get()).toEqual({ n: 0 });
+    check.close();
+  });
+
+  it("does not let failed lookups fill the next batch", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    for (let number = 1; number <= 51; number += 1) {
+      const taskId = `p${number}`;
+      insertReview(db, taskId, SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z", number);
+      insertFinding(db, taskId, SHA_A, number.toString(16).padStart(12, "0"), "src/pay.ts", 2, 2, 1, null, number);
+    }
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.getPull = async (request, number) => {
+      github.calls.push("getPull");
+      github.pullReads.push({
+        owner: request.owner,
+        repo: request.repo,
+        number,
+        installationId: request.installationId,
+      });
+      if (number < 51) throw new Error("GitHub GET /repos/acme/demo/pulls failed (403)");
+      return closedRemote(true);
+    };
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    await service.retryClosedAdoption();
+    expect(github.pullReads.map((read) => read.number)).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+    await service.retryClosedAdoption();
+    expect(github.pullReads.map((read) => read.number)).toEqual([...Array.from({ length: 50 }, (_, index) => index + 1), 51]);
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT number, merged FROM pull_closes").get()).toEqual({ number: 51, merged: 1 });
+    check.close();
+  });
+
+  it("does not write a close when the pull is reopened during the lookup", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "race", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "race", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    github.getPull = async (request, number) => {
+      github.calls.push("getPull");
+      github.pullReads.push({
+        owner: request.owner,
+        repo: request.repo,
+        number,
+        installationId: request.installationId,
+      });
+      await deliver(service, pullPayload(SHA_B, "reopened"));
+      return closedRemote(true);
+    };
     await service.retryClosedAdoption();
     await service.close();
 

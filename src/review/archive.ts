@@ -625,18 +625,21 @@ export class ReviewArchive {
   /**
    * Remember a closed pull request so a review that archives later can still be classified.
    * A later close replaces the head SHA. Already-written adoption outcomes stay put.
+   * `current` runs in the archive lock, before the insert. A lifecycle webhook bumps its epoch
+   * before queueing on that lock, so this write cannot restore a close the webhook already dropped.
    */
-  rememberClosedPull(request: ReviewRequest, merged: boolean): Promise<void> {
-    if (!NAME.test(request.owner) || !NAME.test(request.repo)) return Promise.resolve();
-    if (!Number.isInteger(request.number) || request.number < 1) return Promise.resolve();
+  rememberClosedPull(request: ReviewRequest, merged: boolean, current?: () => boolean): Promise<boolean> {
+    if (!NAME.test(request.owner) || !NAME.test(request.repo)) return Promise.resolve(false);
+    if (!Number.isInteger(request.number) || request.number < 1) return Promise.resolve(false);
     const sha = request.sha.trim().toLowerCase();
     const baseSha = request.baseSha.trim().toLowerCase();
-    if (!COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha)) return Promise.resolve();
+    if (!COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha)) return Promise.resolve(false);
     const cloneUrl = request.cloneUrl.trim();
-    if (!cloneUrl.startsWith("https://") || cloneUrl.length > 500) return Promise.resolve();
+    if (!cloneUrl.startsWith("https://") || cloneUrl.length > 500) return Promise.resolve(false);
     const installationId = cleanInstallation(request.installationId);
     const closedAt = new Date().toISOString();
     return this.#exclusive(() => {
+      if (current && !current()) return false;
       this.#database()
         .prepare(
           `INSERT INTO pull_closes (
@@ -667,6 +670,7 @@ export class ReviewArchive {
           merged ? 1 : 0,
           closedAt,
         );
+      return true;
     });
   }
 
