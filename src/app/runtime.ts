@@ -6,7 +6,7 @@ import { activeGitHub, activeWebhookSecret } from "../github/access.js";
 import { GitHubAppFile } from "../github/app-file.js";
 import { GithubRest } from "../github/client.js";
 import { log } from "../log.js";
-import { checkoutProtectionKey, cleanupCheckouts, GitCheckout } from "../review/checkout.js";
+import { cleanupCheckouts, GitCheckout } from "../review/checkout.js";
 import { DureviewService } from "../service.js";
 import { modelChoiceError } from "../settings/validate.js";
 import type { ListContext } from "../ui/list-data.js";
@@ -125,11 +125,12 @@ async function openRuntime(): Promise<AppRuntime> {
 
 async function sweepCheckouts(service: DureviewService, config: Config): Promise<void> {
   try {
-    const running = await service.runningCheckouts();
     const removed = await cleanupCheckouts({
       root: join(config.dataDir, "checkouts"),
       ttlMs: service.checkoutTtlMs(),
-      protectedKeys: new Set(running.map((item) => checkoutProtectionKey(item.owner, item.repo, item.sha))),
+      maxBytes: config.checkoutMaxBytes,
+      taskIsLive: (taskId) => service.checkoutTaskIsLive(taskId),
+      legacyIsLive: (checkout) => service.legacyCheckoutIsLive(checkout),
     });
     if (removed.length > 0) log("info", "removed old checkouts", { count: removed.length });
   } catch (error) {

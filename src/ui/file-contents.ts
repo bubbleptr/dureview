@@ -65,6 +65,7 @@ export async function loadReviewFilePair(input: {
   installationId: number | null;
   sha: string;
   baseSha: string;
+  taskId?: string;
   path: string;
   previousPath: string | null;
   signal: AbortSignal;
@@ -73,7 +74,7 @@ export async function loadReviewFilePair(input: {
   const oldPath = input.previousPath && input.previousPath !== newPath ? input.previousPath : newPath;
   if (!safeRepoPath(newPath) || !safeRepoPath(oldPath)) return { kind: "unavailable" };
 
-  const dir = checkoutDirectory(input.checkoutRoot, input.owner, input.repo, input.sha);
+  const dir = checkoutDirectory(input.checkoutRoot, input.owner, input.repo, input.sha, input.taskId);
   const [headPresent, basePresent] = dir
     ? await Promise.all([
         checkoutCommitExists(dir, input.sha, input.signal),

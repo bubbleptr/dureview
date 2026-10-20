@@ -69,7 +69,7 @@ const FIELD_META: Record<SettingKey, { label: string; envName: string; help: str
   checkoutTtlDays: {
     label: "Checkout TTL",
     envName: "DUREVIEW_CHECKOUT_TTL_DAYS",
-    help: "Delete checkouts older than this many days. 0 deletes every checkout no review is using. The next sweep picks this up.",
+    help: "Finished reviews delete their checkout. The sweep also deletes unused checkouts older than this many days, and any unused checkout older than one hour. 0 deletes every unused checkout.",
   },
   maxOutputTokens: {
     label: "Max output tokens",

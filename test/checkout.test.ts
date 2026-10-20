@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GitCheckout } from "../src/review/checkout.js";
@@ -100,7 +100,113 @@ describe("base branch .dureview.md", () => {
     expect(await git(prepared.dir, ["show", `${baseSha}:src/pay.ts`])).toBe("export const price = 1;\n");
     expect(await git(prepared.dir, ["show", `${headSha}:src/pay.ts`])).toBe("export const price = 2;\n");
   });
+
+  it("checks out a commit whose subject contains ENOSPC", async () => {
+    const parent = await tempDataDir();
+    const remote = join(parent, "remote.git");
+    const work = join(parent, "work");
+    await git(parent, ["init", "--bare", "-b", "main", remote]);
+    await mkdir(work, { recursive: true });
+    await git(work, ["init", "-b", "main"]);
+    await writeFile(join(work, "README.md"), "hello\n");
+    await git(work, ["add", "README.md"]);
+    await git(work, ["commit", "-m", "ENOSPC: No space left on device"]);
+    const headSha = (await git(work, ["rev-parse", "HEAD"])).trim();
+    await git(work, ["remote", "add", "origin", remote]);
+    await git(work, ["push", "origin", "HEAD:refs/heads/main"]);
+    await git(work, ["push", "origin", "HEAD:refs/pull/7/head"]);
+
+    const root = await tempDataDir();
+    const checkout = new GitCheckout(new MemoryGitHub(), root, async () => undefined);
+    const prepared = await checkout.prepare(
+      { ...reviewRequest(headSha), baseSha: headSha, cloneUrl: remote },
+      AbortSignal.timeout(20_000),
+    );
+
+    expect((await git(prepared.dir, ["rev-parse", "HEAD"])).trim()).toBe(headSha);
+    expect((await git(prepared.dir, ["log", "-1", "--format=%s"])).trim()).toBe("ENOSPC: No space left on device");
+  });
 });
+
+describe("checkout lifetime", () => {
+  it("deletes one task's checkout and leaves the other task's tree", async () => {
+    const root = await tempDataDir();
+    const sha = await seedMatchingCheckout(root, "task-a");
+    const request = reviewRequest(sha);
+    const dirA = join(root, "acme", "demo", `${sha}-task-a`);
+    const dirB = join(root, "acme", "demo", `${sha}-task-b`);
+    await cp(dirA, dirB, { recursive: true });
+    const github = new MemoryGitHub();
+    let releaseDiff = () => {};
+    const diffGate = new Promise<void>((resolve) => {
+      releaseDiff = resolve;
+    });
+    let markDiff = () => {};
+    const diffWaiting = new Promise<void>((resolve) => {
+      markDiff = resolve;
+    });
+    let opened = 0;
+    github.getPullDiff = async () => {
+      opened += 1;
+      if (opened === 2) markDiff();
+      await diffGate;
+      return "diff";
+    };
+    const checkout = new GitCheckout(github, root, async () => undefined);
+    const signal = AbortSignal.timeout(15_000);
+    const first = checkout.prepare(request, signal, "task-a");
+    const second = checkout.prepare(request, signal, "task-b");
+    await diffWaiting;
+    await expect(stat(dirA)).resolves.toBeTruthy();
+    await expect(stat(dirB)).resolves.toBeTruthy();
+    expect(await checkout.release({ request, taskId: "task-a" })).toBe(true);
+    await expect(stat(dirA)).rejects.toThrow();
+    await expect(stat(dirB)).resolves.toBeTruthy();
+    const restarted = new GitCheckout(github, root, async () => undefined);
+    expect(await restarted.release({ request, taskId: "task-b" })).toBe(true);
+    await expect(stat(dirB)).rejects.toThrow();
+    releaseDiff();
+    const [preparedA, preparedB] = await Promise.all([first, second]);
+    expect(preparedA.dir).toBe(dirA);
+    expect(preparedB.dir).toBe(dirB);
+    expect(await checkout.release({ request, taskId: "task-a" })).toBe(false);
+  });
+
+  it("fails with disk full instead of waiting when git runs out of space", async () => {
+    const root = await tempDataDir();
+    const bin = join(root, "bin");
+    await mkdir(bin);
+    await writeFile(join(bin, "git"), "#!/bin/sh\necho 'fatal: No space left on device' >&2\nsleep 60\nexit 128\n");
+    await chmod(join(bin, "git"), 0o755);
+    const previous = process.env.PATH;
+    process.env.PATH = `${bin}:${previous ?? ""}`;
+    const started = Date.now();
+    const dir = join(root, "checkouts", "acme", "demo", `${reviewRequest().sha}-task-disk`);
+    try {
+      const checkout = new GitCheckout(new MemoryGitHub(), join(root, "checkouts"), async () => undefined);
+      await expect(checkout.prepare(reviewRequest(), AbortSignal.timeout(15_000), "task-disk")).rejects.toThrow(
+        /disk full/,
+      );
+      expect(Date.now() - started).toBeLessThan(10_000);
+      await expect(stat(dir)).rejects.toThrow();
+    } finally {
+      process.env.PATH = previous;
+    }
+  });
+});
+
+async function seedMatchingCheckout(root: string, taskId?: string): Promise<string> {
+  const dir = join(root, "seed");
+  await mkdir(join(dir, "src"), { recursive: true });
+  await git(dir, ["init", "-b", "main"]);
+  await writeFile(join(dir, "src", "pay.ts"), "export const price = 1;\n");
+  await git(dir, ["add", "src/pay.ts"]);
+  await git(dir, ["commit", "-m", "init"]);
+  const sha = (await git(dir, ["rev-parse", "HEAD"])).trim();
+  await mkdir(join(root, "acme", "demo"), { recursive: true });
+  await rename(dir, join(root, "acme", "demo", taskId ? `${sha}-${taskId}` : sha));
+  return sha;
+}
 
 async function commitCheckout(): Promise<{ dir: string; sha: string }> {
   const parent = await tempDataDir();

@@ -198,7 +198,8 @@ Settings-page values use this order: a saved UI override, then the environment v
 | `GITHUB_TOKEN` | | Personal access token when the env app is unset. Wins over an app saved on the settings page. |
 | `GITHUB_API_URL` | `https://api.github.com` | API root for GitHub Enterprise. |
 | `DUREVIEW_UI_TOKEN` | | Enables the web UI. Unset leaves those paths at `404`. |
-| `DUREVIEW_CHECKOUT_TTL_DAYS` | `30` | Delete `checkouts/<owner>/<repo>/<sha>` older than this many days. `0` deletes every checkout no review is still using. The sweep runs at startup and every six hours. The settings page can override this. |
+| `DUREVIEW_CHECKOUT_TTL_DAYS` | `30` | Delete `checkouts/<owner>/<repo>/<sha>-<taskId>` older than this many days when that task is not running. Each review has its own checkout and deletes it when the task ends, including abort. The sweep also deletes any such checkout older than one hour, and `0` deletes every checkout with no running task. The sweep runs at startup and every six hours. The settings page can override this. |
+| `DUREVIEW_CHECKOUT_MAX_BYTES` | `1073741824` | When `checkouts/` is larger than this, the sweep deletes the oldest checkouts whose tasks are not running. A running task keeps its own directory. |
 
 Host, port, the data directory, and the UI token are not editable on the settings page. Saved API keys and the GitHub App private key are write-only: the page shows that they are configured, and a saved key or webhook secret shows its last four characters.
 

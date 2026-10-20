@@ -33,7 +33,14 @@ import { verifyGithubSignature } from "./github/signature.js";
 import { parseWebhook, type ReviewCommand } from "./github/webhook.js";
 import { classifyFindingAdoption, findingThreadResolved } from "./review/adoption.js";
 import { log } from "./log.js";
-import { readBaseDureview, safeRepoPath, type RepoCheckout } from "./review/checkout.js";
+import {
+  readBaseDureview,
+  safeRepoPath,
+  taskStatusIsLive,
+  taskUsesLegacyCheckout,
+  type LegacyCheckout,
+  type RepoCheckout,
+} from "./review/checkout.js";
 import { loadReviewFilePair, matchReviewedFile, type ReviewFileContents } from "./ui/file-contents.js";
 import { ReviewArchive, REVIEWS_DB_FILE, type ReviewDetail, type ReviewFilter, type ReviewList } from "./review/archive.js";
 import type { StatsQuery, StatsSnapshot } from "./review/stats.js";
@@ -132,6 +139,7 @@ export class DureviewService {
           });
         }
       },
+      onTaskEnded: (request, taskId) => releaseReviewCheckout(options.checkout, request, taskId),
     });
     const registry = createRegistry();
     registry.install(extension);
@@ -382,9 +390,31 @@ export class DureviewService {
     return this.archive.exists(taskId);
   }
 
-  /** Owner, repo, and head SHA of reviews whose checkout must not be deleted. */
-  runningCheckouts(): Promise<Array<{ owner: string; repo: string; sha: string }>> {
-    return this.archive.runningCheckouts();
+  /** A terminal durable task, including an aborted one, does not keep its checkout. */
+  async checkoutTaskIsLive(taskId: string): Promise<boolean> {
+    const id = numericTaskId(taskId);
+    if (id === undefined) return false;
+    const record = await this.harness.getTask(id, BACKGROUND_CONTEXT);
+    return taskStatusIsLive(record?.state.status);
+  }
+
+  /** A previous `<sha>` checkout is still in use when a live task's cwd or sha matches it. */
+  legacyCheckoutIsLive(checkout: LegacyCheckout): Promise<boolean> {
+    const statuses = ["pending", "running", "waiting", "completing"] as const;
+    return this.harness.commit(async (tx) => {
+      for (const status of statuses) {
+        let cursor: Parameters<typeof tx.scanTasks>[2];
+        for (;;) {
+          const page = await tx.scanTasks({ status }, 100, cursor);
+          for (const task of page.items) {
+            if (taskUsesLegacyCheckout(task, checkout)) return true;
+          }
+          if (!page.next) break;
+          cursor = page.next;
+        }
+      }
+      return false;
+    }, BACKGROUND_CONTEXT);
   }
 
   /**
@@ -418,6 +448,7 @@ export class DureviewService {
       installationId: review.installationId,
       sha: review.sha,
       baseSha: review.baseSha,
+      taskId: review.taskId,
       path: matched.path,
       previousPath: matched.previousPath,
       signal,
@@ -825,6 +856,25 @@ export class DureviewService {
       this.archive.close();
     }
   }
+}
+
+async function releaseReviewCheckout(checkout: RepoCheckout, request: ReviewRequest, taskId: string): Promise<void> {
+  if (!checkout.release) return;
+  const removed = await checkout.release({ request, taskId });
+  if (removed) {
+    log("info", "removed checkout", {
+      repo: `${request.owner}/${request.repo}`,
+      sha: request.sha,
+      taskId,
+    });
+  }
+}
+
+function numericTaskId(taskId: string): TaskId | undefined {
+  if (!/^[0-9]{1,15}$/.test(taskId)) return undefined;
+  const id = Number(taskId);
+  if (!Number.isSafeInteger(id)) return undefined;
+  return id as TaskId;
 }
 
 function reviewedRevision(
