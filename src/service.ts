@@ -75,12 +75,29 @@ export type WebhookResponse = { status: number; body: Record<string, unknown> };
 /** GitHub does not redeliver a 500. The checkout sweep retries a stored close this many times. */
 export const ADOPTION_RETRY_CAP = 5;
 
+const CLOSE_RECONCILE_BATCH = 50;
+
+/**
+ * An open pull is not read again until this elapses.
+ * The checkout sweep is six hours, so the next sweep skips it.
+ */
+const OPEN_PULL_RECHECK_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * A failed lookup uses a shorter wait than an open pull.
+ * It still leaves the batch, so a dead repository does not fill every sweep.
+ */
+const CLOSE_LOOKUP_BACKOFF_MS = 60 * 60 * 1000;
+
 const GITHUB_SETUP_BUSY = "GitHub setup is already finishing. Start it again from settings.";
 
 export class DureviewService {
   #githubState: { state: string; expires: number } | null = null;
   #githubExchange = false;
   #githubNotice: string | null = null;
+  #pullReads = new Map<string, { at: number; backoffMs: number }>();
+  /** Bumped when a pull lifecycle webhook arrives, so an in-flight read cannot write afterwards. */
+  #pullEpoch = new Map<string, number>();
 
   private constructor(
     readonly harness: Harness,
@@ -585,6 +602,7 @@ export class DureviewService {
     if (parsed.kind === "ping") return { status: 200, body: { ok: true } };
     if (parsed.kind === "ignore") return { status: 200, body: { ignored: true, reason: parsed.reason } };
     if (parsed.kind === "command") return this.#command(parsed.command);
+    if (parsed.kind === "closed" || parsed.kind === "review") this.#notePullLifecycle(parsed.request);
     if (parsed.kind === "closed") return this.#classifyAdoption(parsed.request, parsed.merged, "webhook");
     return this.#pullRequest(parsed.request, parsed.action);
   }
@@ -687,10 +705,11 @@ export class DureviewService {
   }
 
   /**
-   * Classify stored closes that still have unset posted comments.
-   * Startup and the checkout sweep call this. Each failure counts toward ADOPTION_RETRY_CAP.
+   * Backfill closes that never arrived, then classify stored closes that still have unset posted comments.
+   * Startup and the checkout sweep call this. Each classification failure counts toward ADOPTION_RETRY_CAP.
    */
   async retryClosedAdoption(): Promise<void> {
+    await this.#reconcileMissingCloses();
     const pending = await this.archive.closesAwaitingAdoption(ADOPTION_RETRY_CAP);
     for (const closed of pending) {
       const { owner, repo, number } = closed.request;
@@ -707,6 +726,99 @@ export class DureviewService {
       }
       await this.archive.noteCloseAttempt(owner, repo, number);
     }
+  }
+
+  /**
+   * pull_request.closed is the only event that stores a close. This records the same row when GitHub
+   * says the pull is already closed. A reopened pull stays without a row while GitHub says it is open.
+   */
+  async #reconcileMissingCloses(): Promise<void> {
+    let pulls;
+    try {
+      pulls = await this.archive.pullsMissingClose();
+    } catch (error) {
+      log("error", "could not list pulls missing a close", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    const now = Date.now();
+    const due = pulls
+      .filter((pull) => this.#pullReadDue(pullKey(pull), now))
+      .sort((left, right) => this.#pullReadAt(pullKey(left)) - this.#pullReadAt(pullKey(right)))
+      .slice(0, CLOSE_RECONCILE_BATCH);
+    for (const pull of due) {
+      const key = pullKey(pull);
+      const epoch = this.#pullEpoch.get(key) ?? 0;
+      try {
+        const remote = await this.github.getPull(
+          { owner: pull.owner, repo: pull.repo, installationId: pull.installationId },
+          pull.number,
+          AbortSignal.timeout(20_000),
+        );
+        if (remote.state === "open") {
+          this.#notePullRead(key, now, OPEN_PULL_RECHECK_MS);
+          continue;
+        }
+        const cloneUrl = pullCloneUrl(this.config.githubApiUrl, pull.owner, pull.repo);
+        if (!cloneUrl) {
+          this.#notePullRead(key, now, CLOSE_LOOKUP_BACKOFF_MS);
+          log("error", "could not reconcile pull close", {
+            repo: `${pull.owner}/${pull.repo}`,
+            pr: pull.number,
+            error: "clone url is not https",
+          });
+          continue;
+        }
+        const request = {
+          owner: pull.owner,
+          repo: pull.repo,
+          number: pull.number,
+          sha: remote.sha,
+          baseSha: remote.baseSha,
+          baseRef: remote.baseRef,
+          title: remote.title,
+          cloneUrl,
+          installationId: pull.installationId,
+          draft: remote.draft,
+        };
+        const wrote = await this.archive.rememberClosedPull(
+          request,
+          remote.merged,
+          () => (this.#pullEpoch.get(key) ?? 0) === epoch,
+        );
+        if (wrote) {
+          this.#pullReads.delete(key);
+          continue;
+        }
+        if ((this.#pullEpoch.get(key) ?? 0) === epoch) this.#notePullRead(key, now, CLOSE_LOOKUP_BACKOFF_MS);
+      } catch (error) {
+        this.#notePullRead(key, now, CLOSE_LOOKUP_BACKOFF_MS);
+        log("error", "could not reconcile pull close", {
+          repo: `${pull.owner}/${pull.repo}`,
+          pr: pull.number,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  #notePullLifecycle(pull: { owner: string; repo: string; number: number }): void {
+    const key = pullKey(pull);
+    this.#pullEpoch.set(key, (this.#pullEpoch.get(key) ?? 0) + 1);
+  }
+
+  #notePullRead(key: string, now: number, backoffMs: number): void {
+    this.#pullReads.set(key, { at: now, backoffMs });
+  }
+
+  #pullReadAt(key: string): number {
+    return this.#pullReads.get(key)?.at ?? 0;
+  }
+
+  #pullReadDue(key: string, now: number): boolean {
+    const read = this.#pullReads.get(key);
+    return read === undefined || now - read.at >= read.backoffMs;
   }
 
   /** A review that finishes after the pull request closed still gets an adoption outcome. */
@@ -875,6 +987,17 @@ function numericTaskId(taskId: string): TaskId | undefined {
   const id = Number(taskId);
   if (!Number.isSafeInteger(id)) return undefined;
   return id as TaskId;
+}
+
+function pullKey(pull: { owner: string; repo: string; number: number }): string {
+  return `${pull.owner}/${pull.repo}#${pull.number}`;
+}
+
+function pullCloneUrl(apiUrl: string, owner: string, repo: string): string | null {
+  const origin = githubWebOrigin(apiUrl);
+  if (!origin?.startsWith("https://")) return null;
+  const url = `${origin}/${owner}/${repo}.git`;
+  return url.length <= 500 ? url : null;
 }
 
 function reviewedRevision(

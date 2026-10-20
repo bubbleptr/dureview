@@ -390,6 +390,8 @@ function remote(sha: string, draft = false): RemotePull {
     sha,
     baseSha: BASE_SHA,
     baseRef: "main",
+    state: "open",
+    merged: false,
   };
 }
 

@@ -122,6 +122,13 @@ export type ReviewList = {
   total: number;
 };
 
+type PullMissingClose = {
+  owner: string;
+  repo: string;
+  number: number;
+  installationId: number | null;
+};
+
 type Identity = { taskId: string; owner: string; repo: string; number: number };
 
 /**
@@ -618,18 +625,21 @@ export class ReviewArchive {
   /**
    * Remember a closed pull request so a review that archives later can still be classified.
    * A later close replaces the head SHA. Already-written adoption outcomes stay put.
+   * `current` runs in the archive lock, before the insert. A lifecycle webhook bumps its epoch
+   * before queueing on that lock, so this write cannot restore a close the webhook already dropped.
    */
-  rememberClosedPull(request: ReviewRequest, merged: boolean): Promise<void> {
-    if (!NAME.test(request.owner) || !NAME.test(request.repo)) return Promise.resolve();
-    if (!Number.isInteger(request.number) || request.number < 1) return Promise.resolve();
+  rememberClosedPull(request: ReviewRequest, merged: boolean, current?: () => boolean): Promise<boolean> {
+    if (!NAME.test(request.owner) || !NAME.test(request.repo)) return Promise.resolve(false);
+    if (!Number.isInteger(request.number) || request.number < 1) return Promise.resolve(false);
     const sha = request.sha.trim().toLowerCase();
     const baseSha = request.baseSha.trim().toLowerCase();
-    if (!COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha)) return Promise.resolve();
+    if (!COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha)) return Promise.resolve(false);
     const cloneUrl = request.cloneUrl.trim();
-    if (!cloneUrl.startsWith("https://") || cloneUrl.length > 500) return Promise.resolve();
+    if (!cloneUrl.startsWith("https://") || cloneUrl.length > 500) return Promise.resolve(false);
     const installationId = cleanInstallation(request.installationId);
     const closedAt = new Date().toISOString();
     return this.#exclusive(() => {
+      if (current && !current()) return false;
       this.#database()
         .prepare(
           `INSERT INTO pull_closes (
@@ -660,6 +670,7 @@ export class ReviewArchive {
           merged ? 1 : 0,
           closedAt,
         );
+      return true;
     });
   }
 
@@ -724,6 +735,52 @@ export class ReviewArchive {
           "UPDATE pull_closes SET classify_attempts = classify_attempts + 1 WHERE owner = ? AND repo = ? AND number = ?",
         )
         .run(owner, repo, number);
+    });
+  }
+
+  /**
+   * Posted comments that have no adoption outcome and no stored close.
+   * Oldest finding first, so a backlog is reconciled before newer open pulls.
+   */
+  pullsMissingClose(): Promise<PullMissingClose[]> {
+    return this.#exclusive(() => {
+      const rows = this.#database()
+        .prepare(
+          `SELECT f.owner AS owner, f.repo AS repo, f.number AS number,
+                  (
+                    SELECT r.installation_id
+                    FROM reviews r
+                    WHERE r.owner = f.owner AND r.repo = f.repo AND r.number = f.number
+                      AND r.installation_id IS NOT NULL
+                    ORDER BY r.started_at DESC
+                    LIMIT 1
+                  ) AS installation_id
+           FROM findings f
+           WHERE f.posted = 1
+             AND f.skip_reason IS NULL
+             AND f.adoption IS NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM pull_closes c
+               WHERE c.owner = f.owner AND c.repo = f.repo AND c.number = f.number
+             )
+           GROUP BY f.owner, f.repo, f.number
+           ORDER BY MIN(f.id)`,
+        )
+        .all();
+      const pulls: PullMissingClose[] = [];
+      for (const row of rows) {
+        const owner = str(row, "owner");
+        const repo = str(row, "repo");
+        const number = int(row, "number");
+        if (!NAME.test(owner) || !NAME.test(repo) || number < 1) continue;
+        pulls.push({
+          owner,
+          repo,
+          number,
+          installationId: cleanInstallation(numOrNull(row, "installation_id")),
+        });
+      }
+      return pulls;
     });
   }
 

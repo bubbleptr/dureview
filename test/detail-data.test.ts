@@ -668,6 +668,8 @@ function head(sha: string, baseSha: string = BASE_SHA): RemotePull {
     sha,
     baseSha,
     baseRef: "main",
+    state: "open",
+    merged: false,
   };
 }
 

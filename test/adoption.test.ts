@@ -841,8 +841,11 @@ describe("adoption webhook", () => {
 
     const { service } = await openTestService({ dataDir, github: new MemoryGitHub(), responses: [] });
     const model = await buildStatsPage(service, new URLSearchParams("range=all"));
+    const zh = await buildStatsPage(service, new URLSearchParams("range=all"), Date.now(), "zh-CN");
     await service.close();
     expect(model.adoptionCards.find((card) => card.label === "Pending")?.value).toBe("1");
+    expect(model.adoptionCards.find((card) => card.label === "Pending")?.detail).toBe("On an open pull request");
+    expect(zh.adoptionCards.find((card) => card.label === "待定")?.detail).toBe("所在 PR 仍打开");
     expect(model.unclassifiedNote).toBe(
       "1 unclassified. The pull request is closed and the outcome could not be decided. Not in the rate.",
     );
@@ -850,9 +853,248 @@ describe("adoption webhook", () => {
       createElement(I18nProvider, { locale: "en" }, createElement(OverviewPage, { model })),
     );
     expect(html).toContain("1 unclassified.");
-    expect(html).toContain("Still open");
+    expect(html).toContain("On an open pull request");
   });
 });
+
+describe("missed close reconciliation", () => {
+  it("backfills a closed pull and classifies its posted findings", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "missed", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "missed", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.prepare("UPDATE reviews SET installation_id = 99 WHERE task_id = 'missed'").run();
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.remotePull = closedRemote(true);
+    github.compared = [diffFile("src/pay.ts", "modified", deleteLine(2))];
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    await service.retryClosedAdoption();
+    const reads = github.pullReads.length;
+    await service.retryClosedAdoption();
+    expect(github.pullReads).toHaveLength(reads);
+    expect(github.pullReads[0]).toEqual({ owner: "acme", repo: "demo", number: 7, installationId: 99 });
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption, adoption_head FROM findings").get()).toEqual({
+      adoption: "adopted",
+      adoption_head: SHA_B,
+    });
+    expect(
+      check.prepare("SELECT sha, merged, installation_id, clone_url, classify_attempts FROM pull_closes").get(),
+    ).toEqual({
+      sha: SHA_B,
+      merged: 1,
+      installation_id: 99,
+      clone_url: "https://github.com/acme/demo.git",
+      classify_attempts: 0,
+    });
+    check.close();
+  });
+
+  it("leaves findings pending when the pull request is still open", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "open", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "open", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.prepare("UPDATE reviews SET installation_id = 99 WHERE task_id = 'open'").run();
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.remotePull = {
+      number: 7,
+      title: "Charge",
+      draft: false,
+      sha: SHA_A,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      state: "open",
+      merged: false,
+    };
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    await service.retryClosedAdoption();
+    await service.retryClosedAdoption();
+    expect(github.pullReads).toHaveLength(1);
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    expect(check.prepare("SELECT COUNT(*) AS n FROM pull_closes").get()).toEqual({ n: 0 });
+    check.close();
+  });
+
+  it("does not crash when the pull request lookup fails", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "down", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "down", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.getPull = async (request, number) => {
+      github.calls.push("getPull");
+      github.pullReads.push({
+        owner: request.owner,
+        repo: request.repo,
+        number,
+        installationId: request.installationId,
+      });
+      throw new Error("GitHub GET /repos/acme/demo/pulls/7 failed (502)");
+    };
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    await expect(service.retryClosedAdoption()).resolves.toBeUndefined();
+    await expect(service.retryClosedAdoption()).resolves.toBeUndefined();
+    expect(github.pullReads).toHaveLength(1);
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    expect(check.prepare("SELECT COUNT(*) AS n FROM pull_closes").get()).toEqual({ n: 0 });
+    check.close();
+  });
+
+  it("does not restore a close after reopen when GitHub says the pull is open", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "reopened", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "reopened", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.threadError = new Error("GitHub GraphQL response had no data.");
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    expect((await deliver(service, closedPayload(SHA_B))).status).toBe(500);
+    github.remotePull = {
+      number: 7,
+      title: "Charge",
+      draft: false,
+      sha: SHA_B,
+      baseSha: BASE_SHA,
+      baseRef: "main",
+      state: "open",
+      merged: false,
+    };
+    expect((await deliver(service, pullPayload(SHA_B, "reopened"))).status).toBe(200);
+    await service.retryClosedAdoption();
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    expect(check.prepare("SELECT COUNT(*) AS n FROM pull_closes").get()).toEqual({ n: 0 });
+    check.close();
+  });
+
+  it("does not let failed lookups fill the next batch", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    for (let number = 1; number <= 51; number += 1) {
+      const taskId = `p${number}`;
+      insertReview(db, taskId, SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z", number);
+      insertFinding(db, taskId, SHA_A, number.toString(16).padStart(12, "0"), "src/pay.ts", 2, 2, 1, null, number);
+    }
+    db.close();
+
+    const github = new MemoryGitHub();
+    github.getPull = async (request, number) => {
+      github.calls.push("getPull");
+      github.pullReads.push({
+        owner: request.owner,
+        repo: request.repo,
+        number,
+        installationId: request.installationId,
+      });
+      if (number < 51) throw new Error("GitHub GET /repos/acme/demo/pulls failed (403)");
+      return closedRemote(true);
+    };
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    await service.retryClosedAdoption();
+    expect(github.pullReads.map((read) => read.number)).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+    await service.retryClosedAdoption();
+    expect(github.pullReads.map((read) => read.number)).toEqual([...Array.from({ length: 50 }, (_, index) => index + 1), 51]);
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT number, merged FROM pull_closes").get()).toEqual({ number: 51, merged: 1 });
+    check.close();
+  });
+
+  it("does not write a close when the pull is reopened during the lookup", async () => {
+    const dataDir = await tempDataDir();
+    const file = join(dataDir, "reviews.sqlite");
+    const archive = new ReviewArchive(file);
+    await archive.open();
+    archive.close();
+    const db = new DatabaseSync(file);
+    insertReview(db, "race", SHA_A, "2026-10-12T00:00:00.000Z", "2026-10-12T00:00:10.000Z");
+    insertFinding(db, "race", SHA_A, "aaaaaaaaaaaa", "src/pay.ts", 2, 2, 1, null);
+    db.close();
+
+    const github = new MemoryGitHub();
+    const { service } = await openTestService({ dataDir, github, responses: [] });
+    github.getPull = async (request, number) => {
+      github.calls.push("getPull");
+      github.pullReads.push({
+        owner: request.owner,
+        repo: request.repo,
+        number,
+        installationId: request.installationId,
+      });
+      await deliver(service, pullPayload(SHA_B, "reopened"));
+      return closedRemote(true);
+    };
+    await service.retryClosedAdoption();
+    await service.close();
+
+    const check = new DatabaseSync(file, { readOnly: true });
+    expect(check.prepare("SELECT adoption FROM findings").get()).toEqual({ adoption: null });
+    expect(check.prepare("SELECT COUNT(*) AS n FROM pull_closes").get()).toEqual({ n: 0 });
+    check.close();
+  });
+});
+
+function closedRemote(merged: boolean): {
+  number: number;
+  title: string;
+  draft: boolean;
+  sha: string;
+  baseSha: string;
+  baseRef: string;
+  state: "closed";
+  merged: boolean;
+} {
+  return {
+    number: 7,
+    title: "Charge",
+    draft: false,
+    sha: SHA_B,
+    baseSha: BASE_SHA,
+    baseRef: "main",
+    state: "closed",
+    merged,
+  };
+}
 
 function diffFile(filename: string, status: string, patch: string | null): AdoptionDiffFile {
   return { filename, previousFilename: null, status, patch };

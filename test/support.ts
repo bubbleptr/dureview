@@ -335,9 +335,16 @@ export class MemoryGitHub implements GitHub {
   }
 
   pullQueue: RemotePull[] = [];
+  pullReads: Array<{ owner: string; repo: string; number: number; installationId: number | null }> = [];
 
-  async getPull(): Promise<RemotePull> {
+  async getPull(request: GitHubRepo, number: number): Promise<RemotePull> {
     this.calls.push("getPull");
+    this.pullReads.push({
+      owner: request.owner,
+      repo: request.repo,
+      number,
+      installationId: request.installationId,
+    });
     const queued = this.pullQueue.shift();
     const pull = queued ?? this.remotePull;
     if (!pull) throw new Error("pull is not configured");

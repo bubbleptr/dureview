@@ -304,6 +304,8 @@ describe("check run on a review", () => {
       sha: SHA_A,
       baseSha: "1111111111111111111111111111111111111111",
       baseRef: "main",
+      state: "open",
+      merged: false,
     };
     github.permissions.set("alice", "write");
     const { service } = await start({
@@ -513,6 +515,8 @@ describe("check run on a review", () => {
       sha: SHA_A,
       baseSha: "1111111111111111111111111111111111111111",
       baseRef: "main",
+      state: "open",
+      merged: false,
     };
     github.permissions.set("alice", "write");
     let prepares = 0;

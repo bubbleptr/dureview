@@ -38,7 +38,7 @@ export type RemotePull = {
   sha: string;
   baseSha: string;
   baseRef: string;
-};
+} & ({ state: "open"; merged: false } | { state: "closed"; merged: boolean });
 
 /** A pull request review comment, joined with its GraphQL review thread when that lookup succeeds. */
 export type PullReviewComment = {
@@ -804,7 +804,11 @@ function parseRemotePull(payload: unknown, number: number): RemotePull {
   if (payload.number !== number || !COMMIT_SHA.test(sha) || !COMMIT_SHA.test(baseSha) || !isBranchRef(baseRef)) {
     throw new Error(`GitHub pull request ${number} was missing a head SHA or base branch.`);
   }
-  return { number, title, draft, sha, baseSha, baseRef };
+  const merged = payload.merged === true;
+  const pull = { number, title, draft, sha, baseSha, baseRef };
+  if (payload.state === "closed" || merged) return { ...pull, state: "closed", merged };
+  if (payload.state === "open") return { ...pull, state: "open", merged: false };
+  throw new Error(`GitHub pull request ${number} was missing a state.`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

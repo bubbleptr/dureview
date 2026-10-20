@@ -182,6 +182,8 @@ describe("status page", () => {
       sha: SHA_A,
       baseSha: BASE_SHA,
       baseRef: "main",
+      state: "open",
+      merged: false,
     };
     github.pullFiles = [
       {
