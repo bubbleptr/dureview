@@ -35,11 +35,15 @@ describe("diff style cookie", () => {
   it("renders the saved split layout on the server", async () => {
     const html = await renderDetailHtml(detailModel(), "en", "/ui/reviews/shot1", "split");
     expect(html).toContain("grid-cols-2");
+    expect(html).toContain("overflow-x-auto");
+    expect(html).toContain("whitespace-pre");
     expect(html).toContain("old");
     expect(html).toContain("added");
     expect(html).not.toContain("whitespace-pre-wrap");
+    expect(html).not.toContain("overflow-hidden whitespace-pre");
     const unified = await renderDetailHtml(detailModel(), "en", "/ui/reviews/shot1", "unified");
     expect(unified).not.toContain("grid-cols-2");
+    expect(unified).toContain("overflow-x-auto");
     expect(unified).toContain("old");
   });
 

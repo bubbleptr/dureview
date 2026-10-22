@@ -695,11 +695,12 @@ function useReviewColumns() {
 
 function useStoredWidth(key: string, fallback: number, max: number): [number, (value: number) => void] {
   const [width, setWidth] = useState(() => (widthsReady ? readStoredWidth(key, fallback, max) : fallback));
+  // Width is omitted: a failed write must not restore the previous value while dragging.
   useLayoutEffect(() => {
     widthsReady = true;
     const next = readStoredWidth(key, fallback, max);
-    if (next !== width) setWidth(next);
-  }, [key, fallback, max, width]);
+    setWidth((current) => (current === next ? current : next));
+  }, [key, fallback, max]);
   return [
     width,
     (value) => {
@@ -790,13 +791,13 @@ function PlainLines({ lines, diffStyle }: { lines: DetailLineView[]; diffStyle: 
 
 function UnifiedPlain({ lines }: { lines: DetailLineView[] }) {
   return (
-    <div className="py-2 font-mono text-[13px] leading-5">
+    <div className="overflow-x-auto overflow-y-clip py-2 font-mono text-[13px] leading-5">
       {lines.map((line, index) =>
         line.kind === "hunk" ? null : (
           <Fragment key={`${line.kind}-${line.newLabel}-${line.oldLabel}-${index}`}>
             <PlainCodeRow line={line} label={line.oldLabel} secondLabel={line.newLabel} />
             {line.comments.map((comment) => (
-              <div key={comment.ordinal} className="flow-root">
+              <div key={comment.ordinal} className="sticky left-0 w-full flow-root">
                 <CommentCard comment={comment} inset />
               </div>
             ))}
@@ -811,21 +812,28 @@ function SplitPlain({ lines }: { lines: DetailLineView[] }) {
   const rows = splitCodeRows(lines);
   return (
     <div className="grid grid-cols-2 py-2 font-mono text-[13px] leading-5">
-      {rows.map((row, index) => (
-        <Fragment key={index}>
-          <div className="border-r border-border">
+      <div className="min-w-0 overflow-x-auto overflow-y-clip border-r border-border">
+        {rows.map((row, index) => (
+          <Fragment key={index}>
             <SplitCodeRow line={row.left} label={row.left?.oldLabel ?? ""} />
-          </div>
-          <div>
+            {row.right?.comments.map((comment) => (
+              <SplitAlignSpacer key={comment.ordinal} comment={comment} />
+            ))}
+          </Fragment>
+        ))}
+      </div>
+      <div className="min-w-0 overflow-x-auto overflow-y-clip">
+        {rows.map((row, index) => (
+          <Fragment key={index}>
             <SplitCodeRow line={row.right} label={row.right?.newLabel ?? ""} />
             {row.right?.comments.map((comment) => (
-              <div key={comment.ordinal} className="flow-root">
+              <div key={comment.ordinal} className="sticky left-0 w-full flow-root">
                 <CommentCard comment={comment} inset />
               </div>
             ))}
-          </div>
-        </Fragment>
-      ))}
+          </Fragment>
+        ))}
+      </div>
     </div>
   );
 }
@@ -833,11 +841,22 @@ function SplitPlain({ lines }: { lines: DetailLineView[] }) {
 function PlainCodeRow({ line, label, secondLabel }: { line: DetailLineView; label: string; secondLabel: string }) {
   const tone = line.severity === null ? "" : (LINE_BOX[line.severity] ?? "");
   return (
-    <div className={`grid h-5 grid-cols-[3rem_3rem_1rem_minmax(0,1fr)] items-center gap-1 pr-3 ${tone}`}>
-      <span className="text-right text-muted-foreground tabular-nums">{label}</span>
-      <span className="text-right text-muted-foreground tabular-nums">{secondLabel}</span>
-      <span className="text-muted-foreground">{line.mark}</span>
-      <code className="overflow-hidden whitespace-pre">{line.text}</code>
+    <div className={`flex h-5 w-max min-w-full items-center gap-1 pr-3 ${tone}`}>
+      <span className="sticky left-0 z-[1] flex h-5 shrink-0 items-center bg-background">
+        <span className={`w-12 text-right text-muted-foreground tabular-nums ${tone}`}>{label}</span>
+        <span className={`w-12 text-right text-muted-foreground tabular-nums ${tone}`}>{secondLabel}</span>
+        <span className={`w-4 text-center text-muted-foreground ${tone}`}>{line.mark}</span>
+      </span>
+      <code className="whitespace-pre">{line.text}</code>
+    </div>
+  );
+}
+
+// The hidden card keeps the deletion column as tall as the additions column, so the next lines stay paired.
+function SplitAlignSpacer({ comment }: { comment: DetailCommentView }) {
+  return (
+    <div className="invisible flow-root" aria-hidden="true">
+      <CommentCard comment={comment} inset spacer />
     </div>
   );
 }
@@ -846,9 +865,11 @@ function SplitCodeRow({ line, label }: { line: DetailLineView | null; label: str
   if (!line) return <div className="h-5" />;
   const tone = line.severity === null ? "" : (LINE_BOX[line.severity] ?? "");
   return (
-    <div className={`grid h-5 grid-cols-[3rem_minmax(0,1fr)] items-center gap-2 pr-3 ${tone}`}>
-      <span className="text-right text-muted-foreground tabular-nums">{label}</span>
-      <code className="overflow-hidden whitespace-pre">{line.text}</code>
+    <div className={`flex h-5 w-max min-w-full items-center gap-2 pr-3 ${tone}`}>
+      <span className="sticky left-0 z-[1] flex h-5 w-12 shrink-0 items-center justify-end bg-background">
+        <span className={`w-full text-right text-muted-foreground tabular-nums ${tone}`}>{label}</span>
+      </span>
+      <code className="whitespace-pre">{line.text}</code>
     </div>
   );
 }
@@ -865,12 +886,12 @@ function CommentGroup({ title, comments }: { title: string; comments: DetailComm
   );
 }
 
-function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: boolean }) {
+function CommentCard({ comment, inset, spacer = false }: { comment: DetailCommentView; inset?: boolean; spacer?: boolean }) {
   const { m } = useI18n();
   const accent = COMMENT_ACCENT[comment.priority] ?? COMMENT_ACCENT[3];
   return (
     <article
-      id={comment.anchor}
+      id={spacer ? undefined : comment.anchor}
       className={`my-2 rounded-md border border-border border-l-[3px] px-3 py-2.5 ${accent} ${inset ? "mr-3 ml-10" : "mx-3"}`}
     >
       <header className="mb-1 flex flex-wrap items-center gap-2">
