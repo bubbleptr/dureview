@@ -41,6 +41,8 @@ const browser = await chromium.launch({
   args: ["--no-sandbox", "--disable-dev-shm-usage"],
 });
 
+let measurementError;
+
 try {
   const version = browser.version();
   const fixtures = {};
@@ -82,9 +84,28 @@ try {
     bundles,
   };
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+} catch (error) {
+  measurementError = error;
 } finally {
-  await browser.close();
-  await server.close();
+  try {
+    await browser.close();
+    await closePreview(server);
+  } catch (error) {
+    measurementError ??= error;
+  }
+}
+if (measurementError) throw measurementError;
+
+async function closePreview(server) {
+  // Vite 8.3 PreviewServer.close() returns a promise. Node's http.Server.close only
+  // accepts a callback, so a preview object without close() cannot be awaited.
+  if (typeof server.close === "function") {
+    await server.close();
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    server.httpServer.close((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 async function measureFixture(name) {
