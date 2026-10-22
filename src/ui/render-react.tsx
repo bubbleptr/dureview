@@ -7,6 +7,7 @@ import { SettingsForm } from "../components/settings-form.js";
 import { OverviewPage } from "../components/stats-page.js";
 import type { SettingsPageModel } from "../settings/page.js";
 import type { SettingsSection } from "./settings-sections.js";
+import type { DiffStyle } from "./diff-style-pref.js";
 import type { ReviewDetailModel } from "./detail-model.js";
 import { I18nProvider } from "./i18n.js";
 import type { Locale } from "./locale.js";
@@ -37,8 +38,8 @@ export function renderSettingsHtml(
   return renderPage(locale, location, sectionDocumentTitle(section, locale), <SettingsForm model={model} status={status} section={section} />);
 }
 
-export function renderDetailHtml(model: ReviewDetailModel, locale: Locale = "en", location = "/ui"): string {
-  return renderPage(locale, location, model.pageTitle, <ReviewDetailView model={model} tree={reviewTreePreload(model.files)} />);
+export function renderDetailHtml(model: ReviewDetailModel, locale: Locale = "en", location = "/ui", diffStyle: DiffStyle = "unified"): string {
+  return renderPage(locale, location, model.pageTitle, <ReviewDetailView model={model} tree={reviewTreePreload(model.files)} diffStyle={diffStyle} />);
 }
 
 export function renderOverviewHtml(model: StatsPageModel, locale: Locale = "en", location = "/ui"): string {

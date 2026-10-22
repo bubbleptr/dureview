@@ -1,4 +1,13 @@
-import { canUseWASM, parsePatchFiles, type DiffLineAnnotation, type FileDiffMetadata, type ThemeTypes } from "@pierre/diffs";
+import {
+  canUseWASM,
+  DEFAULT_THEMES,
+  getFiletypeFromFileName,
+  parsePatchFiles,
+  type DiffLineAnnotation,
+  type FileDiffMetadata,
+  type HighlighterOptions,
+  type ThemeTypes,
+} from "@pierre/diffs";
 import type { FileTreeOptions, GitStatus } from "@pierre/trees";
 import type { DetailCommentView, DetailFileView } from "./detail-model.js";
 import { findingLineCss, findingRanges } from "./diff-focus.js";
@@ -53,9 +62,22 @@ export function reviewDiffOptions(input: {
     themeType: input.themeType,
     unsafeCSS: `${REVIEW_DIFF_SURFACE_CSS}${REVIEW_EXPAND_CSS}${findingLineCss(findingRanges(input.lines))}`,
     disableFileHeader: true,
-    // Highlights needs WASM SIMD. canUseWASM() is false when the engine or the page CSP cannot compile it.
-    preferredHighlighter: canUseWASM() ? "highlights" : "shiki-js",
+    preferredHighlighter: reviewPreferredHighlighter(),
   };
+}
+
+/** Themes and languages FileDiff will ask for, so the first paint is already highlighted. */
+export function reviewHighlighterPreload(filename: string): HighlighterOptions {
+  return {
+    themes: [DEFAULT_THEMES.dark, DEFAULT_THEMES.light],
+    langs: ["text", getFiletypeFromFileName(filename)],
+    preferredHighlighter: reviewPreferredHighlighter(),
+  };
+}
+
+function reviewPreferredHighlighter(): "shiki-js" | "highlights" {
+  // Highlights needs WASM SIMD. canUseWASM() is false when the engine or the page CSP cannot compile it.
+  return canUseWASM() ? "highlights" : "shiki-js";
 }
 
 /** Keep a leftover hunk separator readable if a partial patch still emits one. */

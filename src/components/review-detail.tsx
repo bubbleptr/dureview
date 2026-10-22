@@ -21,11 +21,13 @@ import {
 import { fill } from "../ui/format.js";
 import { useI18n } from "../ui/i18n.js";
 import type { Messages } from "../ui/messages.js";
-import { reviewFindingCount, reviewTreeOptions, type ReviewTreePreload } from "../ui/review-presentation.js";
+import { reviewFindingCount, reviewHighlighterPreload, reviewTreeOptions, type ReviewTreePreload } from "../ui/review-presentation.js";
 import { dragLimit, fitPanelWidths, SUMMARY_LIMIT, TREE_LIMIT } from "../ui/panel-widths.js";
+import { splitCodeRows } from "../ui/split-rows.js";
 import { providerAtStart } from "../auth/providers.js";
+import { preloadHighlighter } from "@pierre/diffs";
 import { AppShell } from "./app-shell.js";
-import { useDiffStyle } from "./diff-style.js";
+import { useDiffStyle, type DiffStyle } from "./diff-style.js";
 import { ConfidenceSignal, FindingTypeIcon, PriorityBadge } from "./finding-marks.js";
 import { LocalTime } from "./local-time.js";
 import { ProviderMark } from "./provider-mark.js";
@@ -58,26 +60,17 @@ const SUMMARY_WIDTH_KEY = "dureview-summary-width";
 export function ReviewDetailView({
   model,
   tree = null,
+  diffStyle: diffStyleProp,
 }: {
   model: ReviewDetailModel;
   tree?: ReviewTreePreload | null;
+  diffStyle?: DiffStyle;
 }) {
   const { m } = useI18n();
-  const [diffStyle] = useDiffStyle();
-  const [treePref, setTreePref] = useStoredWidth(TREE_WIDTH_KEY, TREE_LIMIT.fallback, TREE_LIMIT.max);
-  const [summaryPref, setSummaryPref] = useStoredWidth(SUMMARY_WIDTH_KEY, SUMMARY_LIMIT.fallback, SUMMARY_LIMIT.max);
-  const columnsRef = useRef<HTMLDivElement>(null);
-  const [containerWidth, setContainerWidth] = useState<number | null>(null);
-  useEffect(() => {
-    const node = columnsRef.current;
-    if (!node) return;
-    const measure = () => setContainerWidth(node.clientWidth);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-  const shown = fitPanelWidths(treePref, summaryPref, containerWidth);
+  const [storedStyle] = useDiffStyle();
+  const diffStyle = diffStyleProp ?? storedStyle;
+  const columns = useReviewColumns();
+  const { shown, containerWidth, setTreePref, setSummaryPref } = columns;
   const treeDrag = dragLimit(shown.summary, containerWidth, TREE_LIMIT.min, TREE_LIMIT.max);
   const summaryDrag = dragLimit(shown.tree, containerWidth, SUMMARY_LIMIT.min, SUMMARY_LIMIT.max);
   const files = useMemo(() => orderCommentedFirst(model.files, reviewFindingCount), [model.files]);
@@ -96,7 +89,7 @@ export function ReviewDetailView({
       <div className="flex h-full min-h-0 flex-col">
         <ReviewMeta model={model} />
         <div
-          ref={columnsRef}
+          ref={columns.columnsRef}
           className="review-columns min-h-0 flex-1"
           style={{ ["--tree-width" as string]: `${shown.tree}px`, ["--summary-width" as string]: `${shown.summary}px` }}
         >
@@ -140,13 +133,14 @@ export function ReviewDetailView({
 
 export function ReviewDetailPending({ header }: { header: ReviewDetailHeader }) {
   const { m } = useI18n();
+  const [diffStyle] = useDiffStyle();
   return (
     <ReviewFrame header={header}>
-      <LoadingColumn label={m.detail.loadingFiles} />
+      <FileTreeSkeleton label={m.detail.loadingFiles} />
       <div className="panel-handle" aria-hidden="true" />
-      <LoadingColumn label={m.detail.loadingDiff} />
+      <DiffSkeleton label={m.detail.loadingDiff} diffStyle={diffStyle} />
       <div className="panel-handle" aria-hidden="true" />
-      <LoadingColumn label={m.detail.loadingSummary} />
+      <SummarySkeleton label={m.detail.loadingSummary} />
     </ReviewFrame>
   );
 }
@@ -175,6 +169,7 @@ function ReviewFrame({
   children: ReactNode;
 }) {
   const { m } = useI18n();
+  const { columnsRef, shown } = useReviewColumns();
   return (
     <AppShell
       current="reviews"
@@ -189,11 +184,9 @@ function ReviewFrame({
       <div className="flex h-full min-h-0 flex-col">
         <ReviewMeta model={header} />
         <div
+          ref={columnsRef}
           className="review-columns min-h-0 flex-1"
-          style={{
-            ["--tree-width" as string]: `${TREE_LIMIT.fallback}px`,
-            ["--summary-width" as string]: `${SUMMARY_LIMIT.fallback}px`,
-          }}
+          style={{ ["--tree-width" as string]: `${shown.tree}px`, ["--summary-width" as string]: `${shown.summary}px` }}
         >
           {children}
         </div>
@@ -202,14 +195,96 @@ function ReviewFrame({
   );
 }
 
-function LoadingColumn({ label }: { label: string }) {
+const SKELETON_FILE_ROWS = 8;
+const SKELETON_CODE_ROWS = 48;
+
+function FileTreeSkeleton({ label }: { label: string }) {
   return (
-    <div className="review-panel px-3 py-3" role="status" aria-busy="true">
-      <p className="text-sm text-muted-foreground">{label}</p>
-      <div className="mt-3 space-y-2" aria-hidden="true">
-        <div className="h-3 w-3/4 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
-        <div className="h-3 w-1/2 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
-        <div className="h-3 w-2/3 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+    <div className="review-panel flex min-h-0 flex-col border-b min-[960px]:border-r min-[960px]:border-b-0" role="status" aria-busy="true">
+      <p className="sr-only">{label}</p>
+      <div className="shrink-0 border-b px-2 py-2" aria-hidden="true">
+        <div className="h-8 rounded-md border bg-background" />
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden px-2 py-1" aria-hidden="true">
+        {Array.from({ length: SKELETON_FILE_ROWS }, (_, index) => (
+          <div key={index} className="flex h-8 items-center gap-2">
+            <div className="size-3.5 shrink-0 rounded-sm bg-muted" />
+            <div
+              className="h-3 animate-pulse rounded-sm bg-muted motion-reduce:animate-none"
+              style={{ width: `${42 + ((index * 17) % 38)}%` }}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DiffSkeleton({ label, diffStyle }: { label: string; diffStyle: DiffStyle }) {
+  return (
+    <div className="review-panel flex min-h-0 flex-col border-b min-[960px]:border-r min-[960px]:border-b-0" role="status" aria-busy="true">
+      <p className="sr-only">{label}</p>
+      <div className="flex shrink-0 items-center gap-2 border-b bg-background px-3 py-2" aria-hidden="true">
+        <div className="h-5 w-16 animate-pulse rounded-md bg-muted motion-reduce:animate-none" />
+        <div className="h-3 w-40 max-w-[45%] animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+        <div className="h-5 w-14 animate-pulse rounded-full bg-muted motion-reduce:animate-none" />
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden" aria-hidden="true">
+        {diffStyle === "split" ? <SplitSkeletonRows /> : <UnifiedSkeletonRows />}
+      </div>
+    </div>
+  );
+}
+
+function UnifiedSkeletonRows() {
+  return (
+    <div className="py-2">
+      {Array.from({ length: SKELETON_CODE_ROWS }, (_, index) => (
+        <div key={index} className="grid h-5 grid-cols-[3rem_3rem_minmax(0,1fr)] items-center gap-2 px-3">
+          <div className="ml-auto h-2.5 w-5 rounded-sm bg-muted/70" />
+          <div className="ml-auto h-2.5 w-5 rounded-sm bg-muted/70" />
+          <div className="h-2.5 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" style={{ width: `${28 + ((index * 13) % 58)}%` }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SplitSkeletonRows() {
+  return (
+    <div className="grid grid-cols-2 py-2">
+      {Array.from({ length: SKELETON_CODE_ROWS }, (_, index) => (
+        <Fragment key={index}>
+          <div className="grid h-5 grid-cols-[3rem_minmax(0,1fr)] items-center gap-2 border-r px-3">
+            <div className="ml-auto h-2.5 w-5 rounded-sm bg-muted/70" />
+            <div className="h-2.5 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" style={{ width: `${24 + ((index * 11) % 52)}%` }} />
+          </div>
+          <div className="grid h-5 grid-cols-[3rem_minmax(0,1fr)] items-center gap-2 px-3">
+            <div className="ml-auto h-2.5 w-5 rounded-sm bg-muted/70" />
+            <div className="h-2.5 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" style={{ width: `${32 + ((index * 19) % 48)}%` }} />
+          </div>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+function SummarySkeleton({ label }: { label: string }) {
+  return (
+    <div className="review-panel" role="status" aria-busy="true">
+      <p className="sr-only">{label}</p>
+      <div className="border-b px-3 py-3" aria-hidden="true">
+        <div className="mb-2 h-4 w-24 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+        <div className="flex gap-2">
+          <div className="h-5 w-16 animate-pulse rounded-full bg-muted motion-reduce:animate-none" />
+          <div className="h-5 w-14 animate-pulse rounded-full bg-muted motion-reduce:animate-none" />
+        </div>
+        <div className="mt-3 space-y-2">
+          <div className="h-3 w-full animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+          <div className="h-3 w-5/6 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+          <div className="h-3 w-2/3 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+          <div className="h-3 w-3/4 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+        </div>
       </div>
     </div>
   );
@@ -487,7 +562,7 @@ function FocusSegmentView({
       {patch ? (
         <LazyPatch file={file} lines={lines} patch={patch} diffStyle={diffStyle} diffTheme={diffTheme} />
       ) : (
-        <PlainLines lines={lines} />
+        <PlainLines lines={lines} diffStyle={diffStyle} />
       )}
     </div>
   );
@@ -512,16 +587,22 @@ function LazyPatch({
   const [Highlight, setHighlight] = useState<HighlightedPatch | null>(null);
   useLayoutEffect(() => {
     const host = hostRef.current?.querySelector("diffs-container");
-    if (host instanceof HTMLElement) host.setAttribute("data-theme", diffTheme);
+    if (!(host instanceof HTMLElement)) return;
+    host.setAttribute("data-theme", diffTheme);
+    pinAnnotationColumn(host);
   }, [diffTheme, Highlight]);
   useEffect(() => {
     const node = hostRef.current;
     if (!node) return;
     let cancelled = false;
     const load = () => {
-      void import("./review-diff.js").then((mod) => {
-        if (!cancelled) setHighlight(() => mod.HighlightedPatch);
-      });
+      void Promise.all([import("./review-diff.js"), preloadHighlighter(reviewHighlighterPreload(file.filename))])
+        .then(([mod]) => {
+          if (!cancelled) setHighlight(() => mod.HighlightedPatch);
+        })
+        .catch(() => {
+          // Keep the plain lines when the highlighter cannot start.
+        });
     };
     if (typeof IntersectionObserver === "undefined") {
       load();
@@ -542,7 +623,7 @@ function LazyPatch({
       cancelled = true;
       observer.disconnect();
     };
-  }, []);
+  }, [file.filename]);
   const highlighted = Highlight ? (
     <Highlight
       file={file}
@@ -551,10 +632,27 @@ function LazyPatch({
       diffStyle={diffStyle}
       diffTheme={diffTheme}
       renderComment={(comment) => <CommentCard comment={comment} inset />}
-      fallback={<PlainLines lines={lines} />}
+      fallback={<PlainLines lines={lines} diffStyle={diffStyle} />}
     />
   ) : null;
-  return <div ref={hostRef}>{highlighted ?? <PlainLines lines={lines} />}</div>;
+  return <div ref={hostRef}>{highlighted ?? <PlainLines lines={lines} diffStyle={diffStyle} />}</div>;
+}
+
+// Pierre assigns the annotation column width from a resize pass after the first layout.
+// Until that variable exists the card is as wide as the unwrapped line and shorter than the settled card.
+function pinAnnotationColumn(host: HTMLElement): void {
+  const root = host.shadowRoot;
+  if (!root) return;
+  for (const code of root.querySelectorAll("[data-code]")) {
+    if (!(code instanceof HTMLElement)) continue;
+    const gutter = code.querySelector("[data-gutter]");
+    const codeWidth = Math.floor(code.getBoundingClientRect().width);
+    const numberWidth = gutter instanceof HTMLElement ? Math.ceil(gutter.getBoundingClientRect().width) : 0;
+    const contentWidth = codeWidth - numberWidth;
+    if (contentWidth <= 0) continue;
+    code.style.setProperty("--diffs-column-content-width", `${contentWidth}px`);
+    if (numberWidth > 0) code.style.setProperty("--diffs-column-number-width", `${numberWidth}px`);
+  }
 }
 
 function useDiffTheme(): "light" | "dark" {
@@ -569,22 +667,45 @@ function useDiffTheme(): "light" | "dark" {
   return theme;
 }
 
+// False during hydration so the first paint matches the server. Later mounts read storage immediately.
+let widthsReady = false;
+
+function useReviewColumns() {
+  const [treePref, setTreePref] = useStoredWidth(TREE_WIDTH_KEY, TREE_LIMIT.fallback, TREE_LIMIT.max);
+  const [summaryPref, setSummaryPref] = useStoredWidth(SUMMARY_WIDTH_KEY, SUMMARY_LIMIT.fallback, SUMMARY_LIMIT.max);
+  const columnsRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const node = columnsRef.current;
+    if (!node) return;
+    const measure = () => setContainerWidth(node.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  return {
+    columnsRef,
+    containerWidth,
+    shown: fitPanelWidths(treePref, summaryPref, containerWidth),
+    setTreePref,
+    setSummaryPref,
+  };
+}
+
 function useStoredWidth(key: string, fallback: number, max: number): [number, (value: number) => void] {
-  const [width, setWidth] = useState(fallback);
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(key);
-      if (stored === null) return;
-      const parsed = Number(stored);
-      if (Number.isFinite(parsed)) setWidth(clamp(parsed, 0, max));
-    } catch {
-      // Keep the default width.
-    }
-  }, [key, max]);
+  const [width, setWidth] = useState(() => (widthsReady ? readStoredWidth(key, fallback, max) : fallback));
+  // Width is omitted: a failed write must not restore the previous value while dragging.
+  useLayoutEffect(() => {
+    widthsReady = true;
+    const next = readStoredWidth(key, fallback, max);
+    setWidth((current) => (current === next ? current : next));
+  }, [key, fallback, max]);
   return [
     width,
     (value) => {
       const next = clamp(value, 0, max);
+      widthsReady = true;
       setWidth(next);
       try {
         localStorage.setItem(key, String(next));
@@ -593,6 +714,19 @@ function useStoredWidth(key: string, fallback: number, max: number): [number, (v
       }
     },
   ];
+}
+
+function readStoredWidth(key: string, fallback: number, max: number): number {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored === null) return fallback;
+    const parsed = Number(stored);
+    if (!Number.isFinite(parsed)) return fallback;
+    return clamp(parsed, 0, max);
+  } catch {
+    return fallback;
+  }
 }
 
 function PanelHandle({
@@ -650,33 +784,93 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
-function PlainLines({ lines }: { lines: DetailLineView[] }) {
+function PlainLines({ lines, diffStyle }: { lines: DetailLineView[]; diffStyle: DiffStyle }) {
+  if (diffStyle === "split") return <SplitPlain lines={lines} />;
+  return <UnifiedPlain lines={lines} />;
+}
+
+function UnifiedPlain({ lines }: { lines: DetailLineView[] }) {
   return (
-    <div className="font-mono text-xs leading-5">
-      {lines.map((line, index) => (
-        <DiffLine key={`${line.kind}-${line.newLabel}-${line.oldLabel}-${index}`} line={line} />
-      ))}
+    <div className="overflow-x-auto overflow-y-clip py-2 font-mono text-[13px] leading-5">
+      {lines.map((line, index) =>
+        line.kind === "hunk" ? null : (
+          <Fragment key={`${line.kind}-${line.newLabel}-${line.oldLabel}-${index}`}>
+            <PlainCodeRow line={line} label={line.oldLabel} secondLabel={line.newLabel} />
+            {line.comments.map((comment) => (
+              <div key={comment.ordinal} className="sticky left-0 w-full flow-root">
+                <CommentCard comment={comment} inset />
+              </div>
+            ))}
+          </Fragment>
+        ),
+      )}
     </div>
   );
 }
 
-function DiffLine({ line }: { line: DetailLineView }) {
-  if (line.kind === "hunk") {
-    return <div className="bg-muted px-3 py-0.5 text-muted-foreground">{line.text}</div>;
-  }
+function SplitPlain({ lines }: { lines: DetailLineView[] }) {
+  const rows = splitCodeRows(lines);
+  return (
+    <div className="grid grid-cols-2 py-2 font-mono text-[13px] leading-5">
+      <div className="min-w-0 overflow-x-auto overflow-y-clip border-r border-border">
+        {rows.map((row, index) => (
+          <Fragment key={index}>
+            <SplitCodeRow line={row.left} label={row.left?.oldLabel ?? ""} />
+            {row.right?.comments.map((comment) => (
+              <SplitAlignSpacer key={comment.ordinal} comment={comment} />
+            ))}
+          </Fragment>
+        ))}
+      </div>
+      <div className="min-w-0 overflow-x-auto overflow-y-clip">
+        {rows.map((row, index) => (
+          <Fragment key={index}>
+            <SplitCodeRow line={row.right} label={row.right?.newLabel ?? ""} />
+            {row.right?.comments.map((comment) => (
+              <div key={comment.ordinal} className="sticky left-0 w-full flow-root">
+                <CommentCard comment={comment} inset />
+              </div>
+            ))}
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlainCodeRow({ line, label, secondLabel }: { line: DetailLineView; label: string; secondLabel: string }) {
   const tone = line.severity === null ? "" : (LINE_BOX[line.severity] ?? "");
   return (
-    <>
-      <div className={`grid grid-cols-[3rem_3rem_1rem_minmax(0,1fr)] gap-1 pr-3 ${tone}`}>
-        <span className="text-right text-muted-foreground">{line.oldLabel}</span>
-        <span className="text-right text-muted-foreground">{line.newLabel}</span>
-        <span className="text-muted-foreground">{line.mark}</span>
-        <code className="break-all whitespace-pre-wrap">{line.text}</code>
-      </div>
-      {line.comments.map((comment) => (
-        <CommentCard key={comment.ordinal} comment={comment} inset />
-      ))}
-    </>
+    <div className={`flex h-5 w-max min-w-full items-center gap-1 pr-3 ${tone}`}>
+      <span className="sticky left-0 z-[1] flex h-5 shrink-0 items-center bg-background">
+        <span className={`w-12 text-right text-muted-foreground tabular-nums ${tone}`}>{label}</span>
+        <span className={`w-12 text-right text-muted-foreground tabular-nums ${tone}`}>{secondLabel}</span>
+        <span className={`w-4 text-center text-muted-foreground ${tone}`}>{line.mark}</span>
+      </span>
+      <code className="whitespace-pre">{line.text}</code>
+    </div>
+  );
+}
+
+// The hidden card keeps the deletion column as tall as the additions column, so the next lines stay paired.
+function SplitAlignSpacer({ comment }: { comment: DetailCommentView }) {
+  return (
+    <div className="invisible flow-root" aria-hidden="true">
+      <CommentCard comment={comment} inset spacer />
+    </div>
+  );
+}
+
+function SplitCodeRow({ line, label }: { line: DetailLineView | null; label: string }) {
+  if (!line) return <div className="h-5" />;
+  const tone = line.severity === null ? "" : (LINE_BOX[line.severity] ?? "");
+  return (
+    <div className={`flex h-5 w-max min-w-full items-center gap-2 pr-3 ${tone}`}>
+      <span className="sticky left-0 z-[1] flex h-5 w-12 shrink-0 items-center justify-end bg-background">
+        <span className={`w-full text-right text-muted-foreground tabular-nums ${tone}`}>{label}</span>
+      </span>
+      <code className="whitespace-pre">{line.text}</code>
+    </div>
   );
 }
 
@@ -692,12 +886,12 @@ function CommentGroup({ title, comments }: { title: string; comments: DetailComm
   );
 }
 
-function CommentCard({ comment, inset }: { comment: DetailCommentView; inset?: boolean }) {
+function CommentCard({ comment, inset, spacer = false }: { comment: DetailCommentView; inset?: boolean; spacer?: boolean }) {
   const { m } = useI18n();
   const accent = COMMENT_ACCENT[comment.priority] ?? COMMENT_ACCENT[3];
   return (
     <article
-      id={comment.anchor}
+      id={spacer ? undefined : comment.anchor}
       className={`my-2 rounded-md border border-border border-l-[3px] px-3 py-2.5 ${accent} ${inset ? "mr-3 ml-10" : "mx-3"}`}
     >
       <header className="mb-1 flex flex-wrap items-center gap-2">

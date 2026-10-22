@@ -1,5 +1,6 @@
 import { useLayoutEffect } from "react";
 import { HeadContent, Outlet, Scripts, createRootRoute, useLocation } from "@tanstack/react-router";
+import { DiffStyleProvider } from "../components/diff-style.js";
 import { applySavedAppearance, THEME_BOOT } from "../components/theme.js";
 import { I18nProvider, useI18n } from "../ui/i18n.js";
 import { getUiLocale } from "../ui/locale-fn.js";
@@ -22,7 +23,7 @@ export const Route = createRootRoute({
 });
 
 function RootComponent() {
-  const { locale } = Route.useLoaderData();
+  const { locale, diffStyle } = Route.useLoaderData();
   const pageLocation = useLocation({ select: (location) => location.pathname + location.searchStr });
   useLayoutEffect(() => {
     applySavedAppearance();
@@ -36,7 +37,9 @@ function RootComponent() {
       <body className="h-dvh overflow-hidden bg-background font-sans text-foreground antialiased">
         <PageLocationProvider location={pageLocation}>
           <I18nProvider locale={locale}>
-            <Outlet />
+            <DiffStyleProvider style={diffStyle}>
+              <Outlet />
+            </DiffStyleProvider>
           </I18nProvider>
         </PageLocationProvider>
         <Scripts />

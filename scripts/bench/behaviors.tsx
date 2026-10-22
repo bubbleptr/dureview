@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
-import { ReviewDetailView } from "../../src/components/review-detail.js";
-import type { ReviewDetailModel } from "../../src/ui/detail-model.js";
+import { ReviewDetailPending, ReviewDetailView } from "../../src/components/review-detail.js";
+import type { ReviewDetailHeader, ReviewDetailModel } from "../../src/ui/detail-model.js";
 import { I18nProvider } from "../../src/ui/i18n.js";
 import { PageLocationProvider } from "../../src/ui/page-location.js";
 import "../../src/styles.css";
@@ -35,12 +35,27 @@ const model: ReviewDetailModel = {
   settings: { recorded: false },
 };
 
+const header: ReviewDetailHeader = {
+  pageTitle: model.pageTitle,
+  backHref: model.backHref,
+  pullHref: model.pullHref,
+  pullLabel: model.pullLabel,
+  heading: model.heading,
+  resultKind: model.resultKind,
+  resultText: model.resultText,
+  triggerLabel: model.triggerLabel,
+  duration: model.duration,
+  whenIso: model.whenIso,
+  whenLabel: model.whenLabel,
+};
+
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
+const pending = new URLSearchParams(location.search).get("view") === "pending";
 createRoot(root).render(
   <PageLocationProvider location="/ui/reviews/bench">
     <I18nProvider locale="en">
-      <ReviewDetailView model={model} />
+      {pending ? <ReviewDetailPending header={header} /> : <ReviewDetailView model={model} />}
     </I18nProvider>
   </PageLocationProvider>,
 );
