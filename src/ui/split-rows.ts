@@ -37,7 +37,7 @@ export function splitCodeRows(lines: readonly DetailLineView[]): SplitCodeRow[] 
       if (kind !== "add" && kind !== "del") break;
       index += 1;
     }
-    rows.push(...pairChange(lines.slice(start, index)));
+    for (const row of pairChange(lines.slice(start, index))) rows.push(row);
   }
   return rows;
 }
