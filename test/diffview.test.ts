@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { reviewResult, type ReviewDetail, type StoredComment } from "../src/review/archive.js";
 import { buildReviewDetail } from "../src/ui/detail-data.js";
 import { gitDiffText, parsePatch, placeReview } from "../src/ui/diff.js";
+import { canUseWASM } from "@pierre/diffs";
 import { parseReviewPatch, reviewDiffOptions, reviewTreeOptions } from "../src/ui/review-presentation.js";
 import type { ReviewListModel } from "../src/ui/list-model.js";
 import { displayTrigger, formatTime, resultLabel, runningLabel, STUCK_AFTER_MS } from "../src/ui/page.js";
@@ -177,7 +178,9 @@ describe("pull request diff placement", () => {
     expect(tree).not.toContain(":host-context(");
     expect(tree).not.toContain("#e5e5e5");
 
-    const diff = reviewDiffOptions({ diffStyle: "unified", themeType: "dark", lines: [] }).unsafeCSS;
+    const diffOptions = reviewDiffOptions({ diffStyle: "unified", themeType: "dark", lines: [] });
+    const diff = diffOptions.unsafeCSS;
+    expect(diffOptions.preferredHighlighter).toBe(canUseWASM() ? "highlights" : "shiki-js");
     expect(diff).toContain("--diffs-light-bg:var(--background)");
     expect(diff).toContain("--diffs-dark-bg:var(--background)");
     expect(diff).toContain("--diffs-light:var(--foreground)");

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="__UI_CSP__" />
+    <title>diff bench</title>
+    <script>
+      window.__bench = { tasks: [], wasmCompiles: 0 };
+      (function () {
+        var OriginalModule = WebAssembly.Module;
+        function CountingModule(bytes) {
+          window.__bench.wasmCompiles += 1;
+          return new OriginalModule(bytes);
+        }
+        CountingModule.prototype = OriginalModule.prototype;
+        Object.setPrototypeOf(CountingModule, OriginalModule);
+        WebAssembly.Module = CountingModule;
+      })();
+      new PerformanceObserver(function (list) {
+        var entries = list.getEntries();
+        for (var i = 0; i < entries.length; i += 1) {
+          window.__bench.tasks.push({ start: entries[i].startTime, duration: entries[i].duration });
+        }
+      }).observe({ type: "longtask", buffered: true });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./perf.tsx"></script>
+  </body>
+</html>
