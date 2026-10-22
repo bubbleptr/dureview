@@ -1,5 +1,6 @@
+// Highlights compiles WebAssembly in the page. Without wasm-unsafe-eval, canUseWASM() is false and the diff stays on the JS highlighter.
 export const UI_CSP =
-  "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+  "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 export const UI_HEADERS: Record<string, string> = {
   "cache-control": "no-store",
