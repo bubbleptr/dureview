@@ -1,6 +1,7 @@
 import type { DureviewService } from "../service.js";
 import { safeNextPath } from "../ui/auth.js";
 import { loadReviewDetail } from "../ui/detail-data.js";
+import { resolveDiffStyle } from "../ui/diff-style-pref.js";
 import { resolveLocale } from "../ui/locale.js";
 import { requestPathAndQuery } from "../ui/next-path.js";
 import { renderDetailHtml, renderLoginHtml } from "../ui/render-react.js";
@@ -26,5 +27,5 @@ export async function reviewDetailResponse(input: {
   if (gate === "login") return htmlResponse(renderLoginHtml({ next: safeNextPath(path), locale, location }), 401);
   const model = await loadReviewDetail(input.service, input.githubApiUrl, taskId, Date.now(), locale);
   if (!model) return notFoundJson();
-  return htmlResponse(await renderDetailHtml(model, locale, location));
+  return htmlResponse(await renderDetailHtml(model, locale, location, resolveDiffStyle(input.request)));
 }
