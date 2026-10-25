@@ -4,6 +4,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { GithubRest } from "../src/github/client.js";
 import { REVIEW_CHECK_NAME, REVIEW_CONFIG_DOCS_URL, reviewCheckError, reviewCheckOutcome } from "../src/review/checks.js";
+import { cleanMarker } from "../src/review/ledger.js";
 import type { RepoCheckout } from "../src/review/checkout.js";
 import { ReviewConfigError, defaultPolicy, type ReviewPolicy } from "../src/review/policy.js";
 import {
@@ -152,10 +153,16 @@ describe("check run on a review", () => {
       responses: scriptedReview("Nothing to bill twice.", []),
       checkout: policyCheckout({ language: "zh" }),
     });
-    const settled = await run(service);
+    const queued = await service.enqueue(reviewRequest());
+    const settled = await service.wait(queued.taskId);
     expect(settled.state.outcome.status).toBe("completed");
     expect(github.comments).toHaveLength(0);
-    expect(github.reviews).toHaveLength(0);
+    expect(github.reviews).toHaveLength(1);
+    expect(github.reviews[0]).toMatchObject({
+      event: "COMMENT",
+      comments: [],
+      body: `dureview 审查完成：未发现需要处理的问题（head ${SHA_A.slice(0, 7)}）\n${cleanMarker(String(queued.taskId), SHA_A)}`,
+    });
     expect(github.checkLog.map((run) => run.status)).toEqual(["in_progress", "completed"]);
     expect(github.checkRuns).toEqual([
       expect.objectContaining({

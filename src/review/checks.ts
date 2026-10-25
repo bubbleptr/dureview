@@ -287,13 +287,22 @@ function countFindings(findings: readonly Finding[]): Record<Priority, number> {
   return counts;
 }
 
+/** Findings the check summary lists as not posted inline. The clean-review note counts this same list. */
+export function checkUnpostedFindings(
+  classified: ReturnType<typeof classifyFindings>,
+  policy: ReviewPolicy,
+): Finding[] {
+  if (policy.summary) return [];
+  const inline = new Set(classified.inline.map((item) => item.finding.fingerprint));
+  return classified.open.filter((finding) => !inline.has(finding.fingerprint) && !isInformational(finding));
+}
+
 function unpostedLines(
   classified: ReturnType<typeof classifyFindings>,
   policy: ReviewPolicy,
   language: ReviewLanguage,
 ): string[] {
-  if (policy.summary) return [];
-  const inline = new Set(classified.inline.map((item) => item.finding.fingerprint));
+  const pending = checkUnpostedFindings(classified, policy);
   const reason = new Map<string, string>();
   const outside = language === "zh" ? "不在 diff 中" : "outside the diff";
   const capped = language === "zh" ? "超过行内上限" : "over the inline cap";
@@ -301,9 +310,9 @@ function unpostedLines(
   for (const finding of classified.outOfRange) reason.set(finding.fingerprint, outside);
   for (const finding of classified.overflow) reason.set(finding.fingerprint, capped);
   for (const finding of classified.folded) reason.set(finding.fingerprint, folded);
-  return classified.open
-    .filter((finding) => !inline.has(finding.fingerprint) && !isInformational(finding))
-    .map((finding) => `- P${finding.priority} ${finding.path} ${finding.title} (${reason.get(finding.fingerprint) ?? folded})`);
+  return pending.map(
+    (finding) => `- P${finding.priority} ${finding.path} ${finding.title} (${reason.get(finding.fingerprint) ?? folded})`,
+  );
 }
 
 function withUnposted(counts: string, lines: readonly string[], language: ReviewLanguage): string {

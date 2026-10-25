@@ -1,9 +1,11 @@
 import type { GitHub, PullReview, ReviewEvent } from "./client.js";
 import { isRequestChangesRejected } from "./client.js";
 import { log } from "../log.js";
+import { checkUnpostedFindings } from "../review/checks.js";
 import {
   disappeared,
   inlineFingerprintMarker,
+  parseCleanMarker,
   parseLedger,
   postedFingerprints,
   readInlineLedger,
@@ -12,9 +14,9 @@ import {
 } from "../review/ledger.js";
 import { postingsFromClassified, type FindingPosting } from "../review/findings.js";
 import { classifyFindings, type ReviewLanguage, type ReviewPolicy } from "../review/policy.js";
-import { renderFixedReply, renderInlineDrafts, renderSummary } from "../review/render.js";
+import { renderCleanReview, renderFixedReply, renderInlineDrafts, renderSummary } from "../review/render.js";
 import { isInformational, type Finding, type ReviewSubmission } from "../review/schema.js";
-import { inlineMarker, summaryMarker, taskMarker, type ReviewRequest } from "../types.js";
+import { inlineMarker, reviewKey, summaryMarker, taskMarker, type ReviewRequest } from "../types.js";
 
 export type PublishResult = {
   summaryCommentId: number | null;
@@ -39,7 +41,11 @@ export type PublishResult = {
  * `summary: false` (the default) posts one inline comment per finding and no summary.
  * Each comment carries a fingerprint and task id. A later run reads those comments
  * to dedupe, and resolves the thread when a finding is gone. A crash after any
- * single finding is accepted does not post that finding again.
+ * single finding is accepted does not post that finding again. When this run
+ * inlines nothing and no earlier inline comment is still open, it submits one
+ * Comment review for that head. The hidden clean marker keeps a retry from posting it twice.
+ * Overlapping `summary: false` publishes of the same head share one in-process lock,
+ * from the ledger read through the writes.
  */
 export async function publishReview(input: {
   github: GitHub;
@@ -144,7 +150,13 @@ async function publishWithSummary(input: {
   };
 }
 
-async function publishWithoutSummary(input: {
+async function publishWithoutSummary(
+  input: Parameters<typeof publishWithoutSummaryLocked>[0],
+): Promise<PublishResult> {
+  return withHeadPublishLock(reviewKey(input.request), () => publishWithoutSummaryLocked(input));
+}
+
+async function publishWithoutSummaryLocked(input: {
   github: GitHub;
   request: ReviewRequest;
   taskId: string;
@@ -172,6 +184,7 @@ async function publishWithoutSummary(input: {
   });
   const open = new Set(classified.open.map((finding) => finding.fingerprint));
   const stale = ledger.filter((entry) => !entry.handled && !open.has(entry.fingerprint));
+  const postings = postingsFromClassified(classified, input.policy);
 
   let reviewId: number | null = null;
   let reviewAction: PublishResult["reviewAction"] = "skipped";
@@ -192,9 +205,21 @@ async function publishWithoutSummary(input: {
     reviewAction = "created";
   } else {
     const prior = reviewIdPostedByTask(comments, input.taskId);
+    const inlineStillOpen = openLedger.some((entry) => open.has(entry.fingerprint));
     if (prior !== undefined) {
       reviewId = prior;
       reviewAction = "unchanged";
+    } else if (!inlineStillOpen) {
+      const clean = await ensureCleanReview({
+        github: input.github,
+        request: input.request,
+        taskId: input.taskId,
+        signal: input.signal,
+        language,
+        unposted: checkUnpostedFindings(classified, input.policy).length,
+      });
+      reviewId = clean.id;
+      reviewAction = clean.action;
     }
   }
 
@@ -208,12 +233,58 @@ async function publishWithoutSummary(input: {
     summaryAction: "skipped",
     reviewId,
     reviewAction,
-    postings: postingsFromClassified(classified, input.policy).map((posting) =>
+    postings: postings.map((posting) =>
       recoveredByThisTask.has(posting.fingerprint)
         ? { fingerprint: posting.fingerprint, posted: true, skipReason: null }
         : posting,
     ),
   };
+}
+
+// The marker check misses an inline publish that lands after this head's ledger was read.
+const headPublishGate = new Map<string, Promise<void>>();
+
+function withHeadPublishLock<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const previous = headPublishGate.get(key) ?? Promise.resolve();
+  const result = previous.then(run);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  headPublishGate.set(key, settled);
+  void settled.then(() => {
+    if (headPublishGate.get(key) === settled) headPublishGate.delete(key);
+  });
+  return result;
+}
+
+async function ensureCleanReview(input: {
+  github: GitHub;
+  request: ReviewRequest;
+  taskId: string;
+  signal: AbortSignal;
+  language: ReviewLanguage;
+  unposted: number;
+}): Promise<{ id: number; action: "created" | "unchanged" }> {
+  const reviews = await input.github.listReviews(input.request, input.signal);
+  const existing = reviews.find((review) => parseCleanMarker(review.body)?.sha === input.request.sha);
+  if (existing) return { id: existing.id, action: "unchanged" };
+  const created = await input.github.createReview(
+    input.request,
+    {
+      sha: input.request.sha,
+      body: renderCleanReview({
+        language: input.language,
+        sha: input.request.sha,
+        taskId: input.taskId,
+        unposted: input.unposted,
+      }),
+      event: "COMMENT",
+      comments: [],
+    },
+    input.signal,
+  );
+  return { id: created.id, action: "created" };
 }
 
 function reviewEvent(findings: readonly Finding[]): ReviewEvent {

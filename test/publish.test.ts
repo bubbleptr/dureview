@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { GithubRest, RequestChangesRejectedError, isRequestChangesRejected, reviewCommentPayload } from "../src/github/client.js";
 import { publishReview } from "../src/github/publish.js";
-import { findingMarker } from "../src/review/ledger.js";
+import { reviewCheckOutcome } from "../src/review/checks.js";
+import { cleanMarker, findingMarker } from "../src/review/ledger.js";
 import { inlineMarker, summaryMarker, taskMarker } from "../src/types.js";
 import {
   FINDING,
@@ -9,6 +10,7 @@ import {
   MemoryGitHub,
   POLICY,
   SHA_A,
+  SHA_B,
   reviewRequest,
   reviewSubmission,
   sampleFinding,
@@ -171,31 +173,190 @@ describe("summary off", () => {
     expect(github.reviewComments.map((comment) => comment.body).join("\n")).toContain(findingMarker(FINDING.fingerprint, "41"));
     expect(github.reviewComments.map((comment) => comment.body).join("\n")).toContain(findingMarker(second.fingerprint, "41"));
     expect(github.calls.filter((call) => call === "createIssueComment" || call === "updateIssueComment")).toEqual([]);
+    expect(github.calls.filter((call) => call === "listReviews")).toEqual([]);
+    expect(github.reviews[0]?.body).toBe("");
   });
 
-  it("makes no write calls when there are no findings and no prior comments", async () => {
+  it("posts one COMMENT review when there are no inline findings", async () => {
     const github = new MemoryGitHub();
     const result = await publishReview(base(github, "41", "Nothing to report.", [], { summary: false }));
 
     expect(result.summaryAction).toBe("skipped");
-    expect(result.reviewAction).toBe("skipped");
-    expect(result.reviewId).toBeNull();
+    expect(result.summaryCommentId).toBeNull();
+    expect(result.reviewAction).toBe("created");
+    expect(result.reviewId).toBe(github.reviews[0]?.id);
     expect(github.comments).toEqual([]);
-    expect(github.reviews).toEqual([]);
     expect(github.reviewComments).toEqual([]);
-    expect(github.calls).toEqual(["listReviewComments"]);
+    expect(github.reviews).toHaveLength(1);
+    expect(github.reviews[0]).toMatchObject({
+      event: "COMMENT",
+      comments: [],
+      body: cleanBody("en", "41", SHA_A, 0),
+    });
+    expect(github.calls).toEqual(["listReviewComments", "listReviews", "createReview"]);
   });
 
-  it("drops investigate and unprovable findings instead of posting them", async () => {
+  it("does not post a second clean review for the same head", async () => {
+    const github = new MemoryGitHub();
+    const input = base(github, "41", "Nothing to report.", [], { summary: false });
+    const first = await publishReview(input);
+    const retry = await publishReview(input);
+    const otherTask = await publishReview(base(github, "42", "Still nothing.", [], { summary: false }));
+
+    expect(first.reviewAction).toBe("created");
+    expect(retry.reviewAction).toBe("unchanged");
+    expect(retry.reviewId).toBe(first.reviewId);
+    expect(otherTask.reviewAction).toBe("unchanged");
+    expect(otherTask.reviewId).toBe(first.reviewId);
+    expect(github.reviews).toHaveLength(1);
+    expect(github.calls.filter((call) => call === "createReview")).toEqual(["createReview"]);
+  });
+
+  it("does not post a clean note after an overlapping inline review of the same head", async () => {
+    const github = new MemoryGitHub();
+    const [clean, inline] = await Promise.all([
+      publishReview(base(github, "41", "Nothing to report.", [], { summary: false })),
+      publishReview(base(github, "42", "A finding.", [FINDING], { summary: false })),
+    ]);
+
+    expect(inline.reviewAction).toBe("created");
+    expect(github.reviewComments).toHaveLength(1);
+    expect(github.reviews.map((review) => review.event)).toEqual(["COMMENT", "REQUEST_CHANGES"]);
+    expect(github.reviews[0]?.body).toContain(cleanMarker("41", SHA_A));
+    expect(github.reviews[0]?.id).toBe(clean.reviewId);
+    expect(github.reviews[1]?.comments).toHaveLength(1);
+    expect(github.reviews[1]?.id).toBe(inline.reviewId);
+    expect(clean.reviewId).toBeLessThan(inline.reviewId ?? 0);
+  });
+
+  it("posts the clean review in Chinese", async () => {
+    const github = new MemoryGitHub();
+    const result = await publishReview(base(github, "41", "没有问题。", [], { summary: false, language: "zh" }));
+
+    expect(result.reviewAction).toBe("created");
+    expect(github.reviews[0]).toMatchObject({
+      event: "COMMENT",
+      comments: [],
+      body: cleanBody("zh", "41", SHA_A, 0),
+    });
+  });
+
+  it("counts findings that were not posted inline", async () => {
+    const github = new MemoryGitHub();
+    const low = sampleFinding({ title: "Unsure about the charge", confidence: 0.1 });
+    const folded = sampleFinding({
+      title: "A nit on the early return",
+      priority: 3,
+      confidence: 0.95,
+      startLine: 3,
+      endLine: 3,
+    });
+    const outside = sampleFinding({
+      title: "Note a line outside the diff",
+      startLine: 99,
+      endLine: 99,
+      body: "This line is not in the diff.",
+      trigger: "A caller reads line 99.",
+    });
+    const ignored = sampleFinding({ title: "Generated output", path: "dist/app.js", confidence: 0.9 });
+    const result = await publishReview(
+      base(github, "41", "Held back.", [low, folded, outside, ignored], { summary: false }),
+    );
+
+    expect(result.reviewAction).toBe("created");
+    expect(github.reviewComments).toEqual([]);
+    expect(github.reviews).toHaveLength(1);
+    expect(github.reviews[0]).toMatchObject({
+      event: "COMMENT",
+      comments: [],
+      body: cleanBody("en", "41", SHA_A, 2),
+    });
+  });
+
+  it("does not mention the check when the only finding is below min confidence", async () => {
+    const github = new MemoryGitHub();
+    const low = sampleFinding({ title: "Unsure about the charge", confidence: 0.1 });
+    const input = base(github, "41", "Below the floor.", [low], { summary: false });
+    await publishReview(input);
+
+    expect(github.reviews).toHaveLength(1);
+    expect(github.reviews[0]?.body).toBe(cleanBody("en", "41", SHA_A, 0));
+    expect(reviewCheckOutcome({ findings: [low], diff: input.diff, policy: input.policy })).toEqual({
+      conclusion: "success",
+      title: "No findings",
+      summary: "No issues to report.",
+    });
+  });
+
+  it("writes the unposted clause in Chinese", async () => {
+    const github = new MemoryGitHub();
+    const folded = sampleFinding({
+      title: "可以以后再看",
+      priority: 3,
+      confidence: 0.95,
+      startLine: 3,
+      endLine: 3,
+    });
+    await publishReview(base(github, "41", "先记下。", [folded], { summary: false, language: "zh" }));
+
+    expect(github.reviews[0]?.event).toBe("COMMENT");
+    expect(github.reviews[0]?.body).toBe(cleanBody("zh", "41", SHA_A, 1));
+  });
+
+  it("leaves an older clean review in place when a later head has findings", async () => {
+    const github = new MemoryGitHub();
+    await publishReview(base(github, "41", "clean", [], { summary: false }, SHA_A));
+    const next = await publishReview(base(github, "42", "regressed", [FINDING], { summary: false }, SHA_B));
+
+    expect(next.reviewAction).toBe("created");
+    expect(github.reviews).toHaveLength(2);
+    expect(github.reviews[0]?.event).toBe("COMMENT");
+    expect(github.reviews[0]?.body).toBe(cleanBody("en", "41", SHA_A, 0));
+    expect(github.reviews[1]?.event).toBe("REQUEST_CHANGES");
+    expect(github.reviews[1]?.body).toBe("");
+    expect(github.reviews[1]?.comments).toHaveLength(1);
+    expect(github.reviewComments).toHaveLength(1);
+  });
+
+  it("posts a clean review for a new head after an older one", async () => {
+    const github = new MemoryGitHub();
+    await publishReview(base(github, "41", "clean", [], { summary: false }, SHA_A));
+    const next = await publishReview(base(github, "42", "clean", [], { summary: false }, SHA_B));
+
+    expect(next.reviewAction).toBe("created");
+    expect(github.reviews).toHaveLength(2);
+    expect(github.reviews[1]?.body).toBe(cleanBody("en", "42", SHA_B, 0));
+    expect(github.reviews[0]?.body).toContain(cleanMarker("41", SHA_A));
+  });
+
+  it("does not treat an unrelated review as the clean note", async () => {
+    const github = new MemoryGitHub();
+    await github.createReview(reviewRequest(), {
+      sha: SHA_A,
+      body: "LGTM",
+      event: "COMMENT",
+      comments: [],
+    });
+    const result = await publishReview(base(github, "41", "Nothing to report.", [], { summary: false }));
+
+    expect(result.reviewAction).toBe("created");
+    expect(github.reviews).toHaveLength(2);
+    expect(github.reviews[1]?.body).toBe(cleanBody("en", "41", SHA_A, 0));
+    expect(github.reviews[1]?.event).toBe("COMMENT");
+  });
+
+  it("drops investigate and unprovable findings instead of posting them inline", async () => {
     const github = new MemoryGitHub();
     const investigate = sampleFinding({ title: "Maybe wrong", kind: "investigate", priority: 0, confidence: 0.99 });
     const unprovable = sampleFinding({ title: "No trigger", trigger: "  ", priority: 0, confidence: 0.99 });
     const result = await publishReview(base(github, "41", "Suspicions only.", [investigate, unprovable], { summary: false }));
 
-    expect(result.reviewAction).toBe("skipped");
-    expect(github.reviews).toEqual([]);
+    expect(result.reviewAction).toBe("created");
+    expect(github.reviewComments).toEqual([]);
     expect(github.comments).toEqual([]);
-    expect(github.calls).toEqual(["listReviewComments"]);
+    expect(github.reviews).toHaveLength(1);
+    expect(github.reviews[0]?.body).toBe(cleanBody("en", "41", SHA_A, 2));
+    expect(github.reviews[0]?.event).toBe("COMMENT");
   });
 
   it("submits COMMENT for P2 findings and REQUEST_CHANGES when any inline finding is P0 or P1", async () => {
@@ -223,15 +384,20 @@ describe("summary off", () => {
       trigger: "",
     });
     const held = await publishReview(base(github, "41", "A note.", [note], { summary: false }));
-    expect(held.reviewAction).toBe("skipped");
-    expect(github.reviews).toEqual([]);
+    expect(held.reviewAction).toBe("created");
+    expect(github.reviews).toHaveLength(1);
+    expect(github.reviews[0]?.event).toBe("COMMENT");
+    expect(github.reviews[0]?.comments).toEqual([]);
+    expect(github.reviews[0]?.body).toBe(cleanBody("en", "41", SHA_A, 0));
     expect(held.postings).toEqual([
       expect.objectContaining({ fingerprint: note.fingerprint, posted: false, skipReason: "informational" }),
     ]);
 
     const allowed = new MemoryGitHub();
     await publishReview(base(allowed, "42", "A note.", [note], { summary: false, postInformational: true }));
+    expect(allowed.reviews).toHaveLength(1);
     expect(allowed.reviews[0]?.event).toBe("COMMENT");
+    expect(allowed.reviews[0]?.body).toBe("");
     expect(allowed.reviewComments[0]?.body).toContain("P0 · Flag · Informational");
     expect(allowed.reviewComments[0]?.body).not.toContain("REQUEST_CHANGES");
   });
@@ -300,10 +466,13 @@ describe("summary off", () => {
     github.calls = [];
     const next = await publishReview(base(github, "42", "clean", [], { summary: false }));
 
-    expect(next.reviewAction).toBe("skipped");
-    expect(github.reviews).toHaveLength(1);
+    expect(next.reviewAction).toBe("created");
+    expect(next.reviewId).toBe(github.reviews[1]?.id);
+    expect(github.reviews).toHaveLength(2);
+    expect(github.reviews[1]?.event).toBe("COMMENT");
+    expect(github.reviews[1]?.body).toBe(cleanBody("en", "42", SHA_A, 0));
     expect(github.reviewComments[0]?.resolved).toBe(true);
-    expect(github.calls).toEqual(["listReviewComments", "resolveReviewThread"]);
+    expect(github.calls).toEqual(["listReviewComments", "listReviews", "createReview", "resolveReviewThread"]);
   });
 
   it("replies fixed in <sha> when the inline comment has no thread id", async () => {
@@ -489,16 +658,34 @@ describe("review comment payload", () => {
   });
 });
 
+function cleanBody(language: "en" | "zh", taskId: string, sha: string, unposted: number): string {
+  const short = sha.slice(0, 7);
+  const lead =
+    language === "zh"
+      ? `dureview 审查完成：未发现需要处理的问题（head ${short}）`
+      : `dureview review complete: no issues to address (head ${short})`;
+  const extra =
+    unposted <= 0
+      ? ""
+      : language === "zh"
+        ? `。另有 ${unposted} 条低优先级提示未贴为行内评论，详见 dureview check。`
+        : unposted === 1
+          ? ". 1 lower-priority note was not posted as an inline comment; see the dureview check."
+          : `. ${unposted} lower-priority notes were not posted as inline comments; see the dureview check.`;
+  return `${lead}${extra}\n${cleanMarker(taskId, sha)}`;
+}
+
 function base(
   github: MemoryGitHub,
   taskId: string,
   reason: string,
   findings = [FINDING],
   policy: Partial<typeof POLICY> = {},
+  sha = SHA_A,
 ) {
   return {
     github,
-    request: reviewRequest(),
+    request: reviewRequest(sha),
     taskId,
     provider: "openai-codex",
     modelId: "gpt-5.5",

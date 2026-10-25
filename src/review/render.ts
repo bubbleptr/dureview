@@ -1,7 +1,7 @@
 import type { ReviewCommentDraft } from "../github/client.js";
 import type { ReviewRequest } from "../types.js";
 import { confidenceWord, formatConfidence } from "./confidence.js";
-import { findingMarker, fixedMarker, ledgerMarker, type LedgerEntry } from "./ledger.js";
+import { cleanMarker, findingMarker, fixedMarker, ledgerMarker, type LedgerEntry } from "./ledger.js";
 import { foldedBucket, type AnchoredFinding, type ClassifiedReview, type ReviewLanguage } from "./policy.js";
 import { formatFindingType, type Finding, type ReviewSubmission, type Verdict } from "./schema.js";
 
@@ -138,6 +138,30 @@ export function renderInlineDrafts(
 /** Reply used when a review thread cannot be resolved. The marker keeps a retry from replying twice. */
 export function renderFixedReply(language: ReviewLanguage, sha: string, fingerprint: string): string {
   return `${copyFor(language).fixedReply(sha)}\n${fixedMarker(fingerprint, sha)}`;
+}
+
+/** Comment body for a head with nothing inlined. The marker is how a retry finds the review. */
+export function renderCleanReview(input: {
+  language: ReviewLanguage;
+  sha: string;
+  taskId: string;
+  unposted: number;
+}): string {
+  const short = input.sha.slice(0, 7);
+  const lead =
+    input.language === "zh"
+      ? `dureview 审查完成：未发现需要处理的问题（head ${short}）`
+      : `dureview review complete: no issues to address (head ${short})`;
+  const extra = cleanUnpostedClause(input.language, input.unposted);
+  const text = extra === "" ? lead : input.language === "zh" ? `${lead}。${extra}` : `${lead}. ${extra}`;
+  return `${text}\n${cleanMarker(input.taskId, input.sha)}`;
+}
+
+function cleanUnpostedClause(language: ReviewLanguage, count: number): string {
+  if (count <= 0) return "";
+  if (language === "zh") return `另有 ${count} 条低优先级提示未贴为行内评论，详见 dureview check。`;
+  if (count === 1) return "1 lower-priority note was not posted as an inline comment; see the dureview check.";
+  return `${count} lower-priority notes were not posted as inline comments; see the dureview check.`;
 }
 
 export function renderSummary(input: {

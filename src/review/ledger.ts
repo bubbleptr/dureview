@@ -71,6 +71,18 @@ export function fixedMarker(fingerprint: string, sha: string): string {
   return `<!-- dureview:fixed ${fingerprint} ${sha} -->`;
 }
 
+/** Hidden marker on the clean Comment review, so a later run of the same head does not post another. */
+export function cleanMarker(taskId: string, sha: string): string {
+  return `<!-- dureview:clean task=${taskId} sha=${sha} -->`;
+}
+
+export function parseCleanMarker(body: string | null | undefined): { taskId: string; sha: string } | null {
+  if (!body) return null;
+  const match = /<!-- dureview:clean task=(\S+) sha=(\S+) -->/.exec(body);
+  if (!match?.[1] || !match[2]) return null;
+  return { taskId: match[1], sha: match[2] };
+}
+
 export function parseFindingMarker(body: string): { fingerprint: string; taskId: string } | null {
   const match = /<!-- dureview:finding ([0-9a-f]{12}) (\S+) -->/.exec(body);
   if (!match?.[1] || !match[2]) return null;

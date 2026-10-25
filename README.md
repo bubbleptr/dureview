@@ -41,7 +41,7 @@ The same head commit gets a check run named `dureview`. It stays in progress whi
 
 With `language: zh` those titles are 未发现问题, 有阻断性问题, 有 N 条建议, 审查失败, 需要处理, and 审查已取消. An `action_required` check links to [`.dureview.md`](#dureviewmd). Informational flags are left out of the counts. In branch protection, require the status check `dureview`.
 
-Installing the GitHub App does not start reviews. The built-in trigger is `manual` (this comment only). Opt in with `trigger: auto` or `trigger: once` in [`.dureview.md`](#dureviewmd) on the pull request's base branch, or with `DUREVIEW_DEFAULT_TRIGGER`. By default there is no summary comment (`summary: false`): one inline comment per posted finding, and a clean review writes nothing to the conversation. The check run is how you see that it finished.
+Installing the GitHub App does not start reviews. The built-in trigger is `manual` (this comment only). Opt in with `trigger: auto` or `trigger: once` in [`.dureview.md`](#dureviewmd) on the pull request's base branch, or with `DUREVIEW_DEFAULT_TRIGGER`. By default there is no summary comment (`summary: false`): one inline comment per posted finding. When this run posts nothing inline, and no earlier dureview inline comment is still open, dureview submits one Comment review: `dureview review complete: no issues to address (head abc1234)`, or `dureview 审查完成：未发现需要处理的问题（head abc1234）` when `language` is `zh`. It does not request changes or approve. The same head SHA gets that note once, including two publishes of that head that overlap. If the `dureview` check lists findings that were not posted inline, the note includes that count.
 
 A P0 or P1 inline finding submits **Request changes**, except an informational flag. Anything else uses **Comment**. dureview does not approve. How findings are filtered, deduped, and updated on the next push is in [What gets posted](docs/reference.md#what-gets-posted).
 
@@ -160,8 +160,8 @@ This service assumes `user` is non-null after `loadUser()`.
 | `trigger` | `manual` | `auto` reviews `opened`, `reopened`, `synchronize`, and `ready_for_review`. `once` reviews the first allowed `opened` or `ready_for_review` only. `manual` reviews only on `/dureview`. |
 | `drafts` | `false` | Drafts are skipped until marked ready. `trigger: manual` still waits for `/dureview`. `true` reviews drafts the same way as open pull requests. |
 | `profile` | `default` | `quiet` inlines P0–P1. `default` also inlines P2 at `p2_inline_min_confidence`. `loud` uses the same priorities and sets that P2 bar to `0.5`. |
-| `language` | `en` | `en` or `zh`. Finding prose, labels, verdicts, and fixed notes use it. |
-| `summary` | `false` | `true` also posts and updates one summary comment. `false` posts inline comments only. |
+| `language` | `en` | `en` or `zh`. Finding prose, labels, verdicts, fixed notes, and the clean-review note use it. |
+| `summary` | `false` | `true` also posts and updates one summary comment. `false` posts inline comments, and one Comment review when this run posts none. |
 | `post_informational` | `false` | `true` allows informational flags on GitHub. They still do not request changes. |
 | `min_confidence` | `0.5` | Drop findings below this. `0.5` is kept. |
 | `min_inline_priority` | `1` for `quiet`, `2` otherwise | `0` is P0 only, `1` is P0–P1, `2` is P0–P2, `3` also allows P3. |
