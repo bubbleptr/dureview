@@ -1,6 +1,7 @@
 import type { GitHub, PullReview, ReviewEvent } from "./client.js";
 import { isRequestChangesRejected } from "./client.js";
 import { log } from "../log.js";
+import { checkUnpostedFindings } from "../review/checks.js";
 import {
   disappeared,
   inlineFingerprintMarker,
@@ -15,7 +16,7 @@ import { postingsFromClassified, type FindingPosting } from "../review/findings.
 import { classifyFindings, type ReviewLanguage, type ReviewPolicy } from "../review/policy.js";
 import { renderCleanReview, renderFixedReply, renderInlineDrafts, renderSummary } from "../review/render.js";
 import { isInformational, type Finding, type ReviewSubmission } from "../review/schema.js";
-import { inlineMarker, summaryMarker, taskMarker, type ReviewRequest } from "../types.js";
+import { inlineMarker, reviewKey, summaryMarker, taskMarker, type ReviewRequest } from "../types.js";
 
 export type PublishResult = {
   summaryCommentId: number | null;
@@ -43,6 +44,7 @@ export type PublishResult = {
  * single finding is accepted does not post that finding again. When this run
  * inlines nothing and no earlier inline comment is still open, it submits one
  * Comment review for that head. The hidden clean marker keeps a retry from posting it twice.
+ * Overlapping publishes of the same head share one in-process lock.
  */
 export async function publishReview(input: {
   github: GitHub;
@@ -207,7 +209,7 @@ async function publishWithoutSummary(input: {
         taskId: input.taskId,
         signal: input.signal,
         language,
-        unposted: unpostedCount(postings),
+        unposted: checkUnpostedFindings(classified, input.policy).length,
       });
       reviewId = clean.id;
       reviewAction = clean.action;
@@ -232,6 +234,23 @@ async function publishWithoutSummary(input: {
   };
 }
 
+// The marker check is too late when two publishes of this head are both past it.
+const cleanReviewGate = new Map<string, Promise<void>>();
+
+function withCleanReviewLock<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const previous = cleanReviewGate.get(key) ?? Promise.resolve();
+  const result = previous.then(run);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  cleanReviewGate.set(key, settled);
+  void settled.then(() => {
+    if (cleanReviewGate.get(key) === settled) cleanReviewGate.delete(key);
+  });
+  return result;
+}
+
 async function ensureCleanReview(input: {
   github: GitHub;
   request: ReviewRequest;
@@ -240,33 +259,27 @@ async function ensureCleanReview(input: {
   language: ReviewLanguage;
   unposted: number;
 }): Promise<{ id: number; action: "created" | "unchanged" }> {
-  const reviews = await input.github.listReviews(input.request, input.signal);
-  const existing = reviews.find((review) => parseCleanMarker(review.body)?.sha === input.request.sha);
-  if (existing) return { id: existing.id, action: "unchanged" };
-  const created = await input.github.createReview(
-    input.request,
-    {
-      sha: input.request.sha,
-      body: renderCleanReview({
-        language: input.language,
+  return withCleanReviewLock(reviewKey(input.request), async () => {
+    const reviews = await input.github.listReviews(input.request, input.signal);
+    const existing = reviews.find((review) => parseCleanMarker(review.body)?.sha === input.request.sha);
+    if (existing) return { id: existing.id, action: "unchanged" };
+    const created = await input.github.createReview(
+      input.request,
+      {
         sha: input.request.sha,
-        taskId: input.taskId,
-        unposted: input.unposted,
-      }),
-      event: "COMMENT",
-      comments: [],
-    },
-    input.signal,
-  );
-  return { id: created.id, action: "created" };
-}
-
-function unpostedCount(postings: readonly FindingPosting[]): number {
-  let count = 0;
-  for (const posting of postings) {
-    if (!posting.posted) count += 1;
-  }
-  return count;
+        body: renderCleanReview({
+          language: input.language,
+          sha: input.request.sha,
+          taskId: input.taskId,
+          unposted: input.unposted,
+        }),
+        event: "COMMENT",
+        comments: [],
+      },
+      input.signal,
+    );
+    return { id: created.id, action: "created" };
+  });
 }
 
 function reviewEvent(findings: readonly Finding[]): ReviewEvent {

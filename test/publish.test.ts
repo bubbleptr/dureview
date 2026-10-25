@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GithubRest, RequestChangesRejectedError, isRequestChangesRejected, reviewCommentPayload } from "../src/github/client.js";
 import { publishReview } from "../src/github/publish.js";
+import { reviewCheckOutcome } from "../src/review/checks.js";
 import { cleanMarker, findingMarker } from "../src/review/ledger.js";
 import { inlineMarker, summaryMarker, taskMarker } from "../src/types.js";
 import {
@@ -211,6 +212,20 @@ describe("summary off", () => {
     expect(github.calls.filter((call) => call === "createReview")).toEqual(["createReview"]);
   });
 
+  it("posts one clean review when two publishes of the same head overlap", async () => {
+    const github = new MemoryGitHub();
+    const [first, second] = await Promise.all([
+      publishReview(base(github, "41", "Nothing to report.", [], { summary: false })),
+      publishReview(base(github, "42", "Still nothing.", [], { summary: false })),
+    ]);
+
+    expect(github.reviews).toHaveLength(1);
+    expect(github.calls.filter((call) => call === "createReview")).toEqual(["createReview"]);
+    expect([first.reviewAction, second.reviewAction].sort()).toEqual(["created", "unchanged"]);
+    expect(first.reviewId).toBe(second.reviewId);
+    expect(github.reviews[0]?.event).toBe("COMMENT");
+  });
+
   it("posts the clean review in Chinese", async () => {
     const github = new MemoryGitHub();
     const result = await publishReview(base(github, "41", "没有问题。", [], { summary: false, language: "zh" }));
@@ -251,7 +266,22 @@ describe("summary off", () => {
     expect(github.reviews[0]).toMatchObject({
       event: "COMMENT",
       comments: [],
-      body: cleanBody("en", "41", SHA_A, 4),
+      body: cleanBody("en", "41", SHA_A, 2),
+    });
+  });
+
+  it("does not mention the check when the only finding is below min confidence", async () => {
+    const github = new MemoryGitHub();
+    const low = sampleFinding({ title: "Unsure about the charge", confidence: 0.1 });
+    const input = base(github, "41", "Below the floor.", [low], { summary: false });
+    await publishReview(input);
+
+    expect(github.reviews).toHaveLength(1);
+    expect(github.reviews[0]?.body).toBe(cleanBody("en", "41", SHA_A, 0));
+    expect(reviewCheckOutcome({ findings: [low], diff: input.diff, policy: input.policy })).toEqual({
+      conclusion: "success",
+      title: "No findings",
+      summary: "No issues to report.",
     });
   });
 
@@ -355,7 +385,7 @@ describe("summary off", () => {
     expect(github.reviews).toHaveLength(1);
     expect(github.reviews[0]?.event).toBe("COMMENT");
     expect(github.reviews[0]?.comments).toEqual([]);
-    expect(github.reviews[0]?.body).toBe(cleanBody("en", "41", SHA_A, 1));
+    expect(github.reviews[0]?.body).toBe(cleanBody("en", "41", SHA_A, 0));
     expect(held.postings).toEqual([
       expect.objectContaining({ fingerprint: note.fingerprint, posted: false, skipReason: "informational" }),
     ]);
