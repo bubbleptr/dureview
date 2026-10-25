@@ -212,18 +212,21 @@ describe("summary off", () => {
     expect(github.calls.filter((call) => call === "createReview")).toEqual(["createReview"]);
   });
 
-  it("posts one clean review when two publishes of the same head overlap", async () => {
+  it("does not post a clean note after an overlapping inline review of the same head", async () => {
     const github = new MemoryGitHub();
-    const [first, second] = await Promise.all([
+    const [clean, inline] = await Promise.all([
       publishReview(base(github, "41", "Nothing to report.", [], { summary: false })),
-      publishReview(base(github, "42", "Still nothing.", [], { summary: false })),
+      publishReview(base(github, "42", "A finding.", [FINDING], { summary: false })),
     ]);
 
-    expect(github.reviews).toHaveLength(1);
-    expect(github.calls.filter((call) => call === "createReview")).toEqual(["createReview"]);
-    expect([first.reviewAction, second.reviewAction].sort()).toEqual(["created", "unchanged"]);
-    expect(first.reviewId).toBe(second.reviewId);
-    expect(github.reviews[0]?.event).toBe("COMMENT");
+    expect(inline.reviewAction).toBe("created");
+    expect(github.reviewComments).toHaveLength(1);
+    expect(github.reviews.map((review) => review.event)).toEqual(["COMMENT", "REQUEST_CHANGES"]);
+    expect(github.reviews[0]?.body).toContain(cleanMarker("41", SHA_A));
+    expect(github.reviews[0]?.id).toBe(clean.reviewId);
+    expect(github.reviews[1]?.comments).toHaveLength(1);
+    expect(github.reviews[1]?.id).toBe(inline.reviewId);
+    expect(clean.reviewId).toBeLessThan(inline.reviewId ?? 0);
   });
 
   it("posts the clean review in Chinese", async () => {

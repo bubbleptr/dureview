@@ -44,7 +44,8 @@ export type PublishResult = {
  * single finding is accepted does not post that finding again. When this run
  * inlines nothing and no earlier inline comment is still open, it submits one
  * Comment review for that head. The hidden clean marker keeps a retry from posting it twice.
- * Overlapping publishes of the same head share one in-process lock.
+ * Overlapping `summary: false` publishes of the same head share one in-process lock,
+ * from the ledger read through the writes.
  */
 export async function publishReview(input: {
   github: GitHub;
@@ -149,7 +150,13 @@ async function publishWithSummary(input: {
   };
 }
 
-async function publishWithoutSummary(input: {
+async function publishWithoutSummary(
+  input: Parameters<typeof publishWithoutSummaryLocked>[0],
+): Promise<PublishResult> {
+  return withHeadPublishLock(reviewKey(input.request), () => publishWithoutSummaryLocked(input));
+}
+
+async function publishWithoutSummaryLocked(input: {
   github: GitHub;
   request: ReviewRequest;
   taskId: string;
@@ -234,19 +241,19 @@ async function publishWithoutSummary(input: {
   };
 }
 
-// The marker check is too late when two publishes of this head are both past it.
-const cleanReviewGate = new Map<string, Promise<void>>();
+// The marker check misses an inline publish that lands after this head's ledger was read.
+const headPublishGate = new Map<string, Promise<void>>();
 
-function withCleanReviewLock<T>(key: string, run: () => Promise<T>): Promise<T> {
-  const previous = cleanReviewGate.get(key) ?? Promise.resolve();
+function withHeadPublishLock<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const previous = headPublishGate.get(key) ?? Promise.resolve();
   const result = previous.then(run);
   const settled = result.then(
     () => undefined,
     () => undefined,
   );
-  cleanReviewGate.set(key, settled);
+  headPublishGate.set(key, settled);
   void settled.then(() => {
-    if (cleanReviewGate.get(key) === settled) cleanReviewGate.delete(key);
+    if (headPublishGate.get(key) === settled) headPublishGate.delete(key);
   });
   return result;
 }
@@ -259,27 +266,25 @@ async function ensureCleanReview(input: {
   language: ReviewLanguage;
   unposted: number;
 }): Promise<{ id: number; action: "created" | "unchanged" }> {
-  return withCleanReviewLock(reviewKey(input.request), async () => {
-    const reviews = await input.github.listReviews(input.request, input.signal);
-    const existing = reviews.find((review) => parseCleanMarker(review.body)?.sha === input.request.sha);
-    if (existing) return { id: existing.id, action: "unchanged" };
-    const created = await input.github.createReview(
-      input.request,
-      {
+  const reviews = await input.github.listReviews(input.request, input.signal);
+  const existing = reviews.find((review) => parseCleanMarker(review.body)?.sha === input.request.sha);
+  if (existing) return { id: existing.id, action: "unchanged" };
+  const created = await input.github.createReview(
+    input.request,
+    {
+      sha: input.request.sha,
+      body: renderCleanReview({
+        language: input.language,
         sha: input.request.sha,
-        body: renderCleanReview({
-          language: input.language,
-          sha: input.request.sha,
-          taskId: input.taskId,
-          unposted: input.unposted,
-        }),
-        event: "COMMENT",
-        comments: [],
-      },
-      input.signal,
-    );
-    return { id: created.id, action: "created" };
-  });
+        taskId: input.taskId,
+        unposted: input.unposted,
+      }),
+      event: "COMMENT",
+      comments: [],
+    },
+    input.signal,
+  );
+  return { id: created.id, action: "created" };
 }
 
 function reviewEvent(findings: readonly Finding[]): ReviewEvent {
