@@ -37,7 +37,7 @@ Informational flags never make the review event `REQUEST_CHANGES`.
 
 One inline comment per posted finding, on `side: RIGHT`, in one pull request review. The review body is empty. A multi-line finding sets `start_line`. A GitHub suggestion block is included only when the suggestion replaces that exact diff range. The event is `REQUEST_CHANGES` when any posted comment is P0 or P1 and is not an informational flag, and `COMMENT` otherwise. GitHub rejects Request changes when the token's user opened the pull request; dureview logs that and submits Comment instead.
 
-A review with no inline findings, and no earlier inline comment to resolve, writes nothing to the conversation. The check run still completes. On a later push, an open fingerprint that disappeared is resolved with GitHub's `resolveReviewThread`. If that fails, dureview replies `fixed in <sha>` (or `已在 <sha> 修复` when `language` is `zh`).
+When this run posts no inline comments, and no earlier dureview inline comment is still open, dureview submits one pull request review with event `COMMENT`. The body is plain text: `dureview review complete: no issues to address (head abc1234)` in English, or `dureview 审查完成：未发现需要处理的问题（head abc1234）` when `language` is `zh`. `abc1234` is the first seven characters of the head SHA. The body ends with `<!-- dureview:clean task=<task id> sha=<full sha> -->`. The same head SHA is posted at most once, including when a retry finds that marker already on the pull request. The event is Comment. It is not Request changes and not Approve. If findings were not posted inline (below `min_confidence`, ignored paths, folded priority, informational flags, lines outside the diff), the body adds the count and points at the `dureview` check, which still lists them. A later head that has inline findings is posted as usual. A clean note on an older SHA is left in place. The check run still completes. On a later push, an open fingerprint that disappeared is resolved with GitHub's `resolveReviewThread`. If that fails, dureview replies `fixed in <sha>` (or `已在 <sha> 修复` when `language` is `zh`).
 
 ### `summary: true`
 
@@ -75,11 +75,12 @@ Hidden HTML comments let a resume see a write GitHub already accepted:
 <!-- dureview:inline 17 -->
 <!-- dureview:finding a1b2c3d4e5f6 17 -->
 <!-- dureview:fixed a1b2c3d4e5f6 <sha> -->
+<!-- dureview:clean task=17 sha=<full sha> -->
 <!-- dureview:ledger <hex> -->
 <!-- dureview:fps a1b2c3d4e5f6,b2c3d4e5f6a1 -->
 ```
 
-The summary, task, inline, ledger, and `fps` markers are used when `summary: true`. The finding marker is embedded in each inline comment when `summary: false`. The fixed marker is embedded in a reply when a thread could not be resolved. Summary-mode inline comments also carry a visible `<sub>dureview · fp:…` footer. The summary marker is per pull request, so the next push updates that comment.
+The summary, task, inline, ledger, and `fps` markers are used when `summary: true`. The finding marker is embedded in each inline comment when `summary: false`. The fixed marker is embedded in a reply when a thread could not be resolved. The clean marker is on the Comment review posted when `summary: false` and this run inlines nothing. A later publish of that same head SHA sees it and does not post another. Summary-mode inline comments also carry a visible `<sub>dureview · fp:…` footer. The summary marker is per pull request, so the next push updates that comment.
 
 ## Data files
 

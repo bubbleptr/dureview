@@ -4,6 +4,7 @@ import { log } from "../log.js";
 import {
   disappeared,
   inlineFingerprintMarker,
+  parseCleanMarker,
   parseLedger,
   postedFingerprints,
   readInlineLedger,
@@ -12,7 +13,7 @@ import {
 } from "../review/ledger.js";
 import { postingsFromClassified, type FindingPosting } from "../review/findings.js";
 import { classifyFindings, type ReviewLanguage, type ReviewPolicy } from "../review/policy.js";
-import { renderFixedReply, renderInlineDrafts, renderSummary } from "../review/render.js";
+import { renderCleanReview, renderFixedReply, renderInlineDrafts, renderSummary } from "../review/render.js";
 import { isInformational, type Finding, type ReviewSubmission } from "../review/schema.js";
 import { inlineMarker, summaryMarker, taskMarker, type ReviewRequest } from "../types.js";
 
@@ -39,7 +40,9 @@ export type PublishResult = {
  * `summary: false` (the default) posts one inline comment per finding and no summary.
  * Each comment carries a fingerprint and task id. A later run reads those comments
  * to dedupe, and resolves the thread when a finding is gone. A crash after any
- * single finding is accepted does not post that finding again.
+ * single finding is accepted does not post that finding again. When this run
+ * inlines nothing and no earlier inline comment is still open, it submits one
+ * Comment review for that head. The hidden clean marker keeps a retry from posting it twice.
  */
 export async function publishReview(input: {
   github: GitHub;
@@ -172,6 +175,7 @@ async function publishWithoutSummary(input: {
   });
   const open = new Set(classified.open.map((finding) => finding.fingerprint));
   const stale = ledger.filter((entry) => !entry.handled && !open.has(entry.fingerprint));
+  const postings = postingsFromClassified(classified, input.policy);
 
   let reviewId: number | null = null;
   let reviewAction: PublishResult["reviewAction"] = "skipped";
@@ -192,9 +196,21 @@ async function publishWithoutSummary(input: {
     reviewAction = "created";
   } else {
     const prior = reviewIdPostedByTask(comments, input.taskId);
+    const inlineStillOpen = openLedger.some((entry) => open.has(entry.fingerprint));
     if (prior !== undefined) {
       reviewId = prior;
       reviewAction = "unchanged";
+    } else if (!inlineStillOpen) {
+      const clean = await ensureCleanReview({
+        github: input.github,
+        request: input.request,
+        taskId: input.taskId,
+        signal: input.signal,
+        language,
+        unposted: unpostedCount(postings),
+      });
+      reviewId = clean.id;
+      reviewAction = clean.action;
     }
   }
 
@@ -208,12 +224,49 @@ async function publishWithoutSummary(input: {
     summaryAction: "skipped",
     reviewId,
     reviewAction,
-    postings: postingsFromClassified(classified, input.policy).map((posting) =>
+    postings: postings.map((posting) =>
       recoveredByThisTask.has(posting.fingerprint)
         ? { fingerprint: posting.fingerprint, posted: true, skipReason: null }
         : posting,
     ),
   };
+}
+
+async function ensureCleanReview(input: {
+  github: GitHub;
+  request: ReviewRequest;
+  taskId: string;
+  signal: AbortSignal;
+  language: ReviewLanguage;
+  unposted: number;
+}): Promise<{ id: number; action: "created" | "unchanged" }> {
+  const reviews = await input.github.listReviews(input.request, input.signal);
+  const existing = reviews.find((review) => parseCleanMarker(review.body)?.sha === input.request.sha);
+  if (existing) return { id: existing.id, action: "unchanged" };
+  const created = await input.github.createReview(
+    input.request,
+    {
+      sha: input.request.sha,
+      body: renderCleanReview({
+        language: input.language,
+        sha: input.request.sha,
+        taskId: input.taskId,
+        unposted: input.unposted,
+      }),
+      event: "COMMENT",
+      comments: [],
+    },
+    input.signal,
+  );
+  return { id: created.id, action: "created" };
+}
+
+function unpostedCount(postings: readonly FindingPosting[]): number {
+  let count = 0;
+  for (const posting of postings) {
+    if (!posting.posted) count += 1;
+  }
+  return count;
 }
 
 function reviewEvent(findings: readonly Finding[]): ReviewEvent {

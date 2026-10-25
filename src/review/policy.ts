@@ -61,7 +61,8 @@ export type ReviewPolicy = {
   language: ReviewLanguage;
   /**
    * When true, post and update one summary comment (the previous behavior).
-   * When false (default), post one inline comment per finding and nothing else.
+   * When false (default), post one inline comment per finding. When this run
+   * posts none and no earlier inline comment is still open, post one Comment review.
    */
   summary: boolean;
   /**
