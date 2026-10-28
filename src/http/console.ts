@@ -16,8 +16,10 @@ export function isSettingsPoll(request: Request): boolean {
   return new URL(request.url).searchParams.get("poll") === "1";
 }
 
+/** GitHub returns from the manifest flow to the bare settings URL with `code` and `state`. */
 export function isGitHubSetupReturn(request: Request): boolean {
-  return new URL(request.url).searchParams.get("setup") === "github";
+  const params = new URL(request.url).searchParams;
+  return params.has("code") && params.has("state");
 }
 
 export function settingsPollResponse(service: DureviewService): Response {
