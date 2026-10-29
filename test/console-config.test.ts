@@ -201,7 +201,7 @@ describe("GitHub App file", () => {
       url: "https://review.example/ui",
       description: "Adversarial pull request review",
       public: false,
-      redirect_url: "https://review.example/ui/settings?setup=github&state=abc",
+      redirect_url: "https://review.example/ui/settings",
       setup_url: "https://review.example/ui/settings",
       hook_attributes: { url: "https://review.example/webhook", active: true },
       default_permissions: { contents: "read", issues: "write", pull_requests: "write", checks: "write" },
@@ -546,11 +546,14 @@ describe("settings console HTTP", () => {
     expect(handoff.status).toBe(200);
     expect(handoff.headers.get("content-security-policy")).toContain("form-action https://github.com");
     const handoffHtml = await handoff.text();
-    expect(handoffHtml).toContain("https://github.com/settings/apps/new");
     expect(handoffHtml).not.toContain("PRIVATE KEY");
     const state = /dureview_github_setup=([a-f0-9]{64})/.exec(handoff.headers.get("set-cookie") ?? "")?.[1];
     expect(state).toBeTruthy();
-    const mismatch = await fetch(`${http.url}/ui/settings?setup=github&state=${"ab".repeat(32)}&code=abcdefghij`, {
+    // GitHub rejects a redirect_url carrying state; it rides on the apps/new URL.
+    expect(handoffHtml).toContain(`action="https://github.com/settings/apps/new?state=${state}"`);
+    expect(handoffHtml).toContain("&quot;redirect_url&quot;:&quot;http");
+    expect(handoffHtml).toMatch(/&quot;redirect_url&quot;:&quot;http:\/\/[^&]+\/ui\/settings&quot;/);
+    const mismatch = await fetch(`${http.url}/ui/settings?state=${"ab".repeat(32)}&code=abcdefghij`, {
       headers: { ...auth, cookie: `dureview_github_setup=${state}`, origin: "https://github.com", "sec-fetch-site": "cross-site" },
       redirect: "manual",
     });
@@ -594,7 +597,7 @@ describe("settings console HTTP", () => {
     expect(handoff.headers.get("content-security-policy")).toContain("form-action https://ghe.example.com");
     expect(handoff.headers.get("content-security-policy")).not.toContain("form-action https://github.com");
     const html = await handoff.text();
-    expect(html).toContain("https://ghe.example.com/organizations/acme/settings/apps/new");
+    expect(html).toContain("https://ghe.example.com/organizations/acme/settings/apps/new?state=");
     expect(html).not.toContain("https://github.com/settings/apps/new");
   });
 

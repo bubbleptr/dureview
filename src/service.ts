@@ -294,8 +294,8 @@ export class DureviewService {
     if (!web || !action) return null;
     const state = newSetupState();
     this.#githubState = { state, expires: Date.now() + 10 * 60 * 1000 };
-    const manifest = buildManifest(origin, state);
-    return handoffResponse(manifestHandoffPage(action, manifest), githubSetupCookie(state), web);
+    const manifest = buildManifest(origin);
+    return handoffResponse(manifestHandoffPage(`${action}?state=${state}`, manifest), githubSetupCookie(state), web);
   }
 
   async finishGitHubSetup(state: string, code: string, signal?: AbortSignal): Promise<{ ok: true } | { ok: false; error: string }> {

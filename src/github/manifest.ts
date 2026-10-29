@@ -90,13 +90,18 @@ export function manifestOrigin(request: Request): { ok: true; origin: string } |
   return { ok: true, origin };
 }
 
-export function buildManifest(origin: string, state: string): ManifestDocument {
+/**
+ * GitHub rejects a `redirect_url` that carries `state`. The state goes on the
+ * apps/new POST URL instead (`manifestCreateUrl`), and GitHub appends it, with
+ * `code`, when it redirects back.
+ */
+export function buildManifest(origin: string): ManifestDocument {
   return {
     name: "dureview",
     url: `${origin}/ui`,
     description: "Adversarial pull request review",
     public: false,
-    redirect_url: `${origin}/ui/settings?setup=github&state=${state}`,
+    redirect_url: `${origin}/ui/settings`,
     setup_url: `${origin}/ui/settings`,
     hook_attributes: { url: `${origin}/webhook`, active: true },
     default_permissions: {
