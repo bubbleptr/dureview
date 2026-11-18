@@ -104,7 +104,7 @@ async function publishWithSummary(input: {
         sha: input.request.sha,
         body: `${inlineTag}\n${inlineFingerprintMarker(fingerprints)}\n`,
         event: "COMMENT",
-        comments: renderInlineDrafts(classified.inline, language),
+        comments: renderInlineDrafts(classified.inline, { language, source: input.request }),
       },
       input.signal,
     );
@@ -197,7 +197,7 @@ async function publishWithoutSummaryLocked(input: {
         sha: input.request.sha,
         body: "",
         event,
-        comments: renderInlineDrafts(classified.inline, language, input.taskId),
+        comments: renderInlineDrafts(classified.inline, { language, taskId: input.taskId, source: input.request }),
       },
       input.signal,
     );

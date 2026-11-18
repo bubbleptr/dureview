@@ -10,6 +10,7 @@ type Copy = {
   confidence: string;
   trigger: string;
   evidence: string;
+  triggerAndEvidence: string;
   noTrigger: string;
   severity: string;
   finding: string;
@@ -40,6 +41,7 @@ const EN: Copy = {
   confidence: "confidence",
   trigger: "Trigger",
   evidence: "Evidence",
+  triggerAndEvidence: "Trigger and evidence",
   noTrigger: "(no trigger given)",
   severity: "Severity",
   finding: "Finding",
@@ -69,6 +71,7 @@ const ZH: Copy = {
   confidence: "置信度",
   trigger: "触发条件",
   evidence: "证据",
+  triggerAndEvidence: "触发条件与证据",
   noTrigger: "（未给出触发条件）",
   severity: "级别",
   finding: "问题",
@@ -93,21 +96,22 @@ function copyFor(language: ReviewLanguage): Copy {
   return language === "zh" ? ZH : EN;
 }
 
+type CommentSource = Pick<ReviewRequest, "owner" | "repo" | "sha" | "cloneUrl">;
+
 export function renderInlineComment(
   finding: Finding,
   includeSuggestion = finding.suggestion !== null,
   language: ReviewLanguage = "en",
+  source?: CommentSource,
 ): string {
   const copy = copyFor(language);
   const lines = [
-    `${findingLead(finding, language, finding.title)} · ${finding.category}`,
+    inlineHeading(finding, language),
     "",
     finding.body.trim(),
-    `**${copy.trigger}**${copy.colon}${finding.trigger.trim() || copy.noTrigger}`,
+    "",
+    renderEvidenceDetails(finding, copy, source),
   ];
-  if (finding.evidence.length > 0) {
-    lines.push(`**${copy.evidence}**${copy.colon}${finding.evidence.map((item) => `\`${item}\``).join(copy.evidenceJoiner)}`);
-  }
   const rule = finding.ruleRef ? ` · ${finding.ruleRef}` : "";
   const footer = `<sub>dureview · fp:${finding.fingerprint}${rule}</sub>`;
   if (includeSuggestion && finding.suggestion) {
@@ -120,12 +124,12 @@ export function renderInlineComment(
 
 export function renderInlineDrafts(
   anchored: readonly AnchoredFinding[],
-  language: ReviewLanguage = "en",
-  taskId?: string,
+  options: { language?: ReviewLanguage; taskId?: string; source?: CommentSource } = {},
 ): ReviewCommentDraft[] {
+  const language = options.language ?? "en";
   return anchored.map((item) => {
-    const body = renderInlineComment(item.finding, item.includeSuggestion, language);
-    const marker = taskId === undefined ? "" : `\n${findingMarker(item.finding.fingerprint, taskId)}`;
+    const body = renderInlineComment(item.finding, item.includeSuggestion, language, options.source);
+    const marker = options.taskId === undefined ? "" : `\n${findingMarker(item.finding.fingerprint, options.taskId)}`;
     return {
       path: item.path,
       line: item.line,
@@ -283,6 +287,60 @@ function findingBadge(finding: Finding, language: ReviewLanguage): string {
       language,
     }) ?? `P${finding.priority}`
   );
+}
+
+function inlineHeading(finding: Finding, language: ReviewLanguage): string {
+  const copy = copyFor(language);
+  const badge = findingBadge(finding, language);
+  const confidence = `${copy.confidence} ${confidenceWord(finding.confidence, language)}`;
+  return `**${oneLine(finding.title)}**\n${badge} · ${confidence} · ${finding.category}`;
+}
+
+function renderEvidenceDetails(finding: Finding, copy: Copy, source: CommentSource | undefined): string {
+  const lines = [
+    "<details>",
+    `<summary>${copy.triggerAndEvidence}</summary>`,
+    "",
+    `**${copy.trigger}**${copy.colon}${finding.trigger.trim() || copy.noTrigger}`,
+  ];
+  if (finding.evidence.length > 0) {
+    const items = finding.evidence.map((item) => evidenceItem(item, source));
+    lines.push(`**${copy.evidence}**${copy.colon}${items.join(copy.evidenceJoiner)}`);
+  }
+  lines.push("", "</details>");
+  return lines.join("\n");
+}
+
+function evidenceItem(item: string, source: CommentSource | undefined): string {
+  const plain = `\`${item}\``;
+  const location = parseEvidenceLocation(item);
+  if (!location || !source || !canLink(source) || /[[\]`]/.test(item)) return plain;
+  const href = blobUrl(source, location.path, location.start, location.end);
+  return `[\`${item}\`](${href})`;
+}
+
+function canLink(source: CommentSource): boolean {
+  if (source.sha.trim().length === 0) return false;
+  if (source.owner.trim().length > 0 && source.repo.trim().length > 0) return true;
+  return /^https?:\/\//.test(source.cloneUrl);
+}
+
+function parseEvidenceLocation(item: string): { path: string; start: number; end: number } | null {
+  const trimmed = item.trim();
+  const match = /:L?(\d+)(?:-L?(\d+))?$/.exec(trimmed);
+  if (!match?.[1] || match.index <= 0) return null;
+  const path = trimmed.slice(0, match.index);
+  if (!isRepoRelativePath(path)) return null;
+  const start = Number(match[1]);
+  const end = match[2] !== undefined ? Number(match[2]) : start;
+  if (start < 1 || end < 1) return null;
+  return { path, start: Math.min(start, end), end: Math.max(start, end) };
+}
+
+function isRepoRelativePath(path: string): boolean {
+  if (!path || path.startsWith("/") || path.includes("\\")) return false;
+  const segments = path.split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
 
 function findingLead(finding: Finding, language: ReviewLanguage, title: string): string {

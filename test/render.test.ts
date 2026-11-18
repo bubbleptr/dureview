@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { reviewCheckOutcome } from "../src/review/checks.js";
-import { disappeared, parseLedger, readInlineLedger } from "../src/review/ledger.js";
+import { findingThreadResolved } from "../src/review/adoption.js";
+import { disappeared, findingMarker, parseLedger, readInlineLedger } from "../src/review/ledger.js";
 import { classifyFindings, defaultPolicy } from "../src/review/policy.js";
-import { findingMarker } from "../src/review/ledger.js";
 import { renderFixedReply, renderInlineComment, renderInlineDrafts, renderSummary } from "../src/review/render.js";
 
 const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/u;
@@ -24,10 +24,17 @@ describe("comment rendering", () => {
       suggestion: "const key = req.idempotencyKey ?? randomUUID();",
       evidence: [],
     });
-    expect(renderInlineComment(finding, true, "zh")).toBe(`**P1 · 缺陷 · 严重** · 置信度 高 · **重试时会重复扣款** · correctness
+    expect(renderInlineComment(finding, true, "zh")).toBe(`**重试时会重复扣款**
+P1 · 缺陷 · 严重 · 置信度 高 · correctness
 
 \`charge()\` 失败后外层又调用了一次，但 \`idempotencyKey\` 每次都重新生成（见 \`src/pay.ts:88\`），网关会把它当成新请求。
+
+<details>
+<summary>触发条件与证据</summary>
+
 **触发条件**：网关超时但实际已经成功扣款时。
+
+</details>
 
 \`\`\`suggestion
 const key = req.idempotencyKey ?? randomUUID();
@@ -47,9 +54,12 @@ const key = req.idempotencyKey ?? randomUUID();
       ruleRef: "payments",
     });
     const text = renderInlineComment(finding);
-    expect(text).toContain("**P0 · Security · Critical · CWE-20** · confidence high · **Trust the client total** · security");
+    expect(text.startsWith("**Trust the client total**\nP0 · Security · Critical · CWE-20 · confidence high · security\n")).toBe(true);
     expect(text).not.toMatch(EMOJI);
+    expect(text).toContain("<summary>Trigger and evidence</summary>");
+    expect(text.indexOf(finding.body)).toBeLessThan(text.indexOf("<details>"));
     expect(text).toContain("**Evidence**: `src/pay.ts:3`");
+    expect(text.indexOf("**Evidence**")).toBeGreaterThan(text.indexOf("<details>"));
     expect(text).toContain(`<sub>dureview · fp:${finding.fingerprint} · payments</sub>`);
     expect(text).not.toContain("```suggestion");
   });
@@ -90,6 +100,7 @@ const key = req.idempotencyKey ?? randomUUID();
     expect(summary).toContain("| P0 · 缺陷 · 严重 | 重复扣款 |");
     expect(summary.indexOf("| P0 ·")).toBeLessThan(summary.indexOf("| P2 ·"));
     expect(summary).toContain("待核实（1） / P3（1）");
+    expect(summary).toContain("**P1 · 标注 · 待核实** · 置信度 中 · **也许重复**");
     expect(summary).toContain("payment capture on the happy path");
     expect(summary).toContain("上一轮已修复：");
     expect(summary).not.toMatch(EMOJI);
@@ -124,9 +135,11 @@ const key = req.idempotencyKey ?? randomUUID();
       suggestion: null,
     });
     const inline = renderInlineComment(finding);
-    expect(inline).toContain("**P1 · Bug · Severe** · confidence high · **Retry charges twice** · correctness");
+    expect(inline.startsWith("**Retry charges twice**\nP1 · Bug · Severe · confidence high · correctness\n")).toBe(true);
     expect(inline).not.toMatch(EMOJI);
+    expect(inline).toContain("<summary>Trigger and evidence</summary>");
     expect(inline).toContain("**Trigger**: The gateway times out after a successful capture.");
+    expect(inline.indexOf("A retry generates a new idempotency key.")).toBeLessThan(inline.indexOf("<details>"));
     expect(inline).not.toContain("置信度");
     expect(inline).not.toContain("触发条件");
 
@@ -173,8 +186,7 @@ const key = req.idempotencyKey ?? randomUUID();
 
     const drafts = renderInlineDrafts(
       classifyFindings({ findings: [finding], diff: FIXTURE_DIFF, policy: defaultPolicy() }).inline,
-      "en",
-      "41",
+      { language: "en", taskId: "41" },
     );
     expect(drafts[0]?.body.endsWith(findingMarker(finding.fingerprint, "41"))).toBe(true);
 
@@ -210,5 +222,85 @@ const key = req.idempotencyKey ?? randomUUID();
     });
     const withEmoji = current.replace("## dureview: Block", "## dureview: ⛔ Block");
     expect(parseLedger(withEmoji).map((entry) => entry.fp)).toEqual(parseLedger(current).map((entry) => entry.fp));
+  });
+
+  it("links evidence inside a collapsed section and still parses old and new comments", () => {
+    const finding = sampleFinding({
+      title: "Stale total",
+      priority: 2,
+      category: "data_integrity",
+      confidence: 0.86,
+      body: "The stored total is left unchanged when a line is removed.",
+      trigger: "A line is deleted after the total was cached.",
+      evidence: ["src/pay.ts:12", "src/totals.ts:10-20", "src/a b.ts:L8-L9", "src/pay.ts:20-10", "not a location", "../secrets.ts:1"],
+      suggestion: null,
+    });
+    const source = reviewRequest();
+    const sha = source.sha;
+    const en = renderInlineComment(finding, false, "en", source);
+    expect(en.startsWith("**Stale total**\nP2 · Bug · Non-severe · confidence high · data_integrity\n")).toBe(true);
+    expect(en).toContain("<summary>Trigger and evidence</summary>");
+    expect(en.indexOf(finding.body)).toBeLessThan(en.indexOf("<details>"));
+    expect(en.indexOf("**Trigger**")).toBeGreaterThan(en.indexOf("<summary>"));
+    expect(en).toContain(`[\`src/pay.ts:12\`](https://github.com/acme/demo/blob/${sha}/src/pay.ts#L12)`);
+    expect(en).toContain(`[\`src/totals.ts:10-20\`](https://github.com/acme/demo/blob/${sha}/src/totals.ts#L10-L20)`);
+    expect(en).toContain(`[\`src/a b.ts:L8-L9\`](https://github.com/acme/demo/blob/${sha}/src/a%20b.ts#L8-L9)`);
+    expect(en).toContain(`[\`src/pay.ts:20-10\`](https://github.com/acme/demo/blob/${sha}/src/pay.ts#L10-L20)`);
+    expect(en).toContain("`not a location`");
+    expect(en).toContain("`../secrets.ts:1`");
+    expect(en).not.toContain("secrets.ts#");
+    expect(en).not.toMatch(EMOJI);
+    expect(en).toContain(`<sub>dureview · fp:${finding.fingerprint}</sub>`);
+
+    const zhFinding = sampleFinding({ ...finding, title: "合计未更新" });
+    const zh = renderInlineComment(zhFinding, false, "zh", source);
+    expect(zh.startsWith("**合计未更新**\nP2 · 缺陷 · 一般 · 置信度 高 · data_integrity\n")).toBe(true);
+    expect(zh).toContain("<summary>触发条件与证据</summary>");
+    expect(zh).toContain(
+      `**证据**：[\`src/pay.ts:12\`](https://github.com/acme/demo/blob/${sha}/src/pay.ts#L12)，[\`src/totals.ts:10-20\`](https://github.com/acme/demo/blob/${sha}/src/totals.ts#L10-L20)`,
+    );
+
+    const ghe = renderInlineComment(finding, false, "en", { ...source, cloneUrl: "https://ghe.example.com/acme/demo.git" });
+    expect(ghe).toContain(`[\`src/pay.ts:12\`](https://ghe.example.com/acme/demo/blob/${sha}/src/pay.ts#L12)`);
+
+    const plain = renderInlineComment(finding);
+    expect(plain).toContain("**Evidence**: `src/pay.ts:12`, `src/totals.ts:10-20`");
+    expect(plain).not.toContain("](http");
+    expect(renderInlineComment(finding, false, "en", { ...source, sha: "" })).not.toContain("](http");
+
+    const previous = `**P2 · Bug · Non-severe** · confidence high · **${finding.title}** · data_integrity
+
+${finding.body}
+**Trigger**: ${finding.trigger}
+**Evidence**: \`src/pay.ts:12\`
+
+<sub>dureview · fp:${finding.fingerprint}</sub>
+${findingMarker(finding.fingerprint, "task_1")}`;
+    const drafted = renderInlineDrafts([{ finding, path: finding.path, line: finding.startLine, includeSuggestion: false }], {
+      language: "en",
+      taskId: "task_1",
+      source,
+    })[0]?.body;
+    expect(drafted?.endsWith(findingMarker(finding.fingerprint, "task_1"))).toBe(true);
+    expect(drafted).toContain(`[\`src/pay.ts:12\`](https://github.com/acme/demo/blob/${sha}/src/pay.ts#L12)`);
+
+    const fixed = `fixed in abc1234\n<!-- dureview:fixed ${finding.fingerprint} abc1234 -->`;
+    expect(readInlineLedger([{ id: 1, body: previous, threadId: "old", inReplyToId: null, resolved: false }])).toEqual([
+      expect.objectContaining({ fingerprint: finding.fingerprint, taskId: "task_1", commentId: 1, handled: false }),
+    ]);
+    expect(readInlineLedger([{ id: 2, body: drafted ?? "", threadId: "new", inReplyToId: null, resolved: false }])).toEqual([
+      expect.objectContaining({ fingerprint: finding.fingerprint, taskId: "task_1", commentId: 2, handled: false }),
+    ]);
+    expect(
+      readInlineLedger([
+        { id: 2, body: drafted ?? "", threadId: "new", inReplyToId: null, resolved: false },
+        { id: 3, body: fixed, threadId: "new", inReplyToId: 2, resolved: false },
+      ])[0]?.handled,
+    ).toBe(true);
+    expect(findingThreadResolved({ fingerprint: finding.fingerprint, taskId: "task_1" }, [{ body: drafted ?? "", resolved: true, threadId: "new" }])).toBe(true);
+    expect(findingThreadResolved({ fingerprint: finding.fingerprint, taskId: "task_1" }, [{ body: previous, resolved: false, threadId: "old" }])).toBe(false);
+    expect(
+      readInlineLedger([{ id: 4, body: en, threadId: "footer", inReplyToId: null, resolved: false }])[0],
+    ).toMatchObject({ fingerprint: finding.fingerprint, taskId: "" });
   });
 });

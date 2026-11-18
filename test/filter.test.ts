@@ -126,8 +126,32 @@ describe("finding filters", () => {
     const full = result.inline.find((item) => item.finding.title === "Span");
     const part = result.inline.find((item) => item.finding.title === "Partial");
     expect(full).toMatchObject({ line: 3, startLine: 2, includeSuggestion: true });
-    expect(part).toMatchObject({ line: 6, includeSuggestion: false });
+    expect(part).toMatchObject({ line: 2, includeSuggestion: false });
     expect(part?.startLine).toBeUndefined();
+  });
+
+  it("anchors on the first diff line unless a suggestion replaces the span", () => {
+    const diff = `diff --git a/src/pay.ts b/src/pay.ts
+--- a/src/pay.ts
++++ b/src/pay.ts
+@@ -8,3 +10,6 @@
+ context
++added
++added
++added
+ context
+ context
+`;
+    const open = sampleFinding({ title: "Open", startLine: 10, endLine: 15, suggestion: null });
+    const patch = sampleFinding({ title: "Patch", startLine: 11, endLine: 13, suggestion: "added\nadded\nadded" });
+    const partial = sampleFinding({ title: "Past the hunk", startLine: 9, endLine: 20, suggestion: "nope" });
+    const result = classifyFindings({ findings: [open, patch, partial], diff, policy: policy() });
+    const anchored = (title: string) => result.inline.find((item) => item.finding.title === title);
+    expect(anchored("Open")).toMatchObject({ line: 10, includeSuggestion: false });
+    expect(anchored("Open")?.startLine).toBeUndefined();
+    expect(anchored("Patch")).toMatchObject({ line: 13, startLine: 11, includeSuggestion: true });
+    expect(anchored("Past the hunk")).toMatchObject({ line: 10, includeSuggestion: false });
+    expect(anchored("Past the hunk")?.startLine).toBeUndefined();
   });
 
   it("does not inline a fingerprint that was already posted", () => {

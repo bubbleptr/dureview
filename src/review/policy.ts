@@ -163,6 +163,7 @@ export type DropReason = "confidence" | "ignored";
 export type AnchoredFinding = {
   finding: Finding;
   path: string;
+  /** End line of a suggestion span; otherwise the first diff line in the finding. */
   line: number;
   startLine?: number;
   /** True when the posted range is the finding's full start..end span, so a suggestion can replace it. */
@@ -304,16 +305,14 @@ function anchorFinding(finding: Finding, lines: Map<string, Set<number>>): Ancho
   }
   if (first === undefined || last === undefined) return null;
   const exact = full && first === finding.startLine && last === finding.endLine;
-  if (!exact) {
-    return { finding, path: finding.path, line: last, includeSuggestion: false };
+  const includeSuggestion = exact && finding.suggestion !== null;
+  // GitHub's notification diff hunk includes every line from the hunk header
+  // through the commented line. Anchor on the first line in the diff unless a
+  // suggestion has to replace the whole span.
+  if (!includeSuggestion || first === last) {
+    return { finding, path: finding.path, line: first, includeSuggestion };
   }
-  return {
-    finding,
-    path: finding.path,
-    line: last,
-    ...(first !== last ? { startLine: first } : {}),
-    includeSuggestion: finding.suggestion !== null,
-  };
+  return { finding, path: finding.path, line: last, startLine: first, includeSuggestion: true };
 }
 
 function dedupeFindings(findings: Finding[]): Finding[] {
