@@ -146,6 +146,27 @@ describe("resume between writes", () => {
 });
 
 describe("summary off", () => {
+  it("posts evidence links on inline comments", async () => {
+    const finding = sampleFinding({ evidence: ["src/pay.ts:2", "src/other.ts:10-12"] });
+    const link = `[\`src/pay.ts:2\`](https://github.com/acme/demo/blob/${SHA_A}/src/pay.ts#L2)`;
+    const range = `[\`src/other.ts:10-12\`](https://github.com/acme/demo/blob/${SHA_A}/src/other.ts#L10-L12)`;
+
+    const inline = new MemoryGitHub();
+    await publishReview(base(inline, "41", "Linked.", [finding], { summary: false }));
+    const posted = inline.reviewComments[0]?.body ?? "";
+    expect(posted).toContain(link);
+    expect(posted).toContain(range);
+    expect(posted).toContain("<summary>Trigger and evidence</summary>");
+    expect(posted.endsWith(findingMarker(finding.fingerprint, "41"))).toBe(true);
+
+    const summary = new MemoryGitHub();
+    await publishReview(base(summary, "41", "Linked.", [finding], { summary: true }));
+    const summarized = summary.reviews[0]?.comments[0]?.body ?? "";
+    expect(summarized).toContain(link);
+    expect(summarized).not.toContain("dureview:finding");
+    expect(summarized).toContain(`fp:${finding.fingerprint}`);
+  });
+
   it("posts one inline comment per finding and no summary", async () => {
     const github = new MemoryGitHub();
     const second = sampleFinding({
